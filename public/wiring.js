@@ -329,11 +329,18 @@ export function checkWiring(netlist, tris = null) {
     return out;
   };
   const driverTermsInNet = (members) => {
-    // Đầu nối "lái" tín hiệu: anode LED, 2 đầu nút nhấn, wiper chiết áp, chân + còi
+    // Đầu nối "lái" tín hiệu: anode LED, 2 đầu nút nhấn, wiper chiết áp, chân + còi.
+    // 2 đầu của CÙNG 1 nút bấm chỉ tính là 1 nguồn (nút là công tắc, không
+    // phải 2 nguồn tín hiệu): nhấn nút nối T1–T2 vào cùng net thì không được
+    // báo chân PIC xung đột với chính cái nút đó.
+    const seen = new Set();
     const out = [];
     for (const m of members) {
       const mm = m.match(/^(LED\d+)\.A$|^(BTN\d+)\.T[12]$|^(POT\d+)\.W$|^(BUZ\d+)\.P$/);
-      if (mm) out.push(m);
+      if (mm) {
+        const compId = mm.slice(1).find(Boolean);
+        if (!seen.has(compId)) { seen.add(compId); out.push(m); }
+      }
     }
     return out;
   };

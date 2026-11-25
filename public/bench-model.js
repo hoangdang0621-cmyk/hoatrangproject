@@ -355,8 +355,10 @@ function makeUnionFind() {
 //   termRoot: Map term -> root, resistorRoots: Set root }.
 // - terminal = 'LED0.A', 'PIC.RB0'...
 // - điện trở nối 2 strip của nó (như 1 dây); dây nối 2 strip của 2 đầu.
+// - nút bấm đang nhấn giữ (pressedIds) = công tắc đóng: nối 2 strip của
+//   2 chân T1–T2 lại với nhau; nhả ra thì 2 chân tách ra như cũ.
 // - nhóm chạm RAIL+ là +5V, chạm RAIL- là GND.
-export function buildBenchNets(state) {
+export function buildBenchNets(state, pressedIds = []) {
   const size = state.size ?? DEFAULT_SIZE;
   const { find, union, ensure } = makeUnionFind();
   ensure('RAIL+');
@@ -387,6 +389,16 @@ export function buildBenchNets(state) {
       ensure(key);
       termStrip.set(comp.id + '.' + leg.term, key);
     }
+  }
+  // Nút bấm đang nhấn giữ = công tắc đóng: nối 2 strip của 2 chân T1–T2
+  // lại với nhau (như 1 dây nối tắt 2 strip). Trạng thái nhấn giữ là nhất
+  // thời (nhấn giữ chuột), không lưu vào localStorage — người gọi truyền
+  // pressedIds vào mỗi lần dựng netlist.
+  for (const comp of state.components) {
+    if (comp.type !== 'button' || !pressedIds.includes(comp.id)) continue;
+    const keys = legsFor(comp, size).map((l) => (l.hole ? stripKey(l.hole, size) : null)).filter(Boolean);
+    keys.forEach((k) => ensure(k));
+    for (let i = 1; i < keys.length; i++) union(keys[0], keys[i]);
   }
   // Strip của 1 đầu dây: lỗ -> strip của lỗ đó; cọc nguồn -> RAIL+/RAIL-;
   // đầu {x,y,z} cũ -> cọc nguồn nếu khớp vị trí cọc, còn không thì bỏ qua.
@@ -426,8 +438,8 @@ export function buildBenchNets(state) {
 }
 
 // Mô tả 1 terminal: các thành viên cùng net (chân PIC, VCC/GND, đầu linh kiện).
-export function describeTerminal(state, term) {
-  const { groups, termRoot } = buildBenchNets(state);
+export function describeTerminal(state, term, pressedIds = []) {
+  const { groups, termRoot } = buildBenchNets(state, pressedIds);
   const root = termRoot.get(term);
   if (root === undefined) return { members: [], vcc: false, gnd: false };
   const g = groups.get(root);
@@ -501,8 +513,8 @@ export function compLabel(comp) {
   return (KIND_LABEL[comp.type] || comp.type) + ' ' + n;
 }
 
-export function benchToNetlist(state) {
-  const { groups, termRoot, resistorRoots, find } = buildBenchNets(state);
+export function benchToNetlist(state, pressedIds = []) {
+  const { groups, termRoot, resistorRoots, find } = buildBenchNets(state, pressedIds);
   const components = [];
   for (const comp of state.components) {
     if (comp.type === 'pic' || comp.type === 'psu' || comp.type === 'resistor') continue;
@@ -511,9 +523,22 @@ export function benchToNetlist(state) {
       x: 0, y: 0, fixed: !!comp.fixed,
     };
     if (comp.type === 'led') {
-      // LED có điện trở nối tiếp nếu net của anode chứa strip của 1 điện trở
+      // LED có điện trở nối tiếp nếu net của anode chứa strip của 1 điện trở,
+      // hoặc điện trở nằm sau 1 công tắc (nút bấm) đang mở: anode nối 1 đầu
+      // nút, đầu kia của nút nối tới strip có điện trở (nhấn nút thì mạch
+      // kín lại và điện trở đó hạn dòng cho LED).
       const root = termRoot.get(comp.id + '.A');
-      c.hasResistor = !!(root && resistorRoots.has(root));
+      let hasR = !!(root && resistorRoots.has(root));
+      if (!hasR && root) {
+        for (const b of state.components) {
+          if (b.type !== 'button') continue;
+          const r1 = termRoot.get(b.id + '.T1');
+          const r2 = termRoot.get(b.id + '.T2');
+          if ((r1 === root && r2 !== undefined && resistorRoots.has(r2))
+            || (r2 === root && r1 !== undefined && resistorRoots.has(r1))) { hasR = true; break; }
+        }
+      }
+      c.hasResistor = hasR;
     }
     components.push(c);
   }

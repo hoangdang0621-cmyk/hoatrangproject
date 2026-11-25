@@ -13,8 +13,8 @@ import {
   normalizeSize, holeCount, sizeLabel, sameSize,
   psuVolts, validatePsuVolts, parsePsuPost, psuPostPos,
   clampCamTarget, zoomTowardPoint, panTarget,
-} from './bench-model.js?v=20261125m';
-import { checkWiring, SIGNAL_COLORS } from './wiring.js?v=20261125m';
+} from './bench-model.js?v=20261125n';
+import { checkWiring, SIGNAL_COLORS } from './wiring.js?v=20261125n';
 
 const $ = (id) => document.getElementById(id);
 const benchView = $('benchView');
@@ -104,10 +104,12 @@ function main() {
   function setStatus(t) { if (statusEl) statusEl.textContent = t; }
 
   // --- Đồng bộ netlist bench vào CPU + panel Kiểm tra ---
+  // Nút đang nhấn giữ được truyền vào netlist (nối T1–T2 như công tắc đóng).
+  const pressedIds = () => (pressedBtn ? [pressedBtn] : []);
   function syncToCpu() {
     const b = bridge();
     if (b && typeof b.applyBenchNetlist === 'function') {
-      b.applyBenchNetlist(benchToNetlist(state));
+      b.applyBenchNetlist(benchToNetlist(state, pressedIds()));
       for (const c of state.components) {
         if (c.type === 'pot') b.setPot(c.id, ((c.props?.pct ?? 0) / 100) * 5);
       }
@@ -116,7 +118,7 @@ function main() {
   }
   function renderChecks() {
     if (!checksEl) return;
-    const netlist = benchToNetlist(state);
+    const netlist = benchToNetlist(state, pressedIds());
     const b = bridge();
     const warns = checkWiring(netlist, b && typeof b.getTris === 'function' ? b.getTris() : null);
     if (!warns.length) {
@@ -336,7 +338,7 @@ function main() {
           <input type="range" class="pot-slider" id="inspPotRange" min="0" max="100" step="1" value="${pct}">
           <p class="sub">Wiper nối kênh AN nào thì ADC đọc điện áp đó (0–5V).</p>`;
       } else if (comp.type === 'button') {
-        body = `<p class="sub">Nhấn giữ linh kiện trên bàn để tác động mức 0 vào chân đã nối (active-low, có pull-up).</p>`;
+        body = `<p class="sub">Nhấn giữ linh kiện trên bàn: nối 2 chân T1–T2 với nhau như công tắc (vd nối tiếp nguồn–LED qua nút thì nhấn mới sáng). Nếu 1 chân nối chân PIC thì nhấn kéo chân đó về mức 0 (active-low, có pull-up).</p>`;
       } else if (comp.type === 'lcd') {
         const b = bridge();
         const lcd = b && typeof b.getMapping === 'function' ? b.getMapping().lcd : null;
@@ -347,7 +349,7 @@ function main() {
         body = `<p class="sub">Còi kêu khi chân + ra mức 1.</p>`;
       } else if (comp.type === 'pic') {
         const conns = picLegs(state.size).map((l) => {
-          const d = describeTerminal(state, l.term);
+          const d = describeTerminal(state, l.term, pressedIds());
           const others = d.members.filter((m) => m !== l.term);
           if (!others.length && !d.vcc && !d.gnd) return null;
           const txt = [...(d.vcc ? ['+5V'] : []), ...(d.gnd ? ['GND'] : []), ...others.map((m) => m.startsWith('PIC.') ? m.slice(4) : m)].join(', ');
@@ -368,7 +370,7 @@ function main() {
       const conns = comp.type !== 'pic' && comp.type !== 'psu'
         ? `<div class="bench-conns">${legsFor(comp, state.size).map((l) => {
           const term = comp.id + '.' + l.term;
-          const d = describeTerminal(state, term);
+          const d = describeTerminal(state, term, pressedIds());
           const others = d.members.filter((m) => m !== term);
           const txt = others.length || d.vcc || d.gnd
             ? [...(d.vcc ? ['+5V'] : []), ...(d.gnd ? ['GND'] : []), ...others.map((m) => m.startsWith('PIC.') ? m.slice(4) : m)].join(', ')
@@ -1317,7 +1319,10 @@ function main() {
         const a = wireStart;
         wireStart = null;
         startMarker.visible = false;
-        addWire(a, hole);
+        // Nối xong 1 dây thì thoát chế độ dây (one-shot như đặt linh kiện):
+        // muốn nối nữa thì bấm lại "Dây dẫn". Nối lỗi (trùng đầu/trùng dây)
+        // thì ở lại chế độ dây để chọn lại.
+        if (addWire(a, hole)) setWiringMode(false);
       }
       return;
     }
@@ -1524,10 +1529,16 @@ function main() {
   }
   function pressBenchButton(id, pressed) {
     const b = bridge();
+    if (pressed) pressedBtn = id;
+    else if (pressedBtn === id) pressedBtn = null;
+    // Nút là công tắc 2 đầu: nhấn thì đóng T1–T2 trong netlist (LED nối tiếp
+    // qua nút sáng lên), nhả thì mở ra — đồng bộ lại netlist + panel Kiểm tra
+    // trước, rồi mới tác động mức logic vào chân PIC (giữ hành vi active-low
+    // cũ: nhấn kéo chân về mức 0, nhả thì pull-up kéo lên mức 1).
+    syncToCpu();
     if (b && typeof b.pressButton === 'function') b.pressButton(id, pressed);
     const top = btnTops.get(id);
     if (top) top.position.y = pressed ? 8.2 : 9;
-    if (pressed) pressedBtn = id;
   }
 
   // --- Vòng lặp render + cập nhật sống (LED/LCD/còi theo CPU) ---

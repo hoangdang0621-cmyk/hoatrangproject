@@ -2,7 +2,7 @@
 // Chạy: node test-pic16.mjs   (exit 0 = tất cả pass)
 import { assemble, createCPU, parseIntelHex, exportHex, disassemble } from './public/pic16.js';
 import { defaultNetlist, resolvePeripherals, checkWiring, ledStates, applyButtonToCpu, applyPotToCpu, PIC_PINS } from './public/wiring.js';
-import { PITCH, allHoles, stripKey, parseHole, holePos, holeId, rowLabel, picLegs, canPlace, benchToNetlist, defaultBenchState, sanitizeState, boardSize, picCol, picRows, bodyDepth, pruneStateForSize, validateWireEnd, retargetWireEnd, togglePlacement, normalizeSize, holeCount, sizeLabel, sameSize, compLabel, psuVolts, validatePsuVolts, parsePsuPost, psuPostPos, normalizeWireEnd, clampCamTarget, zoomTowardPoint, panTarget } from './public/bench-model.js';
+import { PITCH, allHoles, stripKey, parseHole, holePos, holeId, rowLabel, picLegs, canPlace, buildBenchNets, benchToNetlist, defaultBenchState, sanitizeState, boardSize, picCol, picRows, bodyDepth, pruneStateForSize, validateWireEnd, retargetWireEnd, togglePlacement, normalizeSize, holeCount, sizeLabel, sameSize, compLabel, psuVolts, validatePsuVolts, parsePsuPost, psuPostPos, normalizeWireEnd, clampCamTarget, zoomTowardPoint, panTarget } from './public/bench-model.js';
 
 // Các chương trình Assembly dùng để kiểm thử — inline tại đây (file
 // public/examples.js chứa các bài lab mẫu đã bị gỡ ngày 25/11/2026 nên test
@@ -1580,6 +1580,133 @@ function rewire(netlist, a, b, a2, b2) {
       st.wires.push({ id: 'W10', a: 'PSU1.+', b: 'c10', color: '#DC2626' });
       return checkWiring(benchToNetlist(st)).map((w) => w.message);
     })().some((m) => m.includes('chưa nối về GND')) === false, '');
+}
+
+// ===========================================================================
+// (i) NÚT BẤM LÀ CÔNG TẮC 2 ĐẦU (round 25/11) — mạch của Điệp trong ảnh:
+// PSU+ -> R 1Ω -> nút bấm -> LED -> GND. Nút bấm là công tắc 2 đầu: nhấn
+// thì T1–T2 nối nhau, nhả thì ngắt. Dây dẫn one-shot chỉ sửa ở bench.js
+// (DOM/Three.js) nên không test được bằng Node — kiểm tra bằng trình duyệt.
+// ===========================================================================
+// Mạch đầy đủ: LED0 ở c10/c11, R0 1Ω ở d12/d16, BTN0 ở c14/c15.
+// PSU1.+ -> d12 (R L1), d16 (R L2) -> c14 (T1), c15 (T2) -> c10 (LED A),
+// c11 (LED K) -> rail T- (GND).
+function switchCircuit() {
+  const st = defaultBenchState();
+  st.components.push({ id: 'LED0', type: 'led', anchor: 'c10', rot: 0, props: { color: '#DC2626' } });
+  st.components.push({ id: 'R0', type: 'resistor', anchor: 'd12', rot: 0, props: { value: 1 } });
+  st.components.push({ id: 'BTN0', type: 'button', anchor: 'c14', rot: 0, props: {} });
+  st.wires.push({ id: 'W10', a: 'PSU1.+', b: 'd12', color: '#DC2626' });
+  st.wires.push({ id: 'W11', a: 'd16', b: 'c14', color: '#DC2626' });
+  st.wires.push({ id: 'W12', a: 'c15', b: 'c10', color: '#DC2626' });
+  st.wires.push({ id: 'W13', a: 'c11', b: 'T-5', color: '#0F172A' });
+  return st;
+}
+
+// (i-a) Nút bấm là công tắc ở tầng strip: nhả thì T1/T2 khác net, nhấn thì cùng net
+{
+  const st = switchCircuit();
+  const open = buildBenchNets(st);
+  const closed = buildBenchNets(st, ['BTN0']);
+  check('(i-a) nút bấm là công tắc: nhả thì T1/T2 khác net, nhấn thì cùng net',
+    open.termRoot.get('BTN0.T1') !== open.termRoot.get('BTN0.T2')
+    && closed.termRoot.get('BTN0.T1') === closed.termRoot.get('BTN0.T2'), '');
+}
+
+// (i-b) Mạch (a)–(e): LED sáng/tối đúng từng trường hợp, kể cả điện trở 1Ω
+{
+  const cpu = createCPU();
+  const ledOn = (st, pressedIds = []) => {
+    const mapping = resolvePeripherals(benchToNetlist(st, pressedIds));
+    return { on: ledStates(cpu, mapping).find((s) => s.id === 'LED0').on, mapping };
+  };
+  // (a) trực tiếp PSU+ -> LED -> GND
+  {
+    const st = defaultBenchState();
+    st.components.push({ id: 'LED0', type: 'led', anchor: 'c10', rot: 0, props: { color: '#DC2626' } });
+    st.wires.push({ id: 'W10', a: 'PSU1.+', b: 'c10', color: '#DC2626' });
+    st.wires.push({ id: 'W11', a: 'c11', b: 'T-5', color: '#0F172A' });
+    check('(i-b) (a) PSU+ -> LED -> GND trực tiếp: SÁNG', ledOn(st).on === true, '');
+  }
+  // (b) qua điện trở 1Ω, không công tắc
+  {
+    const st = defaultBenchState();
+    st.components.push({ id: 'LED0', type: 'led', anchor: 'c10', rot: 0, props: { color: '#DC2626' } });
+    st.components.push({ id: 'R0', type: 'resistor', anchor: 'd12', rot: 0, props: { value: 1 } });
+    st.wires.push({ id: 'W10', a: 'PSU1.+', b: 'd12', color: '#DC2626' });
+    st.wires.push({ id: 'W11', a: 'd16', b: 'c10', color: '#DC2626' });
+    st.wires.push({ id: 'W12', a: 'c11', b: 'T-5', color: '#0F172A' });
+    const r = ledOn(st);
+    check('(i-b) (b) PSU+ -> R 1Ω -> LED -> GND: SÁNG, hasResistor=true (1Ω vẫn dẫn)',
+      r.on === true && r.mapping.leds[0].hasResistor === true, JSON.stringify(r.mapping.leds[0]));
+  }
+  // (c) qua nút bấm, không điện trở
+  {
+    const st = defaultBenchState();
+    st.components.push({ id: 'LED0', type: 'led', anchor: 'c10', rot: 0, props: { color: '#DC2626' } });
+    st.components.push({ id: 'BTN0', type: 'button', anchor: 'c14', rot: 0, props: {} });
+    st.wires.push({ id: 'W10', a: 'PSU1.+', b: 'c14', color: '#DC2626' });
+    st.wires.push({ id: 'W11', a: 'c15', b: 'c10', color: '#DC2626' });
+    st.wires.push({ id: 'W12', a: 'c11', b: 'T-5', color: '#0F172A' });
+    check('(i-b) (c) PSU+ -> BTN -> LED -> GND: nhấn thì SÁNG, nhả thì TỐI',
+      ledOn(st, ['BTN0']).on === true && ledOn(st).on === false, '');
+  }
+  // (d) + (e) mạch đầy đủ
+  {
+    const st = switchCircuit();
+    const pressed = ledOn(st, ['BTN0']);
+    const released = ledOn(st);
+    const warnsReleased = checkWiring(benchToNetlist(st)).map((w) => w.message);
+    check('(i-b) (d) PSU+ -> R 1Ω -> BTN -> LED -> GND, nhấn: SÁNG, hasResistor=true',
+      pressed.on === true && pressed.mapping.leds[0].hasResistor === true, JSON.stringify(pressed.mapping.leds[0]));
+    check('(i-b) (e) mạch đầy đủ, nút KHÔNG nhấn: TỐI; không cảnh báo "không có điện trở" (điện trở nằm sau công tắc đang mở)',
+      released.on === false && released.mapping.leds[0].hasResistor === true
+      && !warnsReleased.some((m) => m.includes('không có điện trở')), JSON.stringify(warnsReleased));
+  }
+}
+
+// (i-c) Nút bấm với chân PIC vẫn active-low + pull-up (T1 nối dây tới RB1 lỗ h28, T2 về GND)
+{
+  const st = defaultBenchState();
+  st.components.push({ id: 'BTN0', type: 'button', anchor: 'c10', rot: 0, props: {} });
+  st.wires.push({ id: 'W10', a: 'c10', b: 'h28', color: '#2563EB' });
+  st.wires.push({ id: 'W11', a: 'c11', b: 'T-5', color: '#0F172A' });
+  const cpu = createCPU();
+  const mapping = resolvePeripherals(benchToNetlist(st));
+  cpu.setWiring(mapping);
+  check('(i-c) nút nối RB1–GND: mapping pin=RB1, otherLevel=0',
+    mapping.buttons[0].pin && mapping.buttons[0].pin.id === 'RB1' && mapping.buttons[0].otherLevel === 0,
+    JSON.stringify(mapping.buttons[0]));
+  applyButtonToCpu(cpu, mapping, 'BTN0', true);
+  check('(i-c) nút RB1: nhấn -> RB1 đọc mức 0', cpu.pinLevel(1, 1) === 0, '');
+  applyButtonToCpu(cpu, mapping, 'BTN0', false);
+  check('(i-c) nút RB1: nhả -> RB1 đọc mức 1 (pull-up)', cpu.pinLevel(1, 1) === 1, '');
+  // Nhấn (netlist đóng công tắc): chân RB1 nối về GND nhưng KHÔNG báo xung đột giả
+  const warnsPressed = checkWiring(benchToNetlist(st, ['BTN0']));
+  check('(i-c) nút RB1 đang nhấn: không cảnh báo "2 nguồn tín hiệu" giả (2 đầu nút chỉ tính 1 nguồn)',
+    !warnsPressed.some((w) => w.id.startsWith('conflict-') || w.message.includes('2 nguồn tín hiệu')),
+    JSON.stringify(warnsPressed.map((w) => w.message)));
+  // Mapping với netlist đóng: pin vẫn là RB1, otherLevel vẫn 0, nhấn vẫn kéo về 0
+  const mapping2 = resolvePeripherals(benchToNetlist(st, ['BTN0']));
+  const cpu2 = createCPU();
+  cpu2.setWiring(mapping2);
+  applyButtonToCpu(cpu2, mapping2, 'BTN0', true);
+  check('(i-c) nút RB1 đang nhấn (mapping mới): nhấn -> RB1 vẫn mức 0',
+    mapping2.buttons[0].pin.id === 'RB1' && mapping2.buttons[0].otherLevel === 0 && cpu2.pinLevel(1, 1) === 0,
+    JSON.stringify(mapping2.buttons[0]));
+}
+
+// (i-d) Nút nối thẳng VCC–GND vẫn cảnh báo nối tắt nguồn (mở lẫn nhấn)
+{
+  const st = defaultBenchState();
+  st.components.push({ id: 'BTN0', type: 'button', anchor: 'c14', rot: 0, props: {} });
+  st.wires.push({ id: 'W10', a: 'PSU1.+', b: 'c14', color: '#DC2626' });
+  st.wires.push({ id: 'W11', a: 'c15', b: 'T-5', color: '#0F172A' });
+  const warnsOpen = checkWiring(benchToNetlist(st)).map((w) => w.message);
+  const warnsPressed = checkWiring(benchToNetlist(st, ['BTN0'])).map((w) => w.message);
+  check('(i-d) nút nối thẳng VCC–GND: cảnh báo nối tắt nguồn cả khi mở lẫn khi nhấn',
+    warnsOpen.some((m) => m.includes('nối thẳng VCC–GND')) && warnsPressed.some((m) => m.includes('nối thẳng VCC–GND')),
+    JSON.stringify(warnsOpen));
 }
 
 console.log(`\nKết quả: ${pass} pass, ${fail} fail`);

@@ -27,8 +27,9 @@ nối tiếp) vào strip của chân RB0 thì LED nhấp nháy theo nhịp chip.
    phải hoặc Shift+kéo để dịch góc nhìn; cuộn chuột để zoom vào điểm
    trỏ. Nút **3D** / **Từ trên** đổi góc nhìn.
 3. **Đi dây:** bấm **Dây dẫn** rồi bấm lỗ bắt đầu và lỗ kết thúc, dây
-   hiện thành đường cong nối 2 lỗ. Chọn màu dây trong bảng 8 màu.
-   Bấm chọn 1 dây thì dây highlight (sáng + dày hơn, 2 đầu hiện núm
+   hiện thành đường cong nối 2 lỗ. Nối xong 1 dây thì tự thoát chế độ dây
+   (one-shot như đặt linh kiện) — muốn nối nữa thì bấm lại **Dây dẫn**.
+   Chọn màu dây trong bảng 8 màu. Bấm chọn 1 dây thì dây highlight (sáng + dày hơn, 2 đầu hiện núm
    tròn): kéo núm tròn tới lỗ khác hoặc cọc +/− của nguồn để cắm lại
    đầu dây đó, hoặc nhập địa chỉ cho từng đầu dây trong Inspector
    (vd `c12`, `T+5`, cọc nguồn `PSU1.+` / `PSU1.-`).
@@ -53,7 +54,10 @@ nối tiếp) vào strip của chân RB0 thì LED nhấp nháy theo nhịp chip.
   điện áp cao, hạ xuống ≤10V thì sáng lại; nhớ thêm điện trở hạn dòng).
 - **Điện trở 220Ω:** 2 đầu, nối tiếp với LED để hạn dòng. Đổi được giá
   trị Ω trong Inspector, vạch màu trên thân đổi theo.
-- **Nút nhấn:** 2 đầu, active-low (nhấn giữ là mức 0, có pull-up).
+- **Nút nhấn:** 2 đầu, là công tắc: nhấn giữ thì nối 2 chân T1–T2 với
+  nhau (vd nối tiếp nguồn–LED qua nút thì nhấn mới sáng), nhả ra thì ngắt.
+  Nếu 1 chân nối chân PIC thì nhấn kéo chân đó về mức 0 (active-low, có
+  pull-up).
 - **Chiết áp:** 3 đầu VCC/Wiper/GND. Wiper nối kênh AN nào thì ADC của
   chip đọc điện áp đó (0–5V, 10-bit).
 - **LCD 16x2:** 10 đầu RS/E/D0–D7. Nối đủ dây thì hiện chữ theo chương

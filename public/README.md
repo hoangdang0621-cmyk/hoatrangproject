@@ -22,17 +22,22 @@ nối tiếp) vào strip của chân RB0 thì LED nhấp nháy theo nhịp chip.
 - **Xoay bàn:** kéo chỗ trống để xoay 360°; chuột phải hoặc Shift+kéo
   để dịch góc nhìn; cuộn chuột để zoom vào điểm trỏ; nút
   **3D** / **Từ trên** đổi góc nhìn.
-- **Đi dây:** bấm **Dây dẫn** rồi bấm 2 điểm; chọn màu dây trong bảng màu.
-  Bấm chọn 1 dây thì dây highlight, kéo núm tròn ở 2 đầu để cắm lại
-  (sang lỗ khác hoặc cọc +/− của nguồn), hoặc nhập địa chỉ cho từng đầu
-  trong Inspector (vd `c12`, `T+5`, cọc nguồn `PSU1.+` / `PSU1.-`;
-  board >26 hàng thì địa chỉ dạng chữ+số khối, vd `c112` = hàng c1
-  cột 12, `b25` = hàng b2 cột 5).
+- **Đi dây:** bấm **Dây dẫn** rồi bấm 2 điểm; nối xong 1 dây thì tự thoát
+  chế độ dây (one-shot) — muốn nối nữa thì bấm lại **Dây dẫn**. Chọn màu
+  dây trong bảng màu. Bấm chọn 1 dây thì dây highlight, kéo núm tròn ở 2
+  đầu để cắm lại (sang lỗ khác hoặc cọc +/− của nguồn), hoặc nhập địa chỉ
+  cho từng đầu trong Inspector (vd `c12`, `T+5`, cọc nguồn `PSU1.+` /
+  `PSU1.-`; board >26 hàng thì địa chỉ dạng chữ+số khối, vd `c112` = hàng
+  c1 cột 12, `b25` = hàng b2 cột 5).
 - **Chọn size bo mạch:** nhấn vào board (thân board hoặc lỗ trống) để
   mở popup **Bo mạch** bên phải: bấm 1 trong 3 mẫu sẵn để áp dụng ngay,
   hoặc tự điền rộng (số cột 5–99) × dài (số hàng 5–100, bội số của 5) + chọn có rail
   nguồn rồi bấm Áp dụng; đổi size thì chip căn lại giữa, linh kiện/dây
   ngoài board mới bị gỡ (có ghi chú ở dòng trạng thái).
+- **Nút nhấn:** là công tắc 2 đầu — nhấn giữ thì nối 2 chân T1–T2 với
+  nhau (vd nối tiếp nguồn–LED qua nút thì nhấn mới sáng), nhả ra thì ngắt;
+  nếu 1 chân nối chân PIC thì nhấn kéo chân đó về mức 0 (active-low, có
+  pull-up).
 - **Inspector:** bấm chọn linh kiện thì panel trượt từ phải sang để đổi
   tính chất (giá trị điện trở, màu LED, mức chiết áp, điện áp nguồn
   0–24V), xem chân nối đi đâu, xoá linh kiện/dây (phím Delete).
