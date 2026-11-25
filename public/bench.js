@@ -977,7 +977,7 @@ function main() {
       emissiveIntensity: isSel ? 0.55 : 0,
       roughness: 0.5,
     });
-    const tube = new THREE.Mesh(new THREE.TubeGeometry(curve, 32, isSel ? 1.8 : 1.1, 8), mat);
+    const tube = new THREE.Mesh(new THREE.TubeGeometry(curve, 32, isSel ? 1.2 : 0.75, 8), mat);
     tube.castShadow = true;
     tube.userData = { wireId: wire.id, tubeMat: mat };
     // Ống vô hình dày hơn để bấm chọn dây cho dễ
