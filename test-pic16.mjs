@@ -3,8 +3,9 @@
 import { readFileSync } from 'node:fs';
 import { assemble, createCPU, parseIntelHex, exportHex, disassemble, ProgramRunner, cyclesForElapsedMs } from './public/pic16.js';
 import { defaultNetlist, resolvePeripherals, checkWiring, ledStates, buzzerStates, applyButtonToCpu, applyPotToCpu, PIC_PINS } from './public/wiring.js';
-import { PITCH, SEGMENT_GAP_MM, rowZ, HOLE_RADIUS, HOLE_HEIGHT, HOLE_TOP_ABOVE_BOARD, holeCenterY, depthPrecisionAt, MAX_CAMERA_DISTANCE, SEGMENT_LINE_WIDTH_MM, segmentBoundaries, allHoles, stripKey, parseHole, holePos, holeId, rowLabel, rowIndexFromLabel, migrateOldHoleId, picLegs, picLegsForAnchor, picAnchor, legsFor, canPlace, buildBenchNets, benchToNetlist, defaultBenchState, sanitizeState, boardSize, picCol, picRows, picBodyDepth, picBodyDepthForRows, bodyDepth, pruneStateForSize, validateWireEnd, retargetWireEnd, togglePlacement, normalizeSize, holeCount, sizeLabel, sameSize, compLabel, psuVolts, validatePsuVolts, parsePsuPost, psuPostPos, PSU_SCALE, PSU_POST_DX, PSU_POST_Y, PSU_POST_DZ, normalizeWireEnd, clampCamTarget, zoomTowardPoint, panTarget } from './public/bench-model.js';
+import { PITCH, SEGMENT_GAP_MM, rowZ, HOLE_RADIUS, HOLE_HEIGHT, HOLE_TOP_ABOVE_BOARD, holeCenterY, depthPrecisionAt, MAX_CAMERA_DISTANCE, SEGMENT_LINE_WIDTH_MM, segmentBoundaries, allHoles, stripKey, parseHole, holePos, holeId, rowLabel, rowIndexFromLabel, migrateOldHoleId, picLegs, picLegsForAnchor, picAnchor, legsFor, canPlace, buildBenchNets, benchToNetlist, defaultBenchState, sanitizeState, boardSize, picCol, picRows, picBodyDepth, picBodyDepthForRows, bodyDepth, pruneStateForSize, validateWireEnd, retargetWireEnd, togglePlacement, normalizeSize, holeCount, sizeLabel, sameSize, compLabel, nextComponentId, psuVolts, validatePsuVolts, parsePsuPost, psuPostPos, PSU_SCALE, PSU_POST_DX, PSU_POST_Y, PSU_POST_DZ, normalizeWireEnd, clampCamTarget, zoomTowardPoint, panTarget } from './public/bench-model.js';
 import { LABS, getLab, buildLabState } from './public/labs.js';
+import { buildSolverNets, solveLinear, solveCircuit, meterReadings, LED_FORWARD_VOLTS, LED_SERIES_OHMS, PIC_OUTPUT_VOLTS } from './public/circuit-solver.js';
 
 // Các chương trình Assembly dùng để kiểm thử — inline tại đây (file
 // public/examples.js chứa các bài lab mẫu đã bị gỡ ngày 25/11/2026 nên test
@@ -2463,6 +2464,180 @@ const SLEEP_PROG = `    ORG 0
     cyclesForElapsedMs(0) === 0 && cyclesForElapsedMs(-10) === 0, '');
   check('(u-e) clockHz khác: 8MHz thì 50ms = 100000 chu kỳ (gấp đôi 4MHz)',
     cyclesForElapsedMs(50, 8000000) === 100000, '');
+}
+
+// Nhóm (v): vôn kế + ampe kế — solver MNA (circuit-solver.js).
+// Điện áp/dòng kỳ vọng tính theo mô hình: LED sáng = sụt 2V nối tiếp 10Ω,
+// chân PIC output cao = 5V / thấp = 0V, PSU = điện áp nguồn.
+// Lab 1 (RB0=1): dòng = (5−2)/(220+10) ≈ 13.04mA, áp trên R ≈ 2.87V,
+// áp trên LED ≈ 2.13V (nằm trong dung sai nhiệm vụ: R 3V±0.2, LED 2V±0.2,
+// dòng 13.6mA±1mA).
+{
+  // Đặt RB0 làm output, mức cao/thấp (như test (s-c): STATUS/TRISB/PORTB).
+  const setRB0 = (cpu, high) => {
+    cpu.writeFile(0x03, 0x20); cpu.writeFile(0x06, 0x00);
+    cpu.writeFile(0x03, 0x00); cpu.writeFile(0x06, high ? 0x01 : 0x00);
+  };
+  // Lab 1 + ampe kế nối tiếp (bỏ dây LAB1-W2, AM neo g48, dây j49->j48).
+  // Đặt AM ở cột 48–52 (ngoài vùng chip 22–41) để chân AM không rơi vào
+  // strip có chân PIC (đặt ở i29 thì chân i33 cùng strip với RD6).
+  const lab1WithAmmeter = () => {
+    const { state } = buildLabState(LABS[0]);
+    state.wires = state.wires.filter((w) => w.id !== 'LAB1-W2');
+    state.components.push({ id: 'AM0', type: 'ammeter', anchor: 'g48', rot: 0, props: {} });
+    state.wires.push({ id: 'T-AM', a: 'j49', b: 'j48', color: '#DC2626' });
+    return state;
+  };
+  const approx = (v, target, tol) => typeof v === 'number' && Number.isFinite(v) && Math.abs(v - target) <= tol;
+
+  // (v-a) Vôn kế: chân, đặt được, id/nhãn; ampe kế tương tự.
+  check('(v-a) vôn kế chân P=a10, N=a14; ampe kế chân A=a10, B=a14; đặt được, id VM0/AM0, nhãn "Vôn kế 0"/"Ampe kế 0"',
+    JSON.stringify(legsFor({ type: 'voltmeter', anchor: 'a10', rot: 0 }, 830)) === JSON.stringify([{ term: 'P', hole: 'a10' }, { term: 'N', hole: 'a14' }])
+    && JSON.stringify(legsFor({ type: 'ammeter', anchor: 'a10', rot: 0 }, 830)) === JSON.stringify([{ term: 'A', hole: 'a10' }, { term: 'B', hole: 'a14' }])
+    && canPlace(defaultBenchState(830), 'voltmeter', 'a10').ok && canPlace(defaultBenchState(830), 'ammeter', 'a10').ok
+    && nextComponentId(defaultBenchState(830), 'voltmeter') === 'VM0' && nextComponentId(defaultBenchState(830), 'ammeter') === 'AM0'
+    && compLabel({ id: 'VM0', type: 'voltmeter' }) === 'Vôn kế 0' && compLabel({ id: 'AM0', type: 'ammeter' }) === 'Ampe kế 0', '');
+  // (v-a2) Ampe kế nối 2 strip như dây trong netlist bench (LED sáng qua
+  // nó được); vôn kế không nối strip nào (không ảnh hưởng mạch).
+  check('(v-a2) ampe kế nối 2 strip như dây (2 LED ở 2 strip thành cùng net qua AM); vôn kế không nối strip (2 LED vẫn tách net)',
+    (() => {
+      const withAM = defaultBenchState(830);
+      withAM.components.push({ id: 'AM0', type: 'ammeter', anchor: 'a10', rot: 0, props: {} });
+      withAM.components.push({ id: 'LED0', type: 'led', anchor: 'c10', rot: 0, props: { color: '#DC2626' } });
+      withAM.components.push({ id: 'LED1', type: 'led', anchor: 'c14', rot: 0, props: { color: '#DC2626' } });
+      const nAM = buildBenchNets(withAM);
+      const withVM = defaultBenchState(830);
+      withVM.components.push({ id: 'VM0', type: 'voltmeter', anchor: 'a10', rot: 0, props: {} });
+      withVM.components.push({ id: 'LED0', type: 'led', anchor: 'c10', rot: 0, props: { color: '#DC2626' } });
+      withVM.components.push({ id: 'LED1', type: 'led', anchor: 'c14', rot: 0, props: { color: '#DC2626' } });
+      const nVM = buildBenchNets(withVM);
+      return nAM.termRoot.get('LED0.A') === nAM.termRoot.get('LED1.A')
+        && nVM.termRoot.get('LED0.A') !== nVM.termRoot.get('LED1.A')
+        && !nVM.termRoot.has('VM0.P');
+    })(), '');
+  // (v-b) Vôn kế qua PSU +/− đọc đúng 5V.
+  check('(v-b) vôn kế qua PSU +/− (dây b10->T+10, b14->T-10) đọc đúng 5V',
+    (() => {
+      const st = defaultBenchState(830);
+      st.components.push({ id: 'VM0', type: 'voltmeter', anchor: 'a10', rot: 0, props: {} });
+      st.wires.push({ id: 'T-V1', a: 'b10', b: 'T+10', color: '#DC2626' });
+      st.wires.push({ id: 'T-V2', a: 'b14', b: 'T-10', color: '#0F172A' });
+      const r = meterReadings(st, createCPU());
+      return r.voltmeters.length === 1 && r.voltmeters[0].volts === 5;
+    })(), '');
+  // (v-c) Vôn kế trên Lab 1: qua R ≈ 3V (±0.2), qua LED ≈ 2V (±0.2).
+  check('(v-c) vôn kế Lab 1 qua điện trở (neo g45) ≈ 3V (±0.2V)',
+    (() => {
+      const { state } = buildLabState(LABS[0]);
+      state.components.push({ id: 'VM0', type: 'voltmeter', anchor: 'g45', rot: 0, props: {} });
+      const cpu = createCPU(); setRB0(cpu, true);
+      const v = meterReadings(state, cpu).voltmeters[0].volts;
+      return approx(v, 3, 0.2);
+    })(), '');
+  check('(v-c) vôn kế Lab 1 qua LED (neo g52 + dây j56->j53) ≈ 2V (±0.2V)',
+    (() => {
+      const { state } = buildLabState(LABS[0]);
+      state.components.push({ id: 'VM0', type: 'voltmeter', anchor: 'g52', rot: 0, props: {} });
+      state.wires.push({ id: 'T-V3', a: 'j56', b: 'j53', color: '#DC2626' });
+      const cpu = createCPU(); setRB0(cpu, true);
+      const v = meterReadings(state, cpu).voltmeters[0].volts;
+      return approx(v, 2, 0.2);
+    })(), '');
+  // (v-d) Vôn kế 1 chân floating -> null; 2 chân cùng 1 net -> 0V.
+  check('(v-d) vôn kế 1 chân floating (chỉ nối P về T+) -> null',
+    (() => {
+      const st = defaultBenchState(830);
+      st.components.push({ id: 'VM0', type: 'voltmeter', anchor: 'a10', rot: 0, props: {} });
+      st.wires.push({ id: 'T-V4', a: 'b10', b: 'T+10', color: '#DC2626' });
+      return meterReadings(st, createCPU()).voltmeters[0].volts === null;
+    })(), '');
+  check('(v-d) vôn kế 2 chân cùng 1 net (cả 2 về RAIL+) -> 0V',
+    (() => {
+      const st = defaultBenchState(830);
+      st.components.push({ id: 'VM0', type: 'voltmeter', anchor: 'a10', rot: 0, props: {} });
+      st.wires.push({ id: 'T-V5', a: 'b10', b: 'T+10', color: '#DC2626' });
+      st.wires.push({ id: 'T-V6', a: 'b14', b: 'T+14', color: '#DC2626' });
+      return meterReadings(st, createCPU()).voltmeters[0].volts === 0;
+    })(), '');
+  // (v-e) Ampe kế nối tiếp R 220Ω + LED (Lab 1) ≈ 13.6mA (±1mA) khi RB0=1.
+  check('(v-e) ampe kế nối tiếp Lab 1, RB0=1: ≈ 13.6mA (±1mA)',
+    (() => {
+      const cpu = createCPU(); setRB0(cpu, true);
+      const a = meterReadings(lab1WithAmmeter(), cpu).ammeters[0].amps;
+      return approx(a, 0.0136, 0.001);
+    })(), '');
+  // (v-f) Ampe kế theo chân PIC: RB0=0 thì dòng 0 (LED tắt = hở mạch).
+  check('(v-f) ampe kế nối tiếp Lab 1, RB0=0: dòng 0 (LED tắt, hở mạch)',
+    (() => {
+      const cpu = createCPU(); setRB0(cpu, false);
+      return meterReadings(lab1WithAmmeter(), cpu).ammeters[0].amps === 0;
+    })(), '');
+  check('(v-f) RB0=0: vôn kế qua LED Lab 1 đọc 0V (anode qua R về chân 0V, cathode GND)',
+    (() => {
+      const { state } = buildLabState(LABS[0]);
+      state.components.push({ id: 'VM0', type: 'voltmeter', anchor: 'g52', rot: 0, props: {} });
+      state.wires.push({ id: 'T-V7', a: 'j56', b: 'j53', color: '#DC2626' });
+      const cpu = createCPU(); setRB0(cpu, false);
+      return meterReadings(state, cpu).voltmeters[0].volts === 0;
+    })(), '');
+  // (v-g) Ampe kế nối tiếp chỉ R 1kΩ với PSU 5V: I = 5/1000 = 5mA.
+  check('(v-g) ampe kế + R 1kΩ + PSU 5V (T+ -> R -> AM -> T-): đúng 5mA',
+    (() => {
+      const st = defaultBenchState(830);
+      st.components.push({ id: 'R1', type: 'resistor', anchor: 'a20', rot: 0, props: { value: 1000 } });
+      st.components.push({ id: 'AM0', type: 'ammeter', anchor: 'a30', rot: 0, props: {} });
+      st.wires.push({ id: 'T-A1', a: 'b20', b: 'T+20', color: '#DC2626' });
+      st.wires.push({ id: 'T-A2', a: 'b24', b: 'b30', color: '#DC2626' });
+      st.wires.push({ id: 'T-A3', a: 'b34', b: 'T-34', color: '#0F172A' });
+      const a = meterReadings(st, createCPU()).ammeters[0].amps;
+      return approx(a, 0.005, 0.0002);
+    })(), '');
+  // (v-h) Ampe kế hở mạch = 0; vôn kế đổi điện áp PSU (12V) đọc đúng 12V.
+  check('(v-h) ampe kế hở mạch (không nối gì) = 0',
+    (() => {
+      const st = defaultBenchState(830);
+      st.components.push({ id: 'AM0', type: 'ammeter', anchor: 'a30', rot: 0, props: {} });
+      return meterReadings(st, createCPU()).ammeters[0].amps === 0;
+    })(), '');
+  check('(v-h) PSU 12V: vôn kế qua PSU đọc 12V; ampe kế + R 1kΩ đọc 12mA',
+    (() => {
+      const st = defaultBenchState(830);
+      st.components.find((c) => c.type === 'psu').props.volts = 12;
+      st.components.push({ id: 'VM0', type: 'voltmeter', anchor: 'a10', rot: 0, props: {} });
+      st.wires.push({ id: 'T-V8', a: 'b10', b: 'T+10', color: '#DC2626' });
+      st.wires.push({ id: 'T-V9', a: 'b14', b: 'T-10', color: '#0F172A' });
+      st.components.push({ id: 'R1', type: 'resistor', anchor: 'a20', rot: 0, props: { value: 1000 } });
+      st.components.push({ id: 'AM0', type: 'ammeter', anchor: 'a30', rot: 0, props: {} });
+      st.wires.push({ id: 'T-A4', a: 'b20', b: 'T+20', color: '#DC2626' });
+      st.wires.push({ id: 'T-A5', a: 'b24', b: 'b30', color: '#DC2626' });
+      st.wires.push({ id: 'T-A6', a: 'b34', b: 'T-34', color: '#0F172A' });
+      const r = meterReadings(st, createCPU());
+      return r.voltmeters[0].volts === 12 && approx(r.ammeters[0].amps, 0.012, 0.0002);
+    })(), '');
+  // (v-i) solveLinear: hệ 2x2 đúng; ma trận suy biến -> null; solveCircuit
+  // không nguồn áp nào (chỉ điện trở rời) -> ok nhưng mọi node floating.
+  check('(v-i) solveLinear: hệ [2 1; 1 3]·x = [5; 10] -> x = [1; 3]; ma trận suy biến -> null',
+    (() => {
+      const x = solveLinear([[2, 1], [1, 3]], [5, 10]);
+      return x && Math.abs(x[0] - 1) < 1e-9 && Math.abs(x[1] - 3) < 1e-9
+        && solveLinear([[1, 1], [1, 1]], [2, 2]) === null
+        && JSON.stringify(solveLinear([], [])) === '[]';
+    })(), '');
+  check('(v-i) điện trở + ampe kế rời (không nối nguồn nào): solve ok, node của chúng floating, dòng 0',
+    (() => {
+      const st = defaultBenchState(830);
+      st.components.push({ id: 'R1', type: 'resistor', anchor: 'a20', rot: 0, props: { value: 1000 } });
+      st.components.push({ id: 'AM0', type: 'ammeter', anchor: 'a30', rot: 0, props: {} });
+      const { ok, nodeVoltage, branchCurrent, nets } = solveCircuit(st, createCPU());
+      return ok === true
+        && nodeVoltage.get(nets.nodeOfTerm('R1', 'L1')) === null
+        && nodeVoltage.get(nets.nodeOfTerm('AM0', 'A')) === null
+        && branchCurrent.get('R1') === 0
+        && branchCurrent.get('AM0') === 0;
+    })(), '');
+  // (v-j) Hằng số mô hình LED/PIC đúng như nhiệm vụ.
+  check('(v-j) LED_FORWARD_VOLTS = 2.0, LED_SERIES_OHMS = 10, PIC_OUTPUT_VOLTS = 5',
+    LED_FORWARD_VOLTS === 2.0 && LED_SERIES_OHMS === 10 && PIC_OUTPUT_VOLTS === 5, '');
 }
 
 console.log(`\nKết quả: ${pass} pass, ${fail} fail`);

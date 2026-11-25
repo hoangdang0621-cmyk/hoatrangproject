@@ -326,6 +326,12 @@ export const LEG_LAYOUTS = {
     { term: 'D6', dc: 8, dr: 0 }, { term: 'D7', dc: 9, dr: 0 },
   ],
   buzzer: [{ term: 'P', dc: 0, dr: 0 }, { term: 'N', dc: 1, dr: 0 }],
+  // Vôn kế: 2 chân P (+) và N (−), cách nhau 4 cột như điện trở.
+  // Trở kháng vô cùng: không nối 2 strip, không ảnh hưởng mạch.
+  voltmeter: [{ term: 'P', dc: 0, dr: 0 }, { term: 'N', dc: 4, dr: 0 }],
+  // Ampe kế: 2 chân A (vào) và B (ra), cách nhau 4 cột như điện trở.
+  // 0Ω: nối 2 strip như 1 dây (xem buildBenchNets), dòng đo từ A sang B.
+  ammeter: [{ term: 'A', dc: 0, dr: 0 }, { term: 'B', dc: 4, dr: 0 }],
 };
 
 // Chân chip PIC16F877A DIP-40 (rộng 600 mil = 6 bước lỗ): chân 1..20 ở hàng
@@ -509,12 +515,18 @@ export function buildBenchNets(state, pressedIds = []) {
     }
     if (comp.type === 'psu') continue;
     const legs = legsFor(comp, size);
-    if (comp.type === 'resistor') {
+    // Điện trở nối 2 strip của nó (như 1 dây). Ampe kế cũng vậy (0Ω,
+    // dòng chạy qua như dây) nhưng KHÔNG tính là điện trở hạn dòng cho
+    // LED (không vào resistorStrips) — LED chỉ có ampe kế vẫn bị cảnh
+    // báo thiếu điện trở. Vôn kế lý tưởng (trở kháng vô cùng): không nối
+    // 2 strip, không thêm terminal vào netlist.
+    if (comp.type === 'resistor' || comp.type === 'ammeter') {
       const keys = legs.map((l) => (l.hole ? stripKey(l.hole, size) : null)).filter(Boolean);
-      keys.forEach((k) => { ensure(k); resistorStrips.add(k); });
+      keys.forEach((k) => { ensure(k); if (comp.type === 'resistor') resistorStrips.add(k); });
       for (let i = 1; i < keys.length; i++) union(keys[0], keys[i]);
       continue;
     }
+    if (comp.type === 'voltmeter') continue;
     for (const leg of legs) {
       const key = leg.hole ? stripKey(leg.hole, size) : null;
       if (!key) continue;
@@ -647,7 +659,7 @@ export function normalizeWireEnd(state, e) {
   return e;
 }
 
-const KIND_LABEL = { led: 'LED', button: 'Nút', pot: 'Chiết áp', lcd: 'LCD', buzzer: 'Còi' };
+const KIND_LABEL = { led: 'LED', button: 'Nút', pot: 'Chiết áp', lcd: 'LCD', buzzer: 'Còi', voltmeter: 'Vôn kế', ammeter: 'Ampe kế' };
 export function compLabel(comp) {
   const n = comp.id.replace(/^[A-Z]+/, '');
   if (comp.type === 'pic') return 'PIC16F877A';
@@ -660,7 +672,11 @@ export function benchToNetlist(state, pressedIds = []) {
   const { groups, termRoot, resistorRoots, find } = buildBenchNets(state, pressedIds);
   const components = [];
   for (const comp of state.components) {
-    if (comp.type === 'pic' || comp.type === 'psu' || comp.type === 'resistor') continue;
+    // Vôn kế/ampe kế không phải ngoại vi cho CPU nên không đưa vào
+    // netlist (tránh componentTerminals trong wiring.js thiếu định nghĩa
+    // cho 2 loại này). Ampe kế vẫn nối mạch qua buildBenchNets (nối 2
+    // strip như dây); vôn kế không nối gì.
+    if (comp.type === 'pic' || comp.type === 'psu' || comp.type === 'resistor' || comp.type === 'voltmeter' || comp.type === 'ammeter') continue;
     const c = {
       id: comp.id, kind: comp.type, label: compLabel(comp),
       x: 0, y: 0, fixed: !!comp.fixed,
@@ -703,7 +719,7 @@ export function benchToNetlist(state, pressedIds = []) {
 // ---------------------------------------------------------------------------
 // Id linh kiện mới (khớp mẫu wiring.js: LED0, BTN0, POT0, LCD0, BUZ0, R0).
 // ---------------------------------------------------------------------------
-const ID_PREFIX = { led: 'LED', resistor: 'R', button: 'BTN', pot: 'POT', lcd: 'LCD', buzzer: 'BUZ', psu: 'PSU' };
+const ID_PREFIX = { led: 'LED', resistor: 'R', button: 'BTN', pot: 'POT', lcd: 'LCD', buzzer: 'BUZ', psu: 'PSU', voltmeter: 'VM', ammeter: 'AM' };
 export function nextComponentId(state, type) {
   const pre = ID_PREFIX[type] || 'C';
   let n = -1;

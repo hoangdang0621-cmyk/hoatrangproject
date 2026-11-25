@@ -15,10 +15,10 @@ import {
   normalizeSize, holeCount, sizeLabel, sameSize,
   psuVolts, validatePsuVolts, parsePsuPost, psuPostPos, PSU_SCALE, PSU_POST_DX, PSU_POST_Y, PSU_POST_DZ,
   clampCamTarget, zoomTowardPoint, panTarget,
-} from './bench-model.js?v=20261125z';
+} from './bench-model.js?v=20261125ad';
 import { checkWiring, SIGNAL_COLORS } from './wiring.js?v=20261125r';
 import { assemble } from './pic16.js?v=20261125ac';
-import { LABS, getLab, buildLabState } from './labs.js?v=20261125z';
+import { LABS, getLab, buildLabState } from './labs.js?v=20261125ad';
 
 const $ = (id) => document.getElementById(id);
 const benchView = $('benchView');
