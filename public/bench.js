@@ -5,6 +5,7 @@
 // thông báo trong tab bàn. Nối CPU qua window.HoaTrangBenchBridge (app.js).
 import {
   PITCH, holeId, holePos, allHoles,
+  HOLE_RADIUS, HOLE_HEIGHT, holeCenterY,
   legOffsets, legsFor, picLegs, canPlace, benchToNetlist,
   describeTerminal, defaultBenchState, nextComponentId, compLabel,
   defaultProps, sanitizeState, boardSize, colsOf, rowsOf, railColsOf, picCol,
@@ -13,8 +14,8 @@ import {
   normalizeSize, holeCount, sizeLabel, sameSize,
   psuVolts, validatePsuVolts, parsePsuPost, psuPostPos,
   clampCamTarget, zoomTowardPoint, panTarget,
-} from './bench-model.js?v=20261125q';
-import { checkWiring, SIGNAL_COLORS } from './wiring.js?v=20261125n';
+} from './bench-model.js?v=20261125r';
+import { checkWiring, SIGNAL_COLORS } from './wiring.js?v=20261125r';
 import { assemble } from './pic16.js?v=20261125q';
 
 const $ = (id) => document.getElementById(id);
@@ -602,7 +603,9 @@ D2
           ? `<p class="sub">${lcd.complete ? 'LCD đã nối đủ dây, hiện chữ theo code.' : 'LCD chưa nối đủ dây — thiếu: ' + (lcd.missing.join(', ') || 'không rõ') + '.'}</p>`
           : `<p class="sub">LCD hiển thị 2 dòng 16 ký tự theo code (data + RS/E).</p>`;
       } else if (comp.type === 'buzzer') {
-        body = `<p class="sub">Còi kêu khi chân + ra mức 1.</p>`;
+        const soundOn = comp.props?.sound !== false;
+        body = `<label class="bench-insp-row"><input type="checkbox" id="inspBuzzerSound"${soundOn ? ' checked' : ''}> Phát tiếng khi còi kêu</label>
+          <p class="sub">Còi kêu khi chân + ra mức 1 (chân PIC mức cao hoặc nối thẳng nguồn 0–10V) và chân − về GND.</p>`;
       } else if (comp.type === 'pic') {
         const conns = picLegs(state.size).map((l) => {
           const d = describeTerminal(state, l.term, pressedIds());
@@ -666,6 +669,12 @@ D2
         });
         potRange.addEventListener('change', () => save());
       }
+      const buzzerSound = inspectorEl.querySelector('#inspBuzzerSound');
+      if (buzzerSound) buzzerSound.addEventListener('change', () => {
+        comp.props = { ...(comp.props || {}), sound: buzzerSound.checked };
+        save();
+        setStatus(buzzerSound.checked ? 'Đã bật tiếng còi.' : 'Đã tắt tiếng còi (còi vẫn sáng khi kêu).');
+      });
       const psuApply = () => {
         const inp = inspectorEl.querySelector('#inspPsuVolts');
         const errEl = inspectorEl.querySelector('#inspPsuErr');
@@ -945,11 +954,11 @@ D2
     // Lỗ (InstancedMesh)
     const holes = allHoles(size);
     const inst = new THREE.InstancedMesh(
-      new THREE.CylinderGeometry(0.95, 0.95, 0.6, 10),
+      new THREE.CylinderGeometry(HOLE_RADIUS, HOLE_RADIUS, HOLE_HEIGHT, 10),
       new THREE.MeshStandardMaterial({ color: 0x1F2937, roughness: 0.9 }),
       holes.length);
     const m = new THREE.Matrix4();
-    holes.forEach((h, i) => { m.makeTranslation(h.x, BOARD_TOP - 0.25, h.z); inst.setMatrixAt(i, m); });
+    holes.forEach((h, i) => { m.makeTranslation(h.x, holeCenterY(BOARD_TOP), h.z); inst.setMatrixAt(i, m); });
     inst.receiveShadow = true;
     boardGroup.add(inst);
   }
@@ -1817,10 +1826,43 @@ D2
     };
     tick();
   }
+  // --- Tiếng còi buzzer (Web Audio): chạy trên luồng âm thanh riêng của
+  // trình duyệt nên không làm nặng vòng vẽ 3D. Sóng vuông 2300 Hz, gain
+  // 0.04, phát liên tục trong lúc còi bật, dừng khi còi tắt.
+  let audioCtx = null; let buzzOsc = null; let buzzGain = null;
+  function ensureAudioCtx() {
+    if (!audioCtx) {
+      try { audioCtx = new (window.AudioContext || window.webkitAudioContext)(); } catch { return null; }
+    }
+    if (audioCtx.state === 'suspended') audioCtx.resume().catch(() => {});
+    return audioCtx;
+  }
+  // Tạo AudioContext ở lần bấm chuột đầu tiên (chính sách autoplay của
+  // trình duyệt chỉ cho phát tiếng sau thao tác của người dùng).
+  document.addEventListener('pointerdown', () => { ensureAudioCtx(); });
+  function setBuzzerSound(on) {
+    if (on) {
+      const ctx = ensureAudioCtx();
+      if (!ctx || ctx.state !== 'running' || buzzOsc) return;
+      buzzOsc = ctx.createOscillator();
+      buzzOsc.type = 'square';
+      buzzOsc.frequency.value = 2300;
+      buzzGain = ctx.createGain();
+      buzzGain.gain.value = 0.04;
+      buzzOsc.connect(buzzGain);
+      buzzGain.connect(ctx.destination);
+      buzzOsc.start();
+    } else if (buzzOsc) {
+      try { buzzOsc.stop(); } catch {}
+      try { buzzOsc.disconnect(); } catch {}
+      try { buzzGain.disconnect(); } catch {}
+      buzzOsc = null; buzzGain = null;
+    }
+  }
   function startLivePoll() {
     if (liveTimer) return;
     liveTimer = setInterval(() => {
-      if (!sceneReady || benchView.hidden) return;
+      if (!sceneReady || benchView.hidden) { setBuzzerSound(false); return; }
       const b = bridge();
       if (!b) return;
       try {
@@ -1847,14 +1889,17 @@ D2
             t.tex.needsUpdate = true;
           }
         }
-        if (typeof b.getMapping === 'function' && typeof b.getPin === 'function') {
-          const mapping = b.getMapping();
-          for (const bz of mapping.buzzers || []) {
-            const mat = buzzerMats.get(bz.id);
-            if (!mat || !bz.pin) continue;
-            const { dir, level } = b.getPin(bz.pin.port, bz.pin.bit);
-            mat.emissiveIntensity = dir === 'out' && level === 1 ? 1.2 : 0;
+        if (typeof b.getBuzzerStates === 'function') {
+          let anyBuzz = false;
+          for (const s of b.getBuzzerStates()) {
+            const mat = buzzerMats.get(s.id);
+            if (mat) mat.emissiveIntensity = s.on ? 1.2 : 0;
+            if (s.on) {
+              const comp = state.components.find((c) => c.id === s.id);
+              if (!comp || comp.props?.sound !== false) anyBuzz = true;
+            }
           }
+          setBuzzerSound(anyBuzz);
         }
       } catch { /* bridge chưa sẵn: bỏ qua lần này */ }
     }, 150);

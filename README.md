@@ -73,7 +73,9 @@ nhấp nháy theo nhịp chip.
   chip đọc điện áp đó (0–5V, 10-bit).
 - **LCD 16x2:** 10 đầu RS/E/D0–D7. Nối đủ dây thì hiện chữ theo chương
   trình chạy trên chip.
-- **Còi buzzer:** 2 đầu. Còi kêu khi chân + ra mức 1.
+- **Còi buzzer:** 2 đầu. Còi kêu bằng tiếng (Web Audio, sóng vuông 2300 Hz)
+  khi chân + ra mức 1 — chân PIC mức cao hoặc nối thẳng nguồn 0–10V — và
+  chân − về GND. Bấm vào còi để tắt/bật tiếng trong Inspector.
 - **Nguồn:** nguồn chung đặt lên mặt bàn, cọc + (đỏ) và − (đen) nối
   vào rail trên/dưới của breadboard. Bấm vào nguồn để mở Inspector và
   đổi điện áp (0–24V, mặc định 5V); màn hình trên nguồn và nhãn nguồn

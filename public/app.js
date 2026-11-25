@@ -5,10 +5,10 @@
 // chạy/tạm dừng/chạy từng lệnh/breakpoint.
 import { createCPU, ProgramRunner } from './pic16.js?v=20261125q';
 import {
-  resolvePeripherals, ledStates,
+  resolvePeripherals, ledStates, buzzerStates,
   applyButtonToCpu, applyPotToCpu,
-} from './wiring.js?v=20261125n';
-import { defaultBenchState, benchToNetlist } from './bench-model.js?v=20261125q';
+} from './wiring.js?v=20261125r';
+import { defaultBenchState, benchToNetlist } from './bench-model.js?v=20261125r';
 
 const cpu = createCPU();
 cpu.clockHz = 4000000;
@@ -66,6 +66,7 @@ window.HoaTrangBenchBridge = {
     applyAllPots();
   },
   getLedStates: () => ledStates(cpu, mapping),
+  getBuzzerStates: () => buzzerStates(cpu, mapping),
   getLcd: () => ({ lines: cpu.lcd.getLines(), complete: !mapping.lcd.id || mapping.lcd.complete }),
   getPin: (port, bit) => ({ dir: cpu.pinDirection(port, bit), level: cpu.pinLevel(port, bit) }),
   getTris: () => cpu.tris,

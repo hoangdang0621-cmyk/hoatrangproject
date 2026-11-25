@@ -244,6 +244,9 @@ export function resolvePeripherals(netlist) {
     id: c.id, label: c.label,
     pin: picPinInNet(c.id + '.P'),
     gnd: hasTerm(c.id + '.N', 'GND'),
+    // Chân + nối net VCC chỉ tính là "có nguồn" khi 0 < psu.volts ≤ 10
+    // (cùng quy tắc LED nối VCC).
+    vccP: psuLedOn && hasTerm(c.id + '.P', 'VCC'),
   }));
   return { leds, buttons, pots, lcd, buzzers, nets: netsOut, netOf };
 }
@@ -280,6 +283,22 @@ export function ledStates(cpu, mapping) {
       on = anodeHigh && cathLow;
     }
     return { id: led.id, on };
+  });
+}
+
+// Trạng thái còi: kêu khi chân − về GND và chân + có nguồn — hoặc nối
+// thẳng VCC (0 < psu.volts ≤ 10, cùng quy tắc LED) hoặc chân PIC đang
+// là ngõ ra mức 1. Thiếu GND thì không kêu.
+export function buzzerStates(cpu, mapping) {
+  return mapping.buzzers.map((bz) => {
+    let on = false;
+    if (bz.gnd) {
+      if (bz.vccP) on = true;
+      else if (bz.pin) {
+        on = cpu.pinDirection(bz.pin.port, bz.pin.bit) === 'out' && cpu.pinLevel(bz.pin.port, bz.pin.bit) === 1;
+      }
+    }
+    return { id: bz.id, on };
   });
 }
 

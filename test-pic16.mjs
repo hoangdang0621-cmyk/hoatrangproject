@@ -1,8 +1,8 @@
 // test-pic16.mjs — Kiểm thử xác định cho lõi pic16.js (KHÔNG đưa vào public/).
 // Chạy: node test-pic16.mjs   (exit 0 = tất cả pass)
 import { assemble, createCPU, parseIntelHex, exportHex, disassemble, ProgramRunner } from './public/pic16.js';
-import { defaultNetlist, resolvePeripherals, checkWiring, ledStates, applyButtonToCpu, applyPotToCpu, PIC_PINS } from './public/wiring.js';
-import { PITCH, allHoles, stripKey, parseHole, holePos, holeId, rowLabel, picLegs, canPlace, buildBenchNets, benchToNetlist, defaultBenchState, sanitizeState, boardSize, picCol, picRows, picBodyDepth, bodyDepth, pruneStateForSize, validateWireEnd, retargetWireEnd, togglePlacement, normalizeSize, holeCount, sizeLabel, sameSize, compLabel, psuVolts, validatePsuVolts, parsePsuPost, psuPostPos, normalizeWireEnd, clampCamTarget, zoomTowardPoint, panTarget } from './public/bench-model.js';
+import { defaultNetlist, resolvePeripherals, checkWiring, ledStates, buzzerStates, applyButtonToCpu, applyPotToCpu, PIC_PINS } from './public/wiring.js';
+import { PITCH, HOLE_RADIUS, HOLE_HEIGHT, HOLE_TOP_ABOVE_BOARD, holeCenterY, depthPrecisionAt, MAX_CAMERA_DISTANCE, allHoles, stripKey, parseHole, holePos, holeId, rowLabel, picLegs, canPlace, buildBenchNets, benchToNetlist, defaultBenchState, sanitizeState, boardSize, picCol, picRows, picBodyDepth, bodyDepth, pruneStateForSize, validateWireEnd, retargetWireEnd, togglePlacement, normalizeSize, holeCount, sizeLabel, sameSize, compLabel, psuVolts, validatePsuVolts, parsePsuPost, psuPostPos, normalizeWireEnd, clampCamTarget, zoomTowardPoint, panTarget } from './public/bench-model.js';
 
 // Các chương trình Assembly dùng để kiểm thử — inline tại đây (file
 // public/examples.js chứa các bài lab mẫu đã bị gỡ ngày 25/11/2026 nên test
@@ -1869,6 +1869,121 @@ const SLEEP_PROG = `    ORG 0
   check('(k-c) board 100 hàng: chân 1 ở u212, chân 40 ở a312',
     picLegs({ cols: 42, rows: 100, rails: true })[0].hole === 'u212'
     && picLegs({ cols: 42, rows: 100, rails: true })[39].hole === 'a312', '');
+}
+
+// ===========================================================================
+// (l) CÒI BUZZER KÊU BẰNG TIẾNG (round 25/11): model nhận cả nối thẳng nguồn
+// ===========================================================================
+// (l-a) P→VCC / N→GND: còi bật (chân + nối thẳng nguồn 5V)
+{
+  const cpu = createCPU();
+  const st = defaultBenchState();
+  st.components.push({ id: 'BUZ0', type: 'buzzer', anchor: 'c10', rot: 0, props: {} });
+  st.wires.push({ id: 'W10', a: 'PSU1.+', b: 'c10', color: '#DC2626' });
+  st.wires.push({ id: 'W11', a: 'c11', b: 'T-5', color: '#0F172A' });
+  const mapping = resolvePeripherals(benchToNetlist(st));
+  check('(l-a) còi P→VCC/N→GND: mapping ghi vccP=true, gnd=true, không gắn chân PIC',
+    mapping.buzzers[0].vccP === true && mapping.buzzers[0].gnd === true && mapping.buzzers[0].pin === null, JSON.stringify(mapping.buzzers[0]));
+  check('(l-a) còi P→VCC/N→GND: buzzerStates bật',
+    buzzerStates(cpu, mapping).find((s) => s.id === 'BUZ0').on === true, '');
+}
+// (l-b) P→RB0: còi kêu theo nhịp blink
+{
+  const st = defaultBenchState();
+  st.components.push({ id: 'BUZ0', type: 'buzzer', anchor: 'c10', rot: 0, props: {} });
+  st.wires.push({ id: 'W10', a: 'c10', b: 'h29', color: '#2563EB' }); // P -> strip RB0
+  st.wires.push({ id: 'W11', a: 'c11', b: 'T-5', color: '#0F172A' });
+  const r = assemble(EXAMPLES.find((e) => e.id === 'blink').code);
+  const cpu = createCPU();
+  const mapping = resolvePeripherals(benchToNetlist(st));
+  cpu.setWiring(mapping);
+  cpu.loadProgram(r.program);
+  runUntil(cpu, 100000);
+  check('(l-b) còi P→RB0: sau 100k chu kỳ (RB0=1) còi KÊU',
+    r.errors.length === 0 && mapping.buzzers[0].pin && mapping.buzzers[0].pin.id === 'RB0'
+    && buzzerStates(cpu, mapping).find((s) => s.id === 'BUZ0').on === true,
+    `pin=${JSON.stringify(mapping.buzzers[0].pin)} PORTB=${cpu.readPort(1).toString(16)}`);
+  runUntil(cpu, 300000);
+  check('(l-b) còi P→RB0: sau 300k chu kỳ (RB0=0) còi TẮT',
+    buzzerStates(cpu, mapping).find((s) => s.id === 'BUZ0').on === false,
+    `PORTB=${cpu.readPort(1).toString(16)}`);
+}
+// (l-c) Thiếu GND thì không kêu, dù chân + có nguồn; chân + nổi cũng không kêu
+{
+  const cpu = createCPU();
+  // P→VCC, N nổi
+  {
+    const st = defaultBenchState();
+    st.components.push({ id: 'BUZ0', type: 'buzzer', anchor: 'c10', rot: 0, props: {} });
+    st.wires.push({ id: 'W10', a: 'PSU1.+', b: 'c10', color: '#DC2626' });
+    const mapping = resolvePeripherals(benchToNetlist(st));
+    check('(l-c) còi P→VCC, chân − nổi: KHÔNG kêu',
+      mapping.buzzers[0].vccP === true && mapping.buzzers[0].gnd === false
+      && buzzerStates(cpu, mapping).find((s) => s.id === 'BUZ0').on === false, JSON.stringify(mapping.buzzers[0]));
+  }
+  // P→RB0 mức cao, N nổi + P nổi, N→GND
+  {
+    const st = defaultBenchState();
+    st.components.push({ id: 'BUZ0', type: 'buzzer', anchor: 'c10', rot: 0, props: {} });
+    st.wires.push({ id: 'W10', a: 'c10', b: 'h29', color: '#2563EB' }); // P -> strip RB0
+    const mapping = resolvePeripherals(benchToNetlist(st));
+    cpu.setWiring(mapping);
+    cpu.writeFile(0x03, 0x20); // bank1: RP0=1
+    cpu.writeFile(0x06, 0x00); // TRISB = 0 (ngõ ra)
+    cpu.writeFile(0x03, 0x00); // về bank0
+    cpu.writeFile(0x06, 0x01); // PORTB = 0x01 -> RB0=1
+    const onNoGnd = buzzerStates(cpu, mapping).find((s) => s.id === 'BUZ0').on;
+    const st2 = defaultBenchState();
+    st2.components.push({ id: 'BUZ0', type: 'buzzer', anchor: 'c10', rot: 0, props: {} });
+    st2.wires.push({ id: 'W11', a: 'c11', b: 'T-5', color: '#0F172A' }); // chỉ N về GND, P nổi
+    const mapping2 = resolvePeripherals(benchToNetlist(st2));
+    const onFloating = buzzerStates(cpu, mapping2).find((s) => s.id === 'BUZ0').on;
+    check('(l-c) còi P→RB0 mức cao mà chân − nổi: KHÔNG kêu; P nổi, N→GND: KHÔNG kêu',
+      mapping.buzzers[0].pin && mapping.buzzers[0].pin.id === 'RB0' && onNoGnd === false && onFloating === false,
+      `pin=${JSON.stringify(mapping.buzzers[0].pin)} onNoGnd=${onNoGnd} onFloating=${onFloating}`);
+  }
+}
+// (l-d) Còi nối VCC chỉ kêu khi 0 < volts ≤ 10 (cùng quy tắc LED)
+{
+  const cpu = createCPU();
+  const buzzerOnAt = (volts) => {
+    const st = defaultBenchState();
+    st.components.find((c) => c.type === 'psu').props = { volts };
+    st.components.push({ id: 'BUZ0', type: 'buzzer', anchor: 'c10', rot: 0, props: {} });
+    st.wires.push({ id: 'W10', a: 'PSU1.+', b: 'c10', color: '#DC2626' });
+    st.wires.push({ id: 'W11', a: 'c11', b: 'T-5', color: '#0F172A' });
+    const mapping = resolvePeripherals(benchToNetlist(st));
+    return buzzerStates(cpu, mapping).find((s) => s.id === 'BUZ0').on;
+  };
+  check('(l-d) còi nối VCC: 0V tắt',
+    buzzerOnAt(0) === false, `0V=${buzzerOnAt(0)}`);
+  check('(l-d) còi nối VCC: 5V kêu, 10V kêu',
+    buzzerOnAt(5) === true && buzzerOnAt(10) === true, `5V=${buzzerOnAt(5)} 10V=${buzzerOnAt(10)}`);
+  check('(l-d) còi nối VCC: 10.5V tắt, 12V tắt, 24V tắt',
+    buzzerOnAt(10.5) === false && buzzerOnAt(12) === false && buzzerOnAt(24) === false,
+    `10.5V=${buzzerOnAt(10.5)} 12V=${buzzerOnAt(12)} 24V=${buzzerOnAt(24)}`);
+}
+
+// ===========================================================================
+// (m) LỖ BOARD KHÔNG NHÁY/NHÒE — Z-FIGHTING (round 25/11): mặt trên lỗ cao
+// hơn mặt board 0.35mm, lớn hơn sai số depth buffer ở khoảng cách xa nhất.
+// ===========================================================================
+// (m-a) Mặt trên lỗ cao hơn mặt board tối thiểu 0.2mm; đáy vẫn chìm trong thân board
+{
+  const topY = holeCenterY(8) + HOLE_HEIGHT / 2;
+  const bottomY = holeCenterY(8) - HOLE_HEIGHT / 2;
+  check('(m-a) lỗ: mặt trên cao hơn mặt board 0.35mm (>= 0.2mm), đáy chìm 0.25mm trong thân board, bán kính/cao không đổi',
+    HOLE_TOP_ABOVE_BOARD >= 0.2 && Math.abs(topY - 8 - HOLE_TOP_ABOVE_BOARD) < 1e-9
+    && bottomY < 8 && bottomY > 0 && HOLE_RADIUS === 0.95 && HOLE_HEIGHT === 0.6,
+    `topY=${topY} bottomY=${bottomY} r=${HOLE_RADIUS} h=${HOLE_HEIGHT}`);
+}
+// (m-b) Sai số depth buffer 24-bit ở khoảng cách camera xa nhất vẫn nhỏ hơn khoảng tách
+{
+  const dz1000 = depthPrecisionAt(MAX_CAMERA_DISTANCE, 1);
+  const dz900 = depthPrecisionAt(900, 1);
+  check('(m-b) depth buffer ở 1000mm: sai số ~0.06mm < 0.35mm (khoảng tách); khoảng tách cũ 0.05mm thì NHỎ hơn sai số nên mới nháy',
+    dz1000 < HOLE_TOP_ABOVE_BOARD && dz900 < HOLE_TOP_ABOVE_BOARD && dz1000 > 0.05,
+    `dz(1000)=${dz1000.toFixed(4)} dz(900)=${dz900.toFixed(4)}`);
 }
 
 console.log(`\nKết quả: ${pass} pass, ${fail} fail`);

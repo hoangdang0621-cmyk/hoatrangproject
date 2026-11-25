@@ -13,6 +13,22 @@
 // (terminal 'PIC.RB0', 'LED0.A', 'VCC', 'GND') để nối vào CPU.
 
 export const PITCH = 2.54;       // khoảng cách lỗ (mm)
+// Lỗ board (InstancedMesh hình trụ trong bench.js): bán kính, cao, số cạnh
+// giữ nguyên; mặt trên lỗ cao hơn mặt board 0.35mm để không tranh depth
+// buffer với mặt board (z-fighting: mặt lỗ cũ chỉ cao hơn 0.05mm trong khi
+// sai số depth ở xa ~0.06mm → lỗ nháy/nhòe, xoay camera mới hết).
+export const HOLE_RADIUS = 0.95;
+export const HOLE_HEIGHT = 0.6;
+export const HOLE_TOP_ABOVE_BOARD = 0.35;
+// Tâm trụ lỗ theo mặt board: mặt trên = boardTop + 0.35, đáy chìm 0.25mm
+// trong thân board.
+export function holeCenterY(boardTop) { return boardTop + HOLE_TOP_ABOVE_BOARD - HOLE_HEIGHT / 2; }
+// Độ chính xác depth buffer (mm) tại khoảng cách z, depth buffer 24-bit:
+// dz ≈ z² / (near × 2^24). Camera PerspectiveCamera(42, 1, 1, 5000).
+export function depthPrecisionAt(z, near = 1) { return (z * z) / (near * 16777216); }
+// Khoảng cách camera tới board xa nhất: bán kính orbit kẹp tối đa 900mm
+// (wheel zoom) cộng lệch target → lấy tròn 1000mm làm trường hợp xấu nhất.
+export const MAX_CAMERA_DISTANCE = 1000;
 // Size bo mạch: 3 mẫu sẵn (kiểu ohmimic) hoặc tự điền {cols, rows, rails}.
 // 830 = 63 cột x 10 hàng + 4 rail x 50; 400 = 30 x 10 + 4 x 25;
 // 170 = 17 x 10, không có rail (đúng board mini thật).
