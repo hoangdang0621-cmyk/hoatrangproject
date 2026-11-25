@@ -3,7 +3,7 @@
 import { readFileSync } from 'node:fs';
 import { assemble, createCPU, parseIntelHex, exportHex, disassemble, ProgramRunner } from './public/pic16.js';
 import { defaultNetlist, resolvePeripherals, checkWiring, ledStates, buzzerStates, applyButtonToCpu, applyPotToCpu, PIC_PINS } from './public/wiring.js';
-import { PITCH, HOLE_RADIUS, HOLE_HEIGHT, HOLE_TOP_ABOVE_BOARD, holeCenterY, depthPrecisionAt, MAX_CAMERA_DISTANCE, SEGMENT_LINE_WIDTH_MM, segmentBoundaries, allHoles, stripKey, parseHole, holePos, holeId, rowLabel, rowIndexFromLabel, migrateOldHoleId, picLegs, legsFor, canPlace, buildBenchNets, benchToNetlist, defaultBenchState, sanitizeState, boardSize, picCol, picRows, picBodyDepth, bodyDepth, pruneStateForSize, validateWireEnd, retargetWireEnd, togglePlacement, normalizeSize, holeCount, sizeLabel, sameSize, compLabel, psuVolts, validatePsuVolts, parsePsuPost, psuPostPos, normalizeWireEnd, clampCamTarget, zoomTowardPoint, panTarget } from './public/bench-model.js';
+import { PITCH, HOLE_RADIUS, HOLE_HEIGHT, HOLE_TOP_ABOVE_BOARD, holeCenterY, depthPrecisionAt, MAX_CAMERA_DISTANCE, SEGMENT_LINE_WIDTH_MM, segmentBoundaries, allHoles, stripKey, parseHole, holePos, holeId, rowLabel, rowIndexFromLabel, migrateOldHoleId, picLegs, legsFor, canPlace, buildBenchNets, benchToNetlist, defaultBenchState, sanitizeState, boardSize, picCol, picRows, picBodyDepth, bodyDepth, pruneStateForSize, validateWireEnd, retargetWireEnd, togglePlacement, normalizeSize, holeCount, sizeLabel, sameSize, compLabel, psuVolts, validatePsuVolts, parsePsuPost, psuPostPos, PSU_SCALE, PSU_POST_DX, PSU_POST_Y, PSU_POST_DZ, normalizeWireEnd, clampCamTarget, zoomTowardPoint, panTarget } from './public/bench-model.js';
 import { LABS, getLab, buildLabState } from './public/labs.js';
 
 // Các chương trình Assembly dùng để kiểm thử — inline tại đây (file
@@ -1231,9 +1231,9 @@ function rewire(netlist, a, b, a2, b2) {
     && (() => { const p = parsePsuPost('PSU1.-'); return p && p.psuId === 'PSU1' && p.sign === '-'; })()
     && parsePsuPost('c12') === null && parsePsuPost('PSU1.x') === null, '');
   const st = defaultBenchState();
-  check('(f-b) vị trí cọc PSU1: + ở (-12, 28, -108), − ở (12, 28, -108)',
-    (() => { const p = psuPostPos(st, 'PSU1.+'); return p && p.x === -12 && p.y === 28 && p.z === -108; })()
-    && (() => { const p = psuPostPos(st, 'PSU1.-'); return p && p.x === 12 && p.y === 28 && p.z === -108; })()
+  check('(f-b) vị trí cọc PSU1: + ở (-6, 14, -129), − ở (6, 14, -129)',
+    (() => { const p = psuPostPos(st, 'PSU1.+'); return p && p.x === -6 && p.y === 14 && p.z === -129; })()
+    && (() => { const p = psuPostPos(st, 'PSU1.-'); return p && p.x === 6 && p.y === 14 && p.z === -129; })()
     && psuPostPos(st, 'PSU9.+') === null, '');
   check('(f-b) dây mặc định W6/W7 nối cọc nguồn về rail: W6 = PSU1.+ -> T+40, W7 = PSU1.- -> T-40',
     st.wires.find((w) => w.id === 'W6').a === 'PSU1.+' && st.wires.find((w) => w.id === 'W6').b === 'T+40'
@@ -2178,6 +2178,7 @@ const SLEEP_PROG = `    ORG 0
 // (q) TAB "BÀI LAB" + LAB 1 "ĐIỀU KHIỂN LED" (round 25/11): LED nối RB0
 // qua điện trở 220Ω, cathode về GND. Mở tab Bài Lab, bấm Mở lab thì mạch
 // lên bàn; sang tab code bấm Nạp & chạy thì LED nhấp nháy theo nhịp chip.
+// Dây lab cắm vào lỗ kề cùng đoạn strip, không cắm trùng lỗ chân linh kiện (25/11).
 // Hiển thị tab là DOM nên không test bằng Node — Điệp check bằng trình
 // duyệt thật.
 // ===========================================================================
@@ -2191,11 +2192,11 @@ const SLEEP_PROG = `    ORG 0
     lab.components.length === 2
     && lab.components[0].id === 'R0' && lab.components[0].type === 'resistor' && lab.components[0].anchor === 'i45' && lab.components[0].props.value === 220
     && lab.components[1].id === 'LED0' && lab.components[1].type === 'led' && lab.components[1].anchor === 'i52' && lab.components[1].props.color === '#DC2626', JSON.stringify(lab.components));
-  check('(q-a) Lab 1 có đúng 3 dây: RB0->điện trở, điện trở->anode LED, cathode LED->GND',
+  check('(q-a) Lab 1 có đúng 3 dây (đầu dây ở lỗ kề cùng strip, không trùng chân linh kiện): RB0->điện trở, điện trở->anode LED, cathode LED->GND',
     lab.wires.length === 3
-    && lab.wires[0].a === 'h29' && lab.wires[0].b === 'i45'
-    && lab.wires[1].a === 'i49' && lab.wires[1].b === 'i52'
-    && lab.wires[2].a === 'i53' && lab.wires[2].b === 'B-50', JSON.stringify(lab.wires));
+    && lab.wires[0].a === 'i29' && lab.wires[0].b === 'j45'
+    && lab.wires[1].a === 'j49' && lab.wires[1].b === 'j52'
+    && lab.wires[2].a === 'j53' && lab.wires[2].b === 'B-50', JSON.stringify(lab.wires));
 }
 // (q-b) buildLabState cho ra state hợp lệ: chip + nguồn + dây nguồn + R0 + LED0 + 3 dây lab
 {
@@ -2204,8 +2205,14 @@ const SLEEP_PROG = `    ORG 0
     r.ok && r.state.components.map((c) => c.id).join(',') === 'PIC1,PSU1,R0,LED0'
     && r.state.wires.map((w) => w.id).join(',') === 'W1,W2,W3,W4,W5,W6,W7,LAB1-W1,LAB1-W2,LAB1-W3',
     r.ok ? JSON.stringify({ comps: r.state.components.map((c) => c.id), wires: r.state.wires.map((w) => w.id) }) : r.reason);
-  check('(q-b) đầu dây RB0 trong lab trùng đúng lỗ chân RB0 tính bằng picLegs (không hardcode sai)',
-    r.ok && LABS[0].wires[0].a === picLegs(830).find((l) => l.term === 'PIC.RB0').hole, LABS[0].wires[0].a);
+  check('(q-b) đầu dây RB0 ở lỗ kề i29, cùng đoạn strip với chân RB0 (h29) nhưng không trùng lỗ chân',
+    r.ok && stripKey(LABS[0].wires[0].a, 830) === stripKey(picLegs(830).find((l) => l.term === 'PIC.RB0').hole, 830)
+    && LABS[0].wires[0].a !== picLegs(830).find((l) => l.term === 'PIC.RB0').hole, LABS[0].wires[0].a);
+  check('(q-b) không đầu dây lab nào cắm trùng lỗ chân linh kiện (chip/R0/LED0)',
+    r.ok && (() => {
+      const legHoles = new Set(r.state.components.flatMap((c) => legsFor(c, 830).map((l) => l.hole).filter(Boolean)));
+      return LABS[0].wires.every((w) => [w.a, w.b].every((e) => !parseHole(e, 830) || !legHoles.has(e)));
+    })(), '');
   check('(q-b) state lab qua sanitizeState vẫn giữ nguyên R0/LED0 + 3 dây lab',
     r.ok && (() => {
       const s2 = sanitizeState(JSON.parse(JSON.stringify(r.state)));
@@ -2259,6 +2266,27 @@ const SLEEP_PROG = `    ORG 0
   const onLow = ledStates(cpu, mapping).find((s) => s.id === 'LED0').on;
   check('(q-e) chương trình blink: sau 100k chu kỳ (RB0=1) LED SÁNG, sau 300k chu kỳ (RB0=0) LED TẮT',
     r.errors.length === 0 && onHigh === true && onLow === false, `onHigh=${onHigh} onLow=${onLow} PORTB=${cpu.readPort(1).toString(16)}`);
+}
+
+// (r) Thu nhỏ khối nguồn 50% (Điệp lệnh 25/11: "cho cục nguồn bé đi 50%")
+{
+  const st = defaultBenchState();
+  check('(r-a) PSU_SCALE = 0.5; offset cọc bằng một nửa giá trị cũ (DX 6, Y 14, DZ 21)',
+    PSU_SCALE === 0.5 && PSU_POST_DX === 6 && PSU_POST_Y === 14 && PSU_POST_DZ === 21,
+    `PSU_SCALE=${PSU_SCALE} DX=${PSU_POST_DX} Y=${PSU_POST_Y} DZ=${PSU_POST_DZ}`);
+  check('(r-b) vị trí cọc PSU1 sau khi thu nhỏ: + ở (-6, 14, -129), − ở (6, 14, -129)',
+    (() => { const p = psuPostPos(st, 'PSU1.+'); return p && p.x === -6 && p.y === 14 && p.z === -129; })()
+    && (() => { const p = psuPostPos(st, 'PSU1.-'); return p && p.x === 6 && p.y === 14 && p.z === -129; })()
+    && psuPostPos(st, 'PSU9.+') === null, '');
+  check('(r-c) dây mặc định W6/W7 nối đúng cọc mới: psuPostPos(W6.a) = cọc +, psuPostPos(W7.a) = cọc -',
+    (() => { const p = psuPostPos(st, st.wires.find((w) => w.id === 'W6').a); return p && p.x === -6 && p.y === 14 && p.z === -129; })()
+    && (() => { const p = psuPostPos(st, st.wires.find((w) => w.id === 'W7').a); return p && p.x === 6 && p.y === 14 && p.z === -129; })(), '');
+  check('(r-d) normalizeWireEnd: đầu dây ở vị trí cọc MỚI và CŨ đều đổi đúng thành id cọc; điểm lạ giữ nguyên',
+    normalizeWireEnd(st, { x: -6, y: 14, z: -129 }) === 'PSU1.+'
+    && normalizeWireEnd(st, { x: 6, y: 14, z: -129 }) === 'PSU1.-'
+    && normalizeWireEnd(st, { x: -12, y: 28, z: -108 }) === 'PSU1.+'
+    && normalizeWireEnd(st, { x: 12, y: 28, z: -108 }) === 'PSU1.-'
+    && JSON.stringify(normalizeWireEnd(st, { x: 0, y: 14, z: -129 })) === JSON.stringify({ x: 0, y: 14, z: -129 }), '');
 }
 
 console.log(`\nKết quả: ${pass} pass, ${fail} fail`);

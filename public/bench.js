@@ -13,12 +13,12 @@ import {
   picRows, picBodyDepth, bodyDepth, rowLabel,
   pruneStateForSize, validateWireEnd, retargetWireEnd, togglePlacement,
   normalizeSize, holeCount, sizeLabel, sameSize,
-  psuVolts, validatePsuVolts, parsePsuPost, psuPostPos,
+  psuVolts, validatePsuVolts, parsePsuPost, psuPostPos, PSU_SCALE, PSU_POST_DX, PSU_POST_Y, PSU_POST_DZ,
   clampCamTarget, zoomTowardPoint, panTarget,
-} from './bench-model.js?v=20261125t';
+} from './bench-model.js?v=20261125v';
 import { checkWiring, SIGNAL_COLORS } from './wiring.js?v=20261125r';
 import { assemble } from './pic16.js?v=20261125q';
-import { LABS, getLab, buildLabState } from './labs.js?v=20261125u';
+import { LABS, getLab, buildLabState } from './labs.js?v=20261125v';
 
 const $ = (id) => document.getElementById(id);
 const benchView = $('benchView');
@@ -1136,8 +1136,12 @@ D2
       return g;
     }
     if (comp.type === 'psu') {
-      // Hộp nguồn đặt trên mặt bàn, mặt trước quay về phía breadboard
+      // Hộp nguồn đặt trên mặt bàn, mặt trước quay về phía breadboard.
+      // Thu nhỏ toàn bộ khối nguồn còn một nửa (PSU_SCALE = 0.5): gốc
+      // group ở mặt bàn (y=0) nên đáy hộp vẫn chạm bàn sau khi scale;
+      // thân hộp còn 60×35×40, cọc/màn hình/núm bắt thu theo đúng tỉ lệ.
       g.position.set(comp.tx, 0, comp.tz);
+      g.scale.set(PSU_SCALE, PSU_SCALE, PSU_SCALE);
       const body = new THREE.Mesh(new THREE.BoxGeometry(120, 70, 80), stdMat(0x334155, { roughness: 0.5 }));
       body.position.y = 35;
       body.castShadow = true;
@@ -1263,13 +1267,15 @@ D2
     ctx.fillStyle = '#0F172A';
     ctx.fillRect(0, 0, 256, 96);
     ctx.fillStyle = '#F87171';
-    ctx.font = '700 52px "Fira Code", monospace';
+    // Chữ to hơn trước (52px -> 60px) để bù cho việc khối nguồn thu nhỏ 50%
+    // (màn hình còn 26×10mm): chữ vẫn đọc được trên màn hình nhỏ.
+    ctx.font = '700 60px "Fira Code", monospace';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     ctx.fillText(Number(volts).toFixed(2), 108, 48);
     ctx.fillStyle = '#94A3B8';
-    ctx.font = '600 28px "Fira Code", monospace';
-    ctx.fillText('V', 216, 48);
+    ctx.font = '600 30px "Fira Code", monospace';
+    ctx.fillText('V', 220, 48);
     const tex = new THREE.CanvasTexture(c);
     return tex;
   }
@@ -1840,8 +1846,8 @@ D2
         // Đầu dây nguồn mặc định dạng id cọc (PSU1.+/PSU1.-) tự theo vị trí
         // nguồn mới; chỉ cập nhật đầu {x,y,z} cũ (state lưu trước khi có id cọc).
         for (const w of state.wires) {
-          if (w.id === 'W6' && typeof w.a === 'object') w.a = { x: comp.tx - 12, y: 28, z: comp.tz + 42 };
-          if (w.id === 'W7' && typeof w.a === 'object') w.a = { x: comp.tx + 12, y: 28, z: comp.tz + 42 };
+          if (w.id === 'W6' && typeof w.a === 'object') w.a = { x: comp.tx - PSU_POST_DX, y: PSU_POST_Y, z: comp.tz + PSU_POST_DZ };
+          if (w.id === 'W7' && typeof w.a === 'object') w.a = { x: comp.tx + PSU_POST_DX, y: PSU_POST_Y, z: comp.tz + PSU_POST_DZ };
         }
         save(); rebuildAll(); syncToCpu();
       } else {

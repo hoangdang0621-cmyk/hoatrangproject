@@ -4,7 +4,7 @@
 // Thêm lab mới chỉ cần thêm 1 phần tử vào mảng LABS.
 // Lỗ chân RB0 (h29), vị trí điện trở/LED và dây nối đã tính bằng legsFor /
 // canPlace trên board mặc định 830 và kiểm chứng bằng netlist (test q).
-import { defaultBenchState, defaultProps, canPlace, parseHole, parsePsuPost } from './bench-model.js?v=20261125t';
+import { defaultBenchState, defaultProps, canPlace, parseHole, parsePsuPost } from './bench-model.js?v=20261125v';
 
 export const LABS = [
   {
@@ -16,10 +16,11 @@ export const LABS = [
       { id: 'R0', type: 'resistor', anchor: 'i45', rot: 0, props: { value: 220 } },
       { id: 'LED0', type: 'led', anchor: 'i52', rot: 0, props: { color: '#DC2626' } },
     ],
+    // Quy tắc dây lab: cắm vào lỗ kề trong cùng đoạn strip (5 hàng), KHÔNG cắm trùng lỗ chân linh kiện.
     wires: [
-      { id: 'LAB1-W1', a: 'h29', b: 'i45', color: '#DC2626' }, // RB0 -> chân điện trở
-      { id: 'LAB1-W2', a: 'i49', b: 'i52', color: '#DC2626' }, // điện trở -> anode LED
-      { id: 'LAB1-W3', a: 'i53', b: 'B-50', color: '#0F172A' }, // cathode LED -> GND (rail -)
+      { id: 'LAB1-W1', a: 'i29', b: 'j45', color: '#DC2626' }, // RB0 (strip h29) -> chân điện trở (strip i45)
+      { id: 'LAB1-W2', a: 'j49', b: 'j52', color: '#DC2626' }, // điện trở (strip i49) -> anode LED (strip i52)
+      { id: 'LAB1-W3', a: 'j53', b: 'B-50', color: '#0F172A' }, // cathode LED (strip i53) -> GND (rail -)
     ],
   },
 ];

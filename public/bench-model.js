@@ -549,23 +549,34 @@ export function parsePsuPost(id) {
   const m = typeof id === 'string' ? id.match(/^PSU(\d+)\.([+-])$/) : null;
   return m ? { psuId: 'PSU' + m[1], sign: m[2] } : null;
 }
-// Vị trí 3D của cọc nguồn trên bàn (mm): cọc + ở x = tx−12, cọc − ở
-// x = tx+12, cao y = 28, mặt trước hộp nguồn z = tz+42.
+// Tỉ lệ khối nguồn (PSU): thu nhỏ 50% (Điệp lệnh 25/11: "cho cục nguồn bé đi 50%").
+// Offset cọc nguồn so với tâm khối nguồn (đã thu nhỏ 50% từ 12/28/42).
+export const PSU_SCALE = 0.5;
+export const PSU_POST_DX = 6;  // |x| cọc so với tx
+export const PSU_POST_Y = 14;  // cao cọc
+export const PSU_POST_DZ = 21; // z cọc so với tz (mặt trước hộp)
+// Vị trí cọc cũ trước khi thu nhỏ (để normalizeWireEnd đổi đầu dây {x,y,z} đã lưu từ trước).
+const PSU_POST_DX_OLD = 12;
+const PSU_POST_DZ_OLD = 42;
+// Vị trí 3D của cọc nguồn trên bàn (mm): cọc + ở x = tx−6, cọc − ở
+// x = tx+6, cao y = 14, mặt trước hộp nguồn z = tz+21.
 export function psuPostPos(state, id) {
   const pp = parsePsuPost(id);
   if (!pp) return null;
   const comp = state.components.find((c) => c.id === pp.psuId && c.type === 'psu');
   if (!comp) return null;
-  return { x: comp.tx + (pp.sign === '+' ? -12 : 12), y: 28, z: comp.tz + 42 };
+  return { x: comp.tx + (pp.sign === '+' ? -PSU_POST_DX : PSU_POST_DX), y: PSU_POST_Y, z: comp.tz + PSU_POST_DZ };
 }
 // Đầu dây {x,y,z} cũ (lưu trước khi có id cọc) -> id cọc nếu khớp vị trí cọc nguồn.
+// Chấp nhận cả vị trí cọc mới (đã thu nhỏ 50%) và vị trí cũ (state lưu trước khi thu nhỏ).
 export function normalizeWireEnd(state, e) {
   if (typeof e === 'string') return e;
   if (e && typeof e.x === 'number' && typeof e.z === 'number') {
     for (const c of state.components) {
       if (c.type !== 'psu') continue;
-      if (Math.abs(e.x - (c.tx - 12)) < 6 && Math.abs(e.z - (c.tz + 42)) < 6) return c.id + '.+';
-      if (Math.abs(e.x - (c.tx + 12)) < 6 && Math.abs(e.z - (c.tz + 42)) < 6) return c.id + '.-';
+      for (const [dx, dz, sign] of [[-PSU_POST_DX, PSU_POST_DZ, '+'], [PSU_POST_DX, PSU_POST_DZ, '-'], [-PSU_POST_DX_OLD, PSU_POST_DZ_OLD, '+'], [PSU_POST_DX_OLD, PSU_POST_DZ_OLD, '-']]) {
+        if (Math.abs(e.x - (c.tx + dx)) < 6 && Math.abs(e.z - (c.tz + dz)) < 6) return c.id + '.' + sign;
+      }
     }
   }
   return e;
