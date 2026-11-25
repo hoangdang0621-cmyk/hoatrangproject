@@ -3,7 +3,7 @@
 import { readFileSync } from 'node:fs';
 import { assemble, createCPU, parseIntelHex, exportHex, disassemble, ProgramRunner } from './public/pic16.js';
 import { defaultNetlist, resolvePeripherals, checkWiring, ledStates, buzzerStates, applyButtonToCpu, applyPotToCpu, PIC_PINS } from './public/wiring.js';
-import { PITCH, HOLE_RADIUS, HOLE_HEIGHT, HOLE_TOP_ABOVE_BOARD, holeCenterY, depthPrecisionAt, MAX_CAMERA_DISTANCE, SEGMENT_LINE_WIDTH_MM, segmentBoundaries, allHoles, stripKey, parseHole, holePos, holeId, rowLabel, rowIndexFromLabel, migrateOldHoleId, picLegs, picLegsForAnchor, picAnchor, legsFor, canPlace, buildBenchNets, benchToNetlist, defaultBenchState, sanitizeState, boardSize, picCol, picRows, picBodyDepth, bodyDepth, pruneStateForSize, validateWireEnd, retargetWireEnd, togglePlacement, normalizeSize, holeCount, sizeLabel, sameSize, compLabel, psuVolts, validatePsuVolts, parsePsuPost, psuPostPos, PSU_SCALE, PSU_POST_DX, PSU_POST_Y, PSU_POST_DZ, normalizeWireEnd, clampCamTarget, zoomTowardPoint, panTarget } from './public/bench-model.js';
+import { PITCH, SEGMENT_GAP_MM, rowZ, HOLE_RADIUS, HOLE_HEIGHT, HOLE_TOP_ABOVE_BOARD, holeCenterY, depthPrecisionAt, MAX_CAMERA_DISTANCE, SEGMENT_LINE_WIDTH_MM, segmentBoundaries, allHoles, stripKey, parseHole, holePos, holeId, rowLabel, rowIndexFromLabel, migrateOldHoleId, picLegs, picLegsForAnchor, picAnchor, legsFor, canPlace, buildBenchNets, benchToNetlist, defaultBenchState, sanitizeState, boardSize, picCol, picRows, picBodyDepth, picBodyDepthForRows, bodyDepth, pruneStateForSize, validateWireEnd, retargetWireEnd, togglePlacement, normalizeSize, holeCount, sizeLabel, sameSize, compLabel, psuVolts, validatePsuVolts, parsePsuPost, psuPostPos, PSU_SCALE, PSU_POST_DX, PSU_POST_Y, PSU_POST_DZ, normalizeWireEnd, clampCamTarget, zoomTowardPoint, panTarget } from './public/bench-model.js';
 import { LABS, getLab, buildLabState } from './public/labs.js';
 
 // Các chương trình Assembly dùng để kiểm thử — inline tại đây (file
@@ -627,7 +627,7 @@ function rewire(netlist, a, b, a2, b2) {
   check('(b-a) parseHole T+40 = rail trên +, cột 40', (() => { const q = parseHole('T+40'); return q && q.r === -2 && q.c === 40; })(), JSON.stringify(parseHole('T+40')));
   check('(b-a) parseHole sai định dạng trả null', parseHole('x99') === null && parseHole('a64') === null && parseHole('T+51') === null, '');
   const pos = holePos('b22');
-  check('(b-a) holePos b22 = (-25.40, -8.89)mm', pos && Math.abs(pos.x + 25.4) < 0.01 && Math.abs(pos.z + 8.89) < 0.01, JSON.stringify(pos));
+  check('(b-a) holePos b22 = (-25.40, -10.16)mm (hàng b cách tâm 10.16mm vì có khe hở đoạn)', pos && Math.abs(pos.x + 25.4) < 0.01 && Math.abs(pos.z + 10.16) < 0.01, JSON.stringify(pos));
 }
 
 // (b-b) Chân chip khớp datasheet / wiring.js
@@ -744,8 +744,8 @@ function rewire(netlist, a, b, a2, b2) {
     parseHole('T+1', 170) === null && parseHole('B-1', 170) === null
     && (() => { const q = parseHole('a17', 170); return q && q.c === 17; })() && parseHole('a18', 170) === null, '');
   const p = holePos('a1', 170);
-  check('(c-b) holePos a1 trên 170 = x -20.32mm (gốc giữa board)',
-    p && Math.abs(p.x + 20.32) < 0.01 && Math.abs(p.z + 11.43) < 0.01, JSON.stringify(p));
+  check('(c-b) holePos a1 trên 170 = x -20.32mm, z -12.70mm (gốc giữa board, có khe hở đoạn)',
+    p && Math.abs(p.x + 20.32) < 0.01 && Math.abs(p.z + 12.7) < 0.01, JSON.stringify(p));
   check('(c-b) rail 830 vẫn 50 lỗ', parseHole('T+50', 830) !== null && parseHole('T+51', 830) === null, '');
 }
 
@@ -1192,7 +1192,10 @@ function rewire(netlist, a, b, a2, b2) {
     && normalizeSize({ cols: 42, rows: 12 }).rows === 10, '');
 }
 
-// (e-h) Nghịch đảo holePos theo cả 2 chiều (pickHole trong bench.js)
+// (e-h) Nghịch đảo holePos theo cả 2 chiều (pickHole trong bench.js):
+// cột vẫn tuyến tính, hàng tìm bằng hàng có rowZ gần nhất (hàng cách nhau
+// 1 PITCH trong đoạn, 2 PITCH qua ranh giới đoạn nên không còn công thức
+// tuyến tính z/PITCH + (rows−1)/2).
 {
   for (const size of [830, { cols: 42, rows: 15, rails: true }, { cols: 20, rows: 5, rails: false }]) {
     const cols = boardSize(size).cols;
@@ -1203,8 +1206,10 @@ function rewire(netlist, a, b, a2, b2) {
     const ok = ids.every((id) => {
       const p = holePos(id, size);
       if (!p) return false;
+      let best = null, bestD = 1e9;
+      for (let r = 0; r < rows; r++) { const d = Math.abs(rowZ(r, rows) - p.z); if (d < bestD) { bestD = d; best = r; } }
       return Math.round(p.x / PITCH + (cols + 1) / 2) === parseHole(id, size).c
-        && Math.round(p.z / PITCH + (rows - 1) / 2) === parseHole(id, size).r;
+        && best === parseHole(id, size).r;
     });
     check(`(e-h) nghịch đảo holePos trên ${JSON.stringify(size)}: cột + hàng tính lại đúng`, ok, '');
   }
@@ -1251,11 +1256,13 @@ function rewire(netlist, a, b, a2, b2) {
     && sameSize(830, 830), '');
 }
 
-// (e-l) bodyDepth: chiều sâu thân board theo rows
+// (e-l) bodyDepth: chiều sâu thân board theo rows (+ 1 khe hở đoạn cho mỗi
+// ranh giới 5 hàng: 830 có 1 ranh giới -> +2.54; 20x25 có 4 -> +10.16;
+// 20x5 không có ranh giới -> không đổi)
 {
-  check('(e-l) bodyDepth 830 = 47.02mm; 20x25 = 85.12mm; 20x5 = 34.32mm',
-    Math.abs(bodyDepth(830) - 47.02) < 0.01
-    && Math.abs(bodyDepth({ cols: 20, rows: 25, rails: false }) - 85.12) < 0.01
+  check('(e-l) bodyDepth 830 = 49.56mm; 20x25 = 95.28mm; 20x5 = 34.32mm',
+    Math.abs(bodyDepth(830) - 49.56) < 0.01
+    && Math.abs(bodyDepth({ cols: 20, rows: 25, rails: false }) - 95.28) < 0.01
     && Math.abs(bodyDepth({ cols: 20, rows: 5, rails: false }) - 34.32) < 0.01,
     `${bodyDepth(830)}/${bodyDepth({ cols: 20, rows: 25, rails: false })}/${bodyDepth({ cols: 20, rows: 5, rails: false })}`);
 }
@@ -1941,13 +1948,19 @@ const SLEEP_PROG = `    ORG 0
       return [10, 15, 20, 25, 30, 100].every((rows) => Math.abs(mid(rows) - (rows - 1) / 2) < 1);
     })(), '');
 }
-// (k-b) picBodyDepth ôm đúng 2 hàng chân: khoảng cách chân x PITCH + lề 3mm
+// (k-b) picBodyDepth ôm đúng 2 hàng chân: hiệu tọa độ Z thật của 2 hàng
+// chân + lề 3mm. 2 hàng chân cách nhau 6 hàng nhưng số ranh giới đoạn nằm
+// giữa phụ thuộc vị trí tuyệt đối của chân: 830 (b–h) qua 1 ranh giới e/f
+// -> 6*2.54 + 2.54 + 3 = 20.78; board 15 hàng (e–k) qua 2 ranh giới
+// (e/f, j/k) -> 6*2.54 + 2*2.54 + 3 = 23.32; board 100 hàng qua 1 ranh
+// giới -> 20.78. Board 5 hàng: chân (1, 5) qua 1 ranh giới (sau hàng 5)
+// nên khoảng cách = 4*2.54 + 2.54 = 12.7, thân chip = 15.7mm.
 {
   const near = (a, b) => Math.abs(a - b) < 0.01;
-  check('(k-b) picBodyDepth: board >=10 hàng -> 18.24mm (6 hàng x 2.54 + 3), board 5 hàng -> 13.16mm',
-    near(picBodyDepth(830), 18.24) && near(picBodyDepth({ cols: 42, rows: 15, rails: true }), 18.24)
-    && near(picBodyDepth({ cols: 42, rows: 100, rails: true }), 18.24)
-    && near(picBodyDepth({ cols: 20, rows: 5, rails: false }), 13.16), '');
+  check('(k-b) picBodyDepth: 830 -> 20.78mm, board 15 hàng -> 23.32mm (chân e–k qua 2 ranh giới), board 100 hàng -> 20.78mm, board 5 hàng -> 15.7mm',
+    near(picBodyDepth(830), 20.78) && near(picBodyDepth({ cols: 42, rows: 15, rails: true }), 23.32)
+    && near(picBodyDepth({ cols: 42, rows: 100, rails: true }), 20.78)
+    && near(picBodyDepth({ cols: 20, rows: 5, rails: false }), 15.7), '');
 }
 // (k-c) Chân (leg) trên board dài vẫn ở 2 hàng chân của chip, đủ 40 chân
 {
@@ -2092,30 +2105,30 @@ const SLEEP_PROG = `    ORG 0
 // (n-b) Board 15 hàng: 2 ranh giới sau hàng 5 và 10, đối xứng qua tâm
 {
   const b15 = segmentBoundaries({ cols: 63, rows: 15 });
-  check('(n-b) board 15 hàng: 2 ranh giới ở z = -6.35 và +6.35 (sau hàng 5, 10)',
-    b15.length === 2 && Math.abs(b15[0] + 6.35) < 1e-9 && Math.abs(b15[1] - 6.35) < 1e-9,
+  check('(n-b) board 15 hàng: 2 ranh giới ở z = -7.62 và +7.62 (sau hàng 5, 10)',
+    b15.length === 2 && Math.abs(b15[0] + 7.62) < 1e-9 && Math.abs(b15[1] - 7.62) < 1e-9,
     `boundaries=${JSON.stringify(b15)}`);
 }
 // (n-c) Board 30 hàng: 5 ranh giới sau hàng 5, 10, 15, 20, 25
 {
   const b30 = segmentBoundaries({ cols: 63, rows: 30 });
-  const expect = [-25.4, -12.7, 0, 12.7, 25.4];
-  check('(n-c) board 30 hàng: 5 ranh giới ở -25.4, -12.7, 0, 12.7, 25.4',
+  const expect = [-30.48, -15.24, 0, 15.24, 30.48];
+  check('(n-c) board 30 hàng: 5 ranh giới ở -30.48, -15.24, 0, 15.24, 30.48',
     b30.length === 5 && expect.every((e, i) => Math.abs(b30[i] - e) < 1e-9),
     `boundaries=${JSON.stringify(b30)}`);
 }
-// (n-d) Ranh giới nằm chính giữa 2 hàng lỗ kề (cách mỗi lỗ PITCH/2 = 1.27mm);
-// vạch rộng 1.5mm nằm phẳng trên mặt board (+0.05), mặt lỗ ở +0.35 nên
-// vạch không che được lỗ: nửa bề rộng vạch 0.75mm chui 0.43mm xuống dưới
-// đĩa lỗ (ranh giới tới mép lỗ 0.32mm) nhưng đĩa 3D luôn che phần đó;
-// nửa bề rộng vẫn nhỏ hơn PITCH/2 (1.27mm) nên vạch không tới được tâm lỗ.
+// (n-d) Ranh giới nằm chính giữa 2 hàng lỗ kề (cách mỗi lỗ PITCH = 2.54mm,
+// nửa khe hở vật lý 5.08mm); vạch rộng 1.5mm nằm phẳng trên mặt board
+// (+0.05), mặt lỗ ở +0.35 nên vạch không che được lỗ: ranh giới tới mép
+// lỗ = 2.54 − 0.95 = 1.59mm, lớn hơn nửa bề rộng vạch 0.75mm nên vạch
+// không chạm tới lỗ nào.
 {
   const rows = 10;
   const zB = segmentBoundaries(830)[0];
-  const zE = (4 - (rows - 1) / 2) * PITCH; // tâm lỗ hàng e (chỉ số 4)
-  const zF = (5 - (rows - 1) / 2) * PITCH; // tâm lỗ hàng f (chỉ số 5)
-  check('(n-d) ranh giới cách lỗ e và f đều 1.27mm (= PITCH/2); vạch 1.5mm trong texture, mặt lỗ +0.35 cao hơn mặt board nên vạch không che được lỗ',
-    Math.abs(Math.abs(zB - zE) - PITCH / 2) < 1e-9 && Math.abs(Math.abs(zF - zB) - PITCH / 2) < 1e-9
+  const zE = rowZ(4, rows); // tâm lỗ hàng e (chỉ số 4)
+  const zF = rowZ(5, rows); // tâm lỗ hàng f (chỉ số 5)
+  check('(n-d) ranh giới cách lỗ e và f đều 2.54mm (= PITCH, nửa khe hở 5.08mm); vạch 1.5mm trong texture, mặt lỗ +0.35 cao hơn mặt board nên vạch không che được lỗ',
+    Math.abs(Math.abs(zB - zE) - PITCH) < 1e-9 && Math.abs(Math.abs(zF - zB) - PITCH) < 1e-9
     && SEGMENT_LINE_WIDTH_MM === 1.5 && HOLE_TOP_ABOVE_BOARD === 0.35
     && SEGMENT_LINE_WIDTH_MM / 2 < PITCH / 2,
     `zB=${zB} zE=${zE} zF=${zF}`);
@@ -2343,6 +2356,97 @@ const SLEEP_PROG = `    ORG 0
     && normalizeWireEnd(st, { x: -12, y: 28, z: -108 }) === 'PSU1.+'
     && normalizeWireEnd(st, { x: 12, y: 28, z: -108 }) === 'PSU1.-'
     && JSON.stringify(normalizeWireEnd(st, { x: 0, y: 14, z: -129 })) === JSON.stringify({ x: 0, y: 14, z: -129 }), '');
+}
+
+// ===========================================================================
+// (t) KHE HỞ VẬT LÝ GIỮA CÁC ĐOẠN 5 HÀNG (Điệp lệnh 25/11: "các hàng 5 ô
+// cách xa nhau xa ra. ví dụ hàng e và f cách xa nhau ra"): thêm 1 PITCH
+// (2.54mm) ở mỗi ranh giới đoạn, hàng e–f thành 5.08mm (gấp đôi hàng
+// thường), hàng trong cùng đoạn vẫn cách nhau đúng 1 PITCH.
+// ===========================================================================
+// (t-a) rowZ: khe hở đúng 1 PITCH ở mỗi ranh giới, hàng trong đoạn đúng 1 PITCH
+{
+  const near = (a, b) => Math.abs(a - b) < 1e-9;
+  check('(t-a) SEGMENT_GAP_MM = PITCH (2.54mm); rowZ(4,10) = -2.54, rowZ(5,10) = +2.54 (đối xứng qua tâm)',
+    SEGMENT_GAP_MM === PITCH && near(rowZ(4, 10), -2.54) && near(rowZ(5, 10), 2.54)
+    && near(rowZ(0, 10), -rowZ(9, 10)), `rowZ4=${rowZ(4, 10)} rowZ5=${rowZ(5, 10)}`);
+  check('(t-a) hàng e–f cách nhau 2×PITCH = 5.08mm; hàng a–b và f–g cách nhau đúng 1×PITCH = 2.54mm',
+    near(rowZ(5, 10) - rowZ(4, 10), 2 * PITCH)
+    && near(rowZ(1, 10) - rowZ(0, 10), PITCH)
+    && near(rowZ(6, 10) - rowZ(5, 10), PITCH), '');
+  check('(t-a) board 100 hàng: 19 ranh giới, hàng cuối cv (99) đối xứng hàng đầu a; khe j–k cũng 5.08mm',
+    near(rowZ(0, 100), -rowZ(99, 100))
+    && near(rowZ(10, 100) - rowZ(9, 100), 2 * PITCH)
+    && near(rowZ(11, 100) - rowZ(10, 100), PITCH), '');
+}
+// (t-b) bodyDepth tăng đúng số khe hở so với công thức cũ
+{
+  const near = (a, b) => Math.abs(a - b) < 0.01;
+  check('(t-b) bodyDepth 830 = 49.56mm (47.02 cũ + đúng 1 khe hở 2.54); 20x25 = 95.28 (85.12 + 4 khe hở); 20x5 = 34.32 (0 khe hở, không đổi)',
+    near(bodyDepth(830), 49.56)
+    && near(bodyDepth({ cols: 20, rows: 25, rails: false }), 95.28)
+    && near(bodyDepth({ cols: 20, rows: 5, rails: false }), 34.32), '');
+}
+// (t-c) picBodyDepth khớp hiệu tọa độ Z thật của 2 hàng chân
+{
+  const near = (a, b) => Math.abs(a - b) < 0.01;
+  check('(t-c) picBodyDepth 830 = 20.78mm = (rowZ(7,10) − rowZ(1,10)) + 3 (17.78 + 3)',
+    near(picBodyDepth(830), 20.78) && near(picBodyDepth(830), (rowZ(7, 10) - rowZ(1, 10)) + 3), '');
+  check('(t-c) picBodyDepthForRows(1,7,10) = 20.78mm; chip neo ở hàng e trên board 60 hàng (chân 4–10, qua 2 ranh giới) -> 23.32mm',
+    near(picBodyDepthForRows(1, 7, 10), 20.78) && near(picBodyDepthForRows(4, 10, 60), 23.32), '');
+}
+// (t-d) Lab 1 vẫn đúng netlist sau khi thêm khe hở (vị trí lỗ đổi mm nhưng
+// strip/logic không đổi): LED0 = RB0, về GND, có điện trở, 0 cảnh báo, RB0=1 thì LED SÁNG
+{
+  const { state } = buildLabState(LABS[0]);
+  const nl = benchToNetlist(state);
+  const mapping = resolvePeripherals(nl);
+  const led = mapping.leds.find((l) => l.id === 'LED0');
+  check('(t-d) Lab 1 sau khe hở: LED0 nối RB0, về GND, có điện trở 220Ω, checkWiring 0 cảnh báo',
+    led && led.pin && led.pin.id === 'RB0' && led.gnd === true && led.hasResistor === true
+    && checkWiring(nl, null).length === 0, JSON.stringify({ pin: led && led.pin && led.pin.id, gnd: led && led.gnd, hasResistor: led && led.hasResistor }));
+  check('(t-d) Lab 1 sau khe hở: RB0=1 thì LED SÁNG',
+    (() => {
+      const cpu = createCPU();
+      cpu.setWiring(mapping);
+      cpu.writeFile(0x03, 0x20);
+      cpu.writeFile(0x06, 0x00);
+      cpu.writeFile(0x03, 0x00);
+      cpu.writeFile(0x06, 0x01);
+      return ledStates(cpu, mapping).find((s) => s.id === 'LED0').on === true;
+    })(), '');
+}
+// (t-e) holePos + allHoles theo tọa độ hàng mới (kể cả rail)
+{
+  const near = (a, b) => Math.abs(a - b) < 1e-9;
+  check('(t-e) holePos: f1–e1 = 5.08mm, g1–f1 = 2.54mm; rail T+1 ở z = -17.78, B−1 ở z = +17.78',
+    near(holePos('f1').z - holePos('e1').z, 5.08)
+    && near(holePos('g1').z - holePos('f1').z, 2.54)
+    && near(holePos('T+1').z, -17.78) && near(holePos('B-1').z, 17.78), '');
+  check('(t-e) allHoles: mọi lỗ có z khớp holePos (kể cả rail và hàng sau ranh giới)',
+    (() => {
+      const holes = allHoles(830);
+      return holes.length === holeCount(830) && holes.every((h) => {
+        const p = holePos(h.id, 830);
+        return p && Math.abs(p.x - h.x) < 1e-9 && Math.abs(p.z - h.z) < 1e-9;
+      });
+    })(), '');
+}
+// (t-f) Nghịch đảo hàng bằng rowZ gần nhất (logic pickHole trong bench.js):
+// mọi hàng + rail trên board 10 hàng và 60 hàng đều tìm lại đúng
+{
+  const okFor = (size) => {
+    const rows = boardSize(size).rows;
+    const candRows = [-2, -1, ...Array.from({ length: rows }, (_, i) => i), rows, rows + 1];
+    return candRows.every((r) => {
+      const z = rowZ(r, rows);
+      let best = null, bestD = 1e9;
+      for (const c of candRows) { const d = Math.abs(rowZ(c, rows) - z); if (d < bestD) { bestD = d; best = c; } }
+      return best === r;
+    });
+  };
+  check('(t-f) nghịch đảo hàng bằng rowZ gần nhất đúng cho mọi hàng + rail trên board 830 và board 60 hàng',
+    okFor(830) && okFor({ cols: 63, rows: 60, rails: true }), '');
 }
 
 console.log(`\nKết quả: ${pass} pass, ${fail} fail`);

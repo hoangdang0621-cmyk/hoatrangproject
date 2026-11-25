@@ -4,21 +4,21 @@
 // Three.js tải qua CDN (importmap, three@0.160.0); nếu tải lỗi thì hiện
 // thông báo trong tab bàn. Nối CPU qua window.HoaTrangBenchBridge (app.js).
 import {
-  PITCH, holeId, holePos, allHoles, parseHole,
+  PITCH, holeId, holePos, allHoles, parseHole, rowZ,
   HOLE_RADIUS, HOLE_HEIGHT, holeCenterY,
   SEGMENT_LINE_WIDTH_MM, segmentBoundaries,
   legOffsets, legsFor, picLegs, picLegsForAnchor, canPlace, benchToNetlist,
   describeTerminal, defaultBenchState, nextComponentId, compLabel,
   defaultProps, sanitizeState, boardSize, colsOf, rowsOf, railColsOf, picCol,
-  picRows, picBodyDepth, bodyDepth, rowLabel,
+  picRows, picBodyDepthForRows, bodyDepth, rowLabel,
   pruneStateForSize, validateWireEnd, retargetWireEnd, togglePlacement,
   normalizeSize, holeCount, sizeLabel, sameSize,
   psuVolts, validatePsuVolts, parsePsuPost, psuPostPos, PSU_SCALE, PSU_POST_DX, PSU_POST_Y, PSU_POST_DZ,
   clampCamTarget, zoomTowardPoint, panTarget,
-} from './bench-model.js?v=20261125y';
+} from './bench-model.js?v=20261125z';
 import { checkWiring, SIGNAL_COLORS } from './wiring.js?v=20261125r';
 import { assemble } from './pic16.js?v=20261125q';
-import { LABS, getLab, buildLabState } from './labs.js?v=20261125y';
+import { LABS, getLab, buildLabState } from './labs.js?v=20261125z';
 
 const $ = (id) => document.getElementById(id);
 const benchView = $('benchView');
@@ -947,13 +947,13 @@ D2
     // (cỡ 15px cũ, tâm cách mép 3mm thì nhãn chạm sát mép lỗ đầu tiên).
     ctx.font = '600 13px "Fira Code", monospace';
     for (let r = 0; r < rows; r++) {
-      const z = py((r - (rows - 1) / 2) * PITCH);
+      const z = py(rowZ(r, rows));
       ctx.fillText(rowLabel(r), px(-bodyW / 2 + 2.6), z);
       ctx.fillText(rowLabel(r), px(bodyW / 2 - 2.6), z);
     }
     if (railColsOf(size) > 0) {
       // Dấu +/− của rail: T+ và B+ là +, T− và B− là −.
-      const railZ = (r) => py((r - (rows - 1) / 2) * PITCH);
+      const railZ = (r) => py(rowZ(r, rows));
       ctx.font = '700 17px "Fira Code", monospace';
       ctx.fillStyle = '#DC2626';
       ctx.fillText('+', px(-bodyW / 2 + 3), railZ(-2));
@@ -1006,7 +1006,7 @@ D2
         const strip = new THREE.Mesh(
           new THREE.BoxGeometry(rc * PITCH, 0.5, 1.6),
           new THREE.MeshStandardMaterial({ color }));
-        strip.position.set(((rc + 1) / 2 - (cols + 1) / 2) * PITCH, BOARD_TOP + 0.08, (r - (rows - 1) / 2) * PITCH);
+        strip.position.set(((rc + 1) / 2 - (cols + 1) / 2) * PITCH, BOARD_TOP + 0.08, rowZ(r, rows));
         boardGroup.add(strip);
       }
     }
@@ -1116,9 +1116,11 @@ D2
       const rT = pa ? pa.r : picRows(state.size)[0];
       const rB = rT + 6;
       const c0 = pa ? pa.c : picCol(state.size);
-      const chipZ = ((rT + rB) / 2 - (rows - 1) / 2) * PITCH;
+      // Thân chip nằm giữa 2 hàng chân theo tọa độ Z thật (có khe hở đoạn);
+      // sâu thân tính từ 2 hàng chân neo, không dùng picRows theo size.
+      const chipZ = (rowZ(rT, rows) + rowZ(rB, rows)) / 2;
       const cx = (c0 + 9.5 - (cols + 1) / 2) * PITCH;
-      const body = new THREE.Mesh(new THREE.BoxGeometry(52.5, 4.5, picBodyDepth(state.size)), stdMat(0x0F172A, { roughness: 0.4 }));
+      const body = new THREE.Mesh(new THREE.BoxGeometry(52.5, 4.5, picBodyDepthForRows(rT, rB, rows)), stdMat(0x0F172A, { roughness: 0.4 }));
       body.position.set(cx, BOARD_TOP + 6.2, chipZ);
       body.castShadow = true;
       g.add(body);
@@ -1129,13 +1131,13 @@ D2
       label.position.set(cx, BOARD_TOP + 8.5, chipZ);
       g.add(label);
       const dot = new THREE.Mesh(new THREE.CylinderGeometry(1.2, 1.2, 0.5, 12), stdMat(0xF8FAFC));
-      dot.position.set(cx - 24.13, BOARD_TOP + 8.5, (rT - (rows - 1) / 2) * PITCH);
+      dot.position.set(cx - 24.13, BOARD_TOP + 8.5, rowZ(rT, rows));
       g.add(dot);
       const pinMat = stdMat(0xCBD5E1, { metalness: 0.7, roughness: 0.35 });
       const chipLegs = picLegsForAnchor(comp.anchor, state.size);
       for (const leg of (chipLegs.length ? chipLegs : picLegs(state.size))) {
         const px = (leg.c - (cols + 1) / 2) * PITCH;
-        const pz = (leg.r - (rows - 1) / 2) * PITCH;
+        const pz = rowZ(leg.r, rows);
         const pin = new THREE.Mesh(new THREE.BoxGeometry(1.0, 4.5, 0.7), pinMat);
         // Chân không có lỗ (treo ngoài board) nhô lên để nhìn rõ là chưa cắm.
         pin.position.set(px, BOARD_TOP + (leg.hole ? 2.2 : 4.6), pz);
@@ -1180,12 +1182,18 @@ D2
       }
       return g;
     }
-    // Linh kiện cắm lỗ: gốc nhóm ở lỗ neo, chân theo legOffsets
+    // Linh kiện cắm lỗ: gốc nhóm ở lỗ neo, chân theo legOffsets.
+    // Chân kim loại phải rơi đúng lỗ: khoảng cách Z theo hàng dùng rowZ
+    // (linh kiện xoay mà chân qua ranh giới đoạn thì 2 chân cách 5.08mm,
+    // không phải 2.54mm). Thân linh kiện vẽ theo local, không xoay theo khe.
     const anchor = holePos(comp.anchor, state.size);
+    const anchorPa = parseHole(comp.anchor, state.size);
+    const anchorR = anchorPa ? anchorPa.r : 0;
+    const compRows = rowsOf(state.size);
     g.position.set(anchor.x, BOARD_TOP, anchor.z);
     g.rotation.y = -((comp.rot || 0) * Math.PI) / 2;
     const offs = legOffsets(comp.type, comp.rot || 0);
-    for (const o of offs) g.add(legMesh(o.dc * PITCH, o.dr * PITCH));
+    for (const o of offs) g.add(legMesh(o.dc * PITCH, rowZ(anchorR + o.dr, compRows) - rowZ(anchorR, compRows)));
     if (comp.type === 'led') {
       const color = comp.props?.color || '#DC2626';
       const mat = new THREE.MeshStandardMaterial({ color, emissive: new THREE.Color(color), emissiveIntensity: 0.15, roughness: 0.3 });
@@ -1434,13 +1442,14 @@ D2
     // Cột từ x: x = (c − (cols+1)/2) × PITCH -> c = x/PITCH + (cols+1)/2
     // (không hardcode 32 — chỉ đúng với board 830).
     const col = Math.round(pt.x / PITCH + (colsOf(state.size) + 1) / 2);
-    // Hàng từ z: z = (r − (rows−1)/2) × PITCH -> r = z/PITCH + (rows−1)/2
-    // (không hardcode 4.5 — chỉ đúng với board 10 hàng).
+    // Hàng từ z: tìm hàng có tọa độ rowZ gần điểm bấm nhất (hàng cách nhau
+    // 1 PITCH trong đoạn, 2 PITCH qua ranh giới đoạn — không còn công thức
+    // tuyến tính z/PITCH + (rows−1)/2).
     const rows = rowsOf(state.size);
     const candRows = [-2, -1, ...Array.from({ length: rows }, (_, i) => i), rows, rows + 1];
     let best = null, bestD = 1e9;
     for (const r of candRows) {
-      const z = (r - (rows - 1) / 2) * PITCH;
+      const z = rowZ(r, rows);
       const d = Math.abs(pt.z - z);
       if (d < bestD) { bestD = d; best = r; }
     }
@@ -1516,24 +1525,29 @@ D2
     }
     return null;
   }
-  function footprintBox(type, rot) {
+  // Hộp bao quanh chân linh kiện (highlight khi đặt/chọn): rộng/sâu theo
+  // khoảng cách thật giữa các chân — chiều sâu dùng rowZ nên linh kiện xoay
+  // mà chân qua ranh giới đoạn thì hộp dài thêm đúng 1 khe hở.
+  function footprintBox(type, rot, anchorR = 0, rows = 10) {
     const offs = legOffsets(type, rot);
     if (!offs.length) return { w: 12, d: 12, cx: 0, cz: 0 };
     const dcs = offs.map((o) => o.dc), drs = offs.map((o) => o.dr);
     const minDc = Math.min(...dcs), maxDc = Math.max(...dcs);
     const minDr = Math.min(...drs), maxDr = Math.max(...drs);
+    const zLo = rowZ(anchorR + minDr, rows), zHi = rowZ(anchorR + maxDr, rows);
     return {
       w: (maxDc - minDc + 1) * PITCH + 6,
-      d: (maxDr - minDr + 1) * PITCH + 6,
+      d: (zHi - zLo) + PITCH + 6,
       cx: ((minDc + maxDc) / 2) * PITCH,
-      cz: ((minDr + maxDr) / 2) * PITCH,
+      cz: ((zLo + zHi) / 2) - rowZ(anchorR, rows),
     };
   }
   function showHighlight(anchor, type, rot, ok) {
     if (!sceneReady) return;
     const p = holePos(anchor, state.size);
     if (!p) { highlightBox.visible = false; return; }
-    const fp = footprintBox(type, rot);
+    const pa = parseHole(anchor, state.size);
+    const fp = footprintBox(type, rot, pa ? pa.r : 0, rowsOf(state.size));
     highlightBox.visible = true;
     highlightBox.scale.set(fp.w, 1, fp.d);
     highlightBox.material.color.set(ok ? 0x059669 : 0xDC2626);

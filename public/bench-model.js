@@ -14,6 +14,23 @@
 // (terminal 'PIC.RB0', 'LED0.A', 'VCC', 'GND') để nối vào CPU.
 
 export const PITCH = 2.54;       // khoảng cách lỗ (mm)
+// Khe hở vật lý giữa các đoạn 5 hàng (mm): thêm 1 PITCH ở mỗi ranh giới
+// đoạn (sau hàng 5, 10, 15...) để các đoạn tách xa hẳn ra, nhìn là phân
+// biệt được đoạn — vd hàng e tới hàng f thành 5.08mm (gấp đôi khoảng cách
+// hàng thường 2.54mm). Khoảng cách hàng trong cùng đoạn vẫn đúng 1 PITCH.
+export const SEGMENT_GAP_MM = PITCH;
+// Tọa độ Z (mm) của hàng r trên board có `rows` hàng, gốc ở giữa board.
+// Hàng chính 0..rows-1: z = r*PITCH + floor(r/5)*SEGMENT_GAP_MM rồi căn
+// giữa bằng cách trừ nửa tổng chiều sâu ((rows-1)*PITCH + số ranh giới*GAP).
+// Hàng rail: r=-1/-2 nằm trên hàng a, r=rows/rows+1 nằm dưới hàng cuối,
+// mỗi hàng rail cách nhau đúng 1 PITCH (không có khe hở đoạn ở rail).
+export function rowZ(r, rows) {
+  const gaps = Math.floor((rows - 1) / 5) * SEGMENT_GAP_MM;
+  const z0 = -((rows - 1) * PITCH + gaps) / 2;
+  if (r >= 0 && r < rows) return z0 + r * PITCH + Math.floor(r / 5) * SEGMENT_GAP_MM;
+  if (r < 0) return z0 + r * PITCH;
+  return z0 + (rows - 1) * PITCH + gaps + (r - rows + 1) * PITCH;
+}
 // Lỗ board (InstancedMesh hình trụ trong bench.js): bán kính, cao, số cạnh
 // giữ nguyên; mặt trên lỗ cao hơn mặt board 0.35mm để không tranh depth
 // buffer với mặt board (z-fighting: mặt lỗ cũ chỉ cao hơn 0.05mm trong khi
@@ -32,20 +49,20 @@ export function depthPrecisionAt(z, near = 1) { return (z * z) / (near * 1677721
 export const MAX_CAMERA_DISTANCE = 1000;
 // Vạch chia đoạn 5 hàng: rộng 1.5mm, vẽ trong texture mặt board (không phải
 // khối 3D) để không bao giờ che lỗ — lỗ là đĩa 3D cao hơn mặt board 0.35mm
-// còn vạch nằm phẳng trên mặt board. Rãnh 3D cũ rộng 2.4mm, mặt trên cao
-// +0.32mm, đè lên gần nửa lỗ e/f (lỗ cách ranh giới 1.27mm, bán kính 0.95mm).
-// Tính tay: ranh giới tới mép lỗ = 1.27 − 0.95 = 0.32mm; nửa bề rộng vạch
-// 1.5mm là 0.75mm nên vạch chui 0.43mm xuống dưới đĩa lỗ — nhưng đĩa 3D
-// luôn che phần đó (depth test), vạch không bao giờ đè lên lỗ nhìn thấy.
-// Phần vạch nhìn thấy: khe 0.64mm giữa 2 hàng đĩa lỗ + đủ 1.5mm ở khe giữa
-// các cột; kết hợp màu đậm #64748B (thay #CBD5E1 mờ) để nhìn rõ ranh giới.
+// còn vạch nằm phẳng trên mặt board. Có khe hở vật lý SEGMENT_GAP_MM nên
+// ranh giới cách tâm lỗ kề 2.54mm (= PITCH, nửa khe hở 5.08mm), mép lỗ
+// cách ranh giới 2.54 − 0.95 = 1.59mm, lớn hơn nửa bề rộng vạch 0.75mm:
+// vạch không chạm tới lỗ nào. Màu đậm #64748B (thay #CBD5E1 mờ) + khe hở
+// vật lý để nhìn rõ ranh giới đoạn, tránh nhầm khi kéo linh kiện qua đoạn.
 export const SEGMENT_LINE_WIDTH_MM = 1.5;
 // Vị trí z (mm) của ranh giới giữa các đoạn 5 hàng (sau hàng 5, 10, 15...),
-// tính từ tâm board; board 10 hàng thì chỉ 1 ranh giới ở z = 0 (giữa e/f).
+// tính từ tâm board: điểm giữa 2 hàng lỗ kề ranh giới. Có khe hở vật lý
+// nên ranh giới cách mỗi lỗ 2.54mm (= PITCH, nửa khe hở 5.08mm), không
+// còn 1.27mm như trước; board 10 hàng thì chỉ 1 ranh giới ở z = 0 (giữa e/f).
 export function segmentBoundaries(size) {
   const rows = rowsOf(size);
   const out = [];
-  for (let b = 5; b < rows; b += 5) out.push((b - 0.5 - (rows - 1) / 2) * PITCH);
+  for (let b = 5; b < rows; b += 5) out.push((rowZ(b - 1, rows) + rowZ(b, rows)) / 2);
   return out;
 }
 // Size bo mạch: 3 mẫu sẵn (kiểu ohmimic) hoặc tự điền {cols, rows, rails}.
@@ -102,10 +119,12 @@ export function holeCount(size) {
   const s = boardSize(size);
   return s.cols * s.rows + 4 * s.railCols;
 }
-// Chiều sâu thân board (mm): từ rail T+ tới rail B− + lề 7mm mỗi bên.
+// Chiều sâu thân board (mm): từ rail T+ tới rail B− + lề 7mm mỗi bên,
+// cộng thêm 1 khe hở đoạn cho mỗi ranh giới 5 hàng trên board.
 // Dùng để vẽ mesh, đóng khung camera và nhận diện bấm vào thân board.
 export function bodyDepth(size) {
-  return (rowsOf(size) + 3) * PITCH + 14;
+  const rows = rowsOf(size);
+  return (rows + 3) * PITCH + 14 + Math.floor((rows - 1) / 5) * SEGMENT_GAP_MM;
 }
 // Tên hiển thị của size: tên mẫu sẵn hoặc 'Tùy chỉnh · N lỗ'.
 export function sizeLabel(size) {
@@ -138,12 +157,21 @@ export function picRows(size) {
   if (upper < 0) return [1, 5];
   return [upper, upper + 6];
 }
-// Chiều sâu thân chip PIC (mm): theo đúng khoảng cách 2 hàng chân
-// ((hàng chân dưới − hàng chân trên) × PITCH) + lề 1,5mm mỗi bên, để chân
-// luôn nằm ở mép thân chip chứ không rời khỏi thân khi board dài ra.
+// Chiều sâu thân chip PIC (mm) theo 2 hàng chân rT/rB: hiệu tọa độ Z thật
+// của 2 hàng chân + lề 1,5mm mỗi bên. 2 hàng chân cách nhau cố định 6 hàng
+// nhưng có thể có ranh giới đoạn nằm giữa (vd board 830: chân ở hàng b và
+// h, ranh giới e/f ở giữa nên khoảng cách = 6*2.54 + 2.54 = 17.78mm, thân
+// chip = 20.78mm). Tính từ chỉ số hàng chính: (rB−rT)*PITCH + số ranh
+// giới giữa 2 hàng*SEGMENT_GAP_MM — bằng hiệu rowZ khi cả 2 hàng còn
+// trong board; dùng công thức này thay vì rowZ vì rB có thể là hàng chính
+// treo ngoài board (fallback board 5 hàng: rB=5, rowZ(5,5) lại hiểu là
+// rail B+ nên sẽ tính sai).
+export function picBodyDepthForRows(rT, rB, rows) {
+  return (rB - rT) * PITCH + (Math.floor(rB / 5) - Math.floor(rT / 5)) * SEGMENT_GAP_MM + 3;
+}
 export function picBodyDepth(size) {
   const [rT, rB] = picRows(size);
-  return (rB - rT) * PITCH + 3;
+  return picBodyDepthForRows(rT, rB, rowsOf(size));
 }
 // Lỗ neo của chip PIC (chân 1): hàng chân trên, cột picCol (kẹp về 1).
 export function picAnchor(size) {
@@ -254,10 +282,11 @@ export function stripKey(id, size = DEFAULT_SIZE) {
 }
 
 // Vị trí 3D của tâm lỗ trên mặt bàn (mm, gốc ở giữa board, y tính riêng).
+// Hàng tính theo rowZ nên có khe hở đoạn (hàng e–f cách nhau 5.08mm).
 export function holePos(id, size = DEFAULT_SIZE) {
   const p = parseHole(id, size);
   if (!p) return null;
-  return { x: (p.c - (colsOf(size) + 1) / 2) * PITCH, z: (p.r - (rowsOf(size) - 1) / 2) * PITCH };
+  return { x: (p.c - (colsOf(size) + 1) / 2) * PITCH, z: rowZ(p.r, rowsOf(size)) };
 }
 
 // Mọi lỗ trên board (để vẽ InstancedMesh): [{id, x, z}]
