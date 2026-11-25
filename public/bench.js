@@ -17,7 +17,8 @@ import {
   clampCamTarget, zoomTowardPoint, panTarget,
 } from './bench-model.js?v=20261125ad';
 import { checkWiring, SIGNAL_COLORS } from './wiring.js?v=20261125r';
-import { assemble } from './pic16.js?v=20261125ac';
+import { assemble } from './pic16.js?v=20261125af';
+import { formatVolts, formatAmps } from './circuit-solver.js?v=20261125ad';
 import { LABS, getLab, buildLabState } from './labs.js?v=20261125ad';
 
 const $ = (id) => document.getElementById(id);
@@ -83,6 +84,7 @@ function main() {
   const psuHitMeshes = [];        // núm bắt vô hình ở 2 cọc nguồn (để kéo đầu dây vào)
   const ledMats = new Map();      // compId -> material phát sáng LED
   const lcdTexs = new Map();      // compId -> {canvas, ctx, tex, last}
+  const meterTexs = new Map();    // compId -> {canvas, ctx, tex, last, kind}
   const buzzerMats = new Map();   // compId -> material còi
   const btnTops = new Map();      // compId -> mesh nút bấm (để nhấn xuống)
   // Khoảng cách camera đóng khung vừa board (tỉ lệ theo chiều lớn nhất
@@ -113,7 +115,9 @@ function main() {
   function syncToCpu() {
     const b = bridge();
     if (b && typeof b.applyBenchNetlist === 'function') {
-      b.applyBenchNetlist(benchToNetlist(state, pressedIds()));
+      // Truyền cả state + nút đang nhấn để bridge tính số đo đồng hồ
+      // (vôn kế/ampe kế bị lược khỏi netlist CPU nên solver cần state gốc).
+      b.applyBenchNetlist(benchToNetlist(state, pressedIds()), state, pressedIds());
       for (const c of state.components) {
         if (c.type === 'pot') b.setPot(c.id, ((c.props?.pct ?? 0) / 100) * 5);
       }
@@ -150,6 +154,8 @@ function main() {
   const PALETTE = [
     { type: 'led', name: 'LED', hint: 'Kéo vào lỗ breadboard', svg: '<svg viewBox="0 0 48 64"><line x1="18" y1="34" x2="18" y2="62" stroke="#94A3B8" stroke-width="3"/><line x1="30" y1="34" x2="30" y2="62" stroke="#94A3B8" stroke-width="3"/><circle cx="24" cy="22" r="14" fill="#DC2626" stroke="#991B1B" stroke-width="2"/><circle cx="20" cy="18" r="4" fill="#FCA5A5"/></svg>' },
     { type: 'resistor', name: 'Điện trở 220Ω', hint: 'Kéo vào lỗ breadboard', svg: '<svg viewBox="0 0 76 30"><line x1="0" y1="15" x2="14" y2="15" stroke="#94A3B8" stroke-width="3"/><line x1="62" y1="15" x2="76" y2="15" stroke="#94A3B8" stroke-width="3"/><rect x="14" y="7" width="48" height="16" rx="8" fill="#D9A066" stroke="#92400E" stroke-width="1.5"/><rect x="26" y="7" width="4" height="16" fill="#DC2626"/><rect x="34" y="7" width="4" height="16" fill="#DC2626"/><rect x="42" y="7" width="4" height="16" fill="#92400E"/></svg>' },
+    { type: 'voltmeter', name: 'Vôn kế', hint: 'Kéo vào lỗ breadboard — đo hiệu điện áp 2 chân', svg: '<svg viewBox="0 0 76 44"><rect x="6" y="4" width="64" height="28" rx="4" fill="#1E3A5F" stroke="#0F172A" stroke-width="2"/><rect x="12" y="10" width="52" height="16" rx="2" fill="#0F172A"/><text x="38" y="22" text-anchor="middle" font-family="Fira Code, monospace" font-size="10" fill="#7DD3FC">5.00 V</text><line x1="22" y1="32" x2="22" y2="42" stroke="#94A3B8" stroke-width="3"/><line x1="54" y1="32" x2="54" y2="42" stroke="#94A3B8" stroke-width="3"/></svg>' },
+    { type: 'ammeter', name: 'Ampe kế', hint: 'Kéo vào lỗ breadboard — đo dòng chạy qua (nối tiếp)', svg: '<svg viewBox="0 0 76 44"><rect x="6" y="4" width="64" height="28" rx="4" fill="#1E3A5F" stroke="#0F172A" stroke-width="2"/><rect x="12" y="10" width="52" height="16" rx="2" fill="#0F172A"/><text x="38" y="22" text-anchor="middle" font-family="Fira Code, monospace" font-size="9" fill="#FBBF24">13.0 mA</text><line x1="22" y1="32" x2="22" y2="42" stroke="#94A3B8" stroke-width="3"/><line x1="54" y1="32" x2="54" y2="42" stroke="#94A3B8" stroke-width="3"/></svg>' },
     { type: 'button', name: 'Nút nhấn', hint: 'Kéo vào lỗ breadboard', svg: '<svg viewBox="0 0 56 56"><rect x="6" y="6" width="44" height="44" rx="6" fill="#FFFFFF" stroke="#1E3A5F" stroke-width="2"/><circle cx="28" cy="28" r="11" fill="#F1F3F5" stroke="#1E3A5F" stroke-width="2"/></svg>' },
     { type: 'pot', name: 'Chiết áp', hint: 'Kéo vào lỗ breadboard', svg: '<svg viewBox="0 0 64 64"><rect x="4" y="4" width="56" height="56" rx="8" fill="#FFFFFF" stroke="#1E3A5F" stroke-width="2"/><circle cx="32" cy="32" r="16" fill="#F1F3F5" stroke="#1E3A5F" stroke-width="2"/><line x1="32" y1="32" x2="32" y2="19" stroke="#DC2626" stroke-width="3"/></svg>' },
     { type: 'lcd', name: 'LCD 16x2', hint: 'Kéo vào lỗ breadboard', svg: '<svg viewBox="0 0 210 84"><rect x="2" y="6" width="206" height="72" rx="6" fill="#123524" stroke="#0F172A" stroke-width="2"/><rect x="16" y="20" width="16" height="16" rx="1" fill="#2E7D4F"/><rect x="38" y="20" width="16" height="16" rx="1" fill="#2E7D4F"/><rect x="60" y="20" width="16" height="16" rx="1" fill="#2E7D4F"/><rect x="16" y="46" width="16" height="16" rx="1" fill="#2E7D4F"/><rect x="38" y="46" width="16" height="16" rx="1" fill="#2E7D4F"/><text x="200" y="14" text-anchor="end" font-family="Fira Code, monospace" font-size="8" fill="#7CFFB2">16x2</text></svg>' },
@@ -1272,6 +1278,35 @@ D2
       hole.position.set(1.27, 13.1, 0);
       g.add(hole);
       buzzerMats.set(comp.id, mat);
+    } else if (comp.type === 'voltmeter' || comp.type === 'ammeter') {
+      // Đồng hồ số: hộp navy 20×6×12 (đáy chạm mặt board, đỉnh y=14),
+      // màn hình nằm ngửa trên nóc, 2 chấm màu ở mặt trước đánh dấu cực
+      // (đỏ = chân P/A, tối = chân N/B). Chân kim loại đã thêm ở vòng
+      // legOffsets phía trên (2 chân cách nhau 4 cột, dùng rowZ).
+      const body = new THREE.Mesh(new THREE.BoxGeometry(20, 6, 12), stdMat(0x1E3A5F, { roughness: 0.5 }));
+      body.position.set(5.08, 11, 0);
+      body.castShadow = true;
+      g.add(body);
+      const cv = document.createElement('canvas');
+      cv.width = 256; cv.height = 144;
+      const tex = new THREE.CanvasTexture(cv);
+      const screen = new THREE.Mesh(
+        new THREE.PlaneGeometry(16, 9),
+        new THREE.MeshBasicMaterial({ map: tex }));
+      screen.rotation.x = -Math.PI / 2;
+      screen.position.set(5.08, 14.15, 0);
+      g.add(screen);
+      const t = { canvas: cv, ctx: cv.getContext('2d'), tex, last: '', kind: comp.type };
+      meterTexs.set(comp.id, t);
+      drawMeterTexture(t, '—');
+      const dotR = new THREE.Mesh(new THREE.CylinderGeometry(1.1, 1.1, 0.5, 12), stdMat(0xDC2626));
+      dotR.rotation.x = Math.PI / 2;
+      dotR.position.set(1.27, 11, 6.15);
+      g.add(dotR);
+      const dotB = new THREE.Mesh(new THREE.CylinderGeometry(1.1, 1.1, 0.5, 12), stdMat(0x0F172A));
+      dotB.rotation.x = Math.PI / 2;
+      dotB.position.set(8.89, 11, 6.15);
+      g.add(dotB);
     }
     return g;
   }
@@ -1294,6 +1329,26 @@ D2
     ctx.fillText('V', 220, 48);
     const tex = new THREE.CanvasTexture(c);
     return tex;
+  }
+  // Vẽ số đo lên màn hình đồng hồ (CanvasTexture). Chỉ gọi khi chuỗi số
+  // đổi (vòng poll so sánh với t.last), không vẽ lại mỗi frame.
+  // Vôn kế chữ xanh cyan, ampe kế chữ vàng hổ phách (phân biệt 2 loại
+  // trên bàn). Chữ co lại nếu dài quá màn hình (vd "-12.34 V").
+  function drawMeterTexture(t, text) {
+    const ctx = t.ctx;
+    ctx.fillStyle = '#0F172A';
+    ctx.fillRect(0, 0, 256, 144);
+    ctx.fillStyle = t.kind === 'voltmeter' ? '#7DD3FC' : '#FBBF24';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    let size = 56;
+    ctx.font = '700 ' + size + 'px "Fira Code", monospace';
+    while (ctx.measureText(text).width > 236 && size > 24) {
+      size -= 4;
+      ctx.font = '700 ' + size + 'px "Fira Code", monospace';
+    }
+    ctx.fillText(text, 128, 76);
+    t.tex.needsUpdate = true;
   }
   function resistorBands(value) {
     const v = Math.max(1, Math.round(value));
@@ -1366,7 +1421,7 @@ D2
     for (const [, g] of compMeshes) compRoot.remove(g);
     compMeshes.clear();
     psuHitMeshes.length = 0;
-    ledMats.clear(); lcdTexs.clear(); buzzerMats.clear(); btnTops.clear();
+    ledMats.clear(); lcdTexs.clear(); meterTexs.clear(); buzzerMats.clear(); btnTops.clear();
     for (const comp of state.components) {
       const g = buildComponentMesh(comp);
       compRoot.add(g);

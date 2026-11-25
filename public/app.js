@@ -3,12 +3,13 @@
 // chưa nạp chương trình nào; code mẫu nằm sẵn trong tab "Nạp viết code",
 // người dùng bấm "Nạp & chạy" thì chip mới chạy. ProgramRunner điều khiển
 // chạy/tạm dừng/chạy từng lệnh/breakpoint.
-import { createCPU, ProgramRunner, cyclesForElapsedMs } from './pic16.js?v=20261125ac';
+import { createCPU, ProgramRunner, cyclesForElapsedMs } from './pic16.js?v=20261125af';
 import {
   resolvePeripherals, ledStates, buzzerStates,
   applyButtonToCpu, applyPotToCpu,
 } from './wiring.js?v=20261125r';
 import { defaultBenchState, benchToNetlist } from './bench-model.js?v=20261125ad';
+import { meterReadings } from './circuit-solver.js?v=20261125ad';
 
 const cpu = createCPU();
 cpu.clockHz = 4000000;
@@ -71,14 +72,25 @@ setInterval(() => {
 // --- Cầu nối cho bàn thực hành 3D (bench.js) ---
 // Netlist bench là nguồn sự thật cho CPU: đổi dây/linh kiện trên bàn thì
 // chip chạy theo dây mới.
+// Đồng hồ đo cần cả state đầy đủ (vôn kế/ampe kế bị lược khỏi netlist CPU),
+// nên applyBenchNetlist nhận thêm state + pressedIds để getMeterReadings
+// gọi solver được; bench.js truyền 2 tham số này ở syncToCpu().
+let benchStateForMeters = null;
+let pressedIdsForMeters = [];
 window.HoaTrangBenchBridge = {
-  applyBenchNetlist(nl) {
+  applyBenchNetlist(nl, st, pressed) {
     mapping = resolvePeripherals(nl);
     cpu.setWiring(mapping);
     applyAllPots();
+    if (st) { benchStateForMeters = st; pressedIdsForMeters = pressed || []; }
   },
   getLedStates: () => ledStates(cpu, mapping),
   getBuzzerStates: () => buzzerStates(cpu, mapping),
+  getMeterReadings: () => {
+    if (!benchStateForMeters) return { voltmeters: [], ammeters: [] };
+    try { return meterReadings(benchStateForMeters, cpu, pressedIdsForMeters); }
+    catch { return { voltmeters: [], ammeters: [] }; }
+  },
   getLcd: () => ({ lines: cpu.lcd.getLines(), complete: !mapping.lcd.id || mapping.lcd.complete }),
   getPin: (port, bit) => ({ dir: cpu.pinDirection(port, bit), level: cpu.pinLevel(port, bit) }),
   getTris: () => cpu.tris,
