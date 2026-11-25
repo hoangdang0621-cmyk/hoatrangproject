@@ -682,7 +682,7 @@ D2
       // dạng lỗ nên bỏ qua. Chân treo ngoài board (hole null) thì hiện
       // "ngoài board". Tên chân bỏ tiền tố 'PIC.' (PIC.RA0 -> RA0).
       const legs = comp.type === 'psu' ? [] : legsFor(comp, state.size);
-      const pins = legs.length ? `<label class="bench-insp-label">Chân</label><div class="bench-conns">${legs.map((l) => {
+      const pins = legs.length ? `<label class="bench-insp-label">Chân</label><div class="bench-conns bench-pins">${legs.map((l) => {
         const term = l.term.startsWith('PIC.') ? l.term.slice(4) : l.term;
         return `<div class="bench-conn"><span>${esc(term)}</span><span>${l.hole ? esc(holeName(l.hole)) : 'ngoài board'}</span></div>`;
       }).join('')}</div>` : '';
