@@ -2697,5 +2697,344 @@ const SLEEP_PROG = `    ORG 0
     })(), '');
 }
 
+// Nhóm (x): audit toàn diện 25/11 (Điệp: "lần nào chạy cũng thiếu") — tên bit
+// còn thiếu, dạng số MPLAB, directive, $, EEPROM, PWM, TMR1CS, SLEEP/ADC.
+// (x-a) Tên bit mới: PSPIF/PSPIE, PIR2/PIE2, CMCON, CVRCON, EECON1, PCON,
+// TRISE, CSRC, SSPCON2, alias DONE/NOT_DONE — dịch được và mã hoá đúng số bit.
+{
+  const r = assemble(`
+    BSF PIR1,PSPIF
+    BSF PIE1,PSPIE
+    BSF PIR2,CCP2IF
+    BSF PIR2,BCLIF
+    BSF PIR2,EEIF
+    BSF PIR2,CMIF
+    BSF PIE2,BCLIE
+    BSF PIE2,EEIE
+    BSF PIE2,CMIE
+    BSF CMCON,CM0
+    BSF CMCON,C2OUT
+    BSF CVRCON,CVR3
+    BSF CVRCON,CVREN
+    BSF EECON1,RD
+    BSF EECON1,WR
+    BSF EECON1,WREN
+    BSF EECON1,WRERR
+    BSF EECON1,EEPGD
+    BSF PCON,NOT_BOR
+    BSF PCON,NOT_POR
+    BSF TRISE,PSPMODE
+    BSF TRISE,IBF
+    BSF TXSTA,CSRC
+    BSF SSPCON2,SEN
+    BSF SSPCON2,GCEN
+    BSF ADCON0,DONE
+    BCF ADCON0,NOT_DONE
+  `);
+  check('(x-a) tên bit mới dịch được, 0 lỗi', r.errors.length === 0, JSON.stringify(r.errors));
+  check('(x-a) BSF PIR1,PSPIF mã hoá đúng (bit7, PIR1=0x0c)', r.program[0] === (0x1400 | (7 << 7) | 0x0c), '0x' + r.program[0].toString(16));
+  check('(x-a) BSF PIR2,EEIF mã hoá đúng (bit4, PIR2=0x0d)', r.program[4] === (0x1400 | (4 << 7) | 0x0d), '0x' + r.program[4].toString(16));
+  check('(x-a) BSF EECON1,RD mã hoá đúng (bit0, bank2: 0x0e)', r.program[13] === (0x1400 | (0 << 7) | 0x0e), '0x' + r.program[13].toString(16));
+  check('(x-a) BSF CMCON,C2OUT mã hoá đúng (bit7, bank1: 0x1c)', r.program[10] === (0x1400 | (7 << 7) | 0x1c), '0x' + r.program[10].toString(16));
+  check('(x-a) BSF SSPCON2,GCEN mã hoá đúng (bit7, bank1: 0x11)', r.program[24] === (0x1400 | (7 << 7) | 0x11), '0x' + r.program[24].toString(16));
+}
+
+// (x-b) Dạng số MPLAB: .100, 0XFF, $AB, 0B1010, O'777', số âm, 'A',
+// HIGH/LOW, label+1/label-2, $ (địa chỉ hiện tại).
+{
+  const r = assemble(`
+    MOVLW .100
+    MOVLW 0XFF
+    MOVLW $AB
+    MOVLW 0B1010
+    MOVLW O'777'
+    MOVLW -1
+    MOVLW 'A'
+    MOVLW HIGH TABLE
+    MOVLW LOW TABLE
+    MOVLW TABLE+1
+    MOVLW TABLE-2
+    GOTO TABLE
+TABLE
+    RETLW 0
+  `);
+  check('(x-b) các dạng số mới dịch được, 0 lỗi', r.errors.length === 0, JSON.stringify(r.errors));
+  check("(x-b) .100=100, 0XFF=255, $AB=171, 0B1010=10, O'777'->0xFF, -1->0xFF, 'A'=65",
+    r.program[0] === (0x3000 | 100) && r.program[1] === (0x3000 | 255) && r.program[2] === (0x3000 | 0xab)
+    && r.program[3] === (0x3000 | 10) && r.program[4] === (0x3000 | 0xff) && r.program[5] === (0x3000 | 0xff)
+    && r.program[6] === (0x3000 | 65), '');
+  check('(x-b) HIGH/LOW TABLE (TABLE=12): HIGH=0, LOW=12', r.program[7] === 0x3000 && r.program[8] === (0x3000 | 12), '');
+  check('(x-b) TABLE+1=13, TABLE-2=10', r.program[9] === (0x3000 | 13) && r.program[10] === (0x3000 | 10), '');
+  const rd = assemble(`
+    ORG 0
+    NOP
+LOOP
+    GOTO $
+    GOTO $-1
+  `);
+  check('(x-b) $ = địa chỉ hiện tại: GOTO $ (ở 1) -> 0x2800|1, GOTO $-1 (ở 2) -> 0x2800|1',
+    rd.errors.length === 0 && rd.program[1] === (0x2800 | 1) && rd.program[2] === (0x2800 | 1), JSON.stringify(rd.errors));
+}
+
+// (x-c) Directive mới: #define/#undef, VARIABLE/CONSTANT, RADIX, RES, FILL,
+// DA, DB với nhãn, PAGESEL; bỏ qua PROCESSOR/ERRORLEVEL/TITLE; lỗi rõ cho
+// MACRO/IF/WHILE/DE/ORG 0x2100.
+{
+  const r = assemble(`
+    #define LED_COUNT 5
+    #define LED_PORT PORTB
+    PROCESSOR 16F877A
+    ERRORLEVEL -302
+    TITLE "Test"
+    MOVLW LED_COUNT
+    MOVWF LED_PORT
+    COUNT VARIABLE 0x30
+    MAX CONSTANT 100
+    MOVLW MAX
+    RADIX HEX
+    MOVLW 10
+    RADIX DEC
+    MOVLW 10
+  `);
+  check('(x-c) #define/VARIABLE/CONSTANT/RADIX/PROCESSOR/ERRORLEVEL/TITLE dịch được', r.errors.length === 0, JSON.stringify(r.errors));
+  check('(x-c) #define thay text: MOVLW LED_COUNT=5, MOVWF LED_PORT=MOVWF PORTB',
+    r.program[0] === (0x3000 | 5) && r.program[1] === (0x0080 | 0x06), '');
+  check('(x-c) CONSTANT 100 dùng được', r.program[2] === (0x3000 | 100), '0x' + r.program[2].toString(16));
+  check('(x-c) RADIX HEX: MOVLW 10=0x10; RADIX DEC: MOVLW 10=10',
+    r.program[3] === (0x3000 | 0x10) && r.program[4] === (0x3000 | 10), '');
+  const u = assemble(`
+    #define X 5
+    #undef X
+    MOVLW X
+  `);
+  check('(x-c) #undef xoá define: MOVLW X sau #undef báo lỗi (không còn thay thế)',
+    u.errors.length === 1 && /Không hiểu hằng/.test(u.errors[0].message), JSON.stringify(u.errors));
+}
+{
+  const r = assemble(`
+    ORG 0
+    BUFFER RES 4
+    MOVLW 0x55
+    FILL 0xAA, 3
+    MSG DB 'H','i'
+    TABLE DA "AB"
+    GOTO TABLE
+  `);
+  check("(x-c) RES/FILL/DB với nhãn/DA dịch được", r.errors.length === 0, JSON.stringify(r.errors));
+  check('(x-c) BUFFER RES 4: MOVLW ở địa chỉ 4; FILL 0xAA,3 điền 3 word 0xAA',
+    r.program[4] === (0x3000 | 0x55) && r.program[5] === 0xaa && r.program[6] === 0xaa && r.program[7] === 0xaa, '');
+  check("(x-c) MSG DB 'H','i' -> 0x48,0x69; DA \"AB\" -> 1 word 0x0241 (mask 14-bit)",
+    r.program[8] === 0x48 && r.program[9] === 0x69 && r.program[10] === 0x0241, '');
+  check('(x-c) nhãn BUFFER=0, MSG=8, TABLE=10; GOTO TABLE -> 0x2800|10',
+    r.labels.BUFFER === 0 && r.labels.MSG === 8 && r.labels.TABLE === 10 && r.program[11] === (0x2800 | 10), '');
+}
+{
+  const pad = Array(0x800).fill('    NOP').join('\n');
+  const r = assemble(`    ORG 0\n    PAGESEL FAR\n    GOTO FAR\n${pad}\nFAR\n    RETURN\n  `);
+  check('(x-c) PAGESEL nhãn trang 1 (0x802): BSF PCLATH,3 + BCF PCLATH,4',
+    r.errors.length === 0 && r.program[0] === (0x1400 | (3 << 7) | 0x0a) && r.program[1] === (0x1000 | (4 << 7) | 0x0a),
+    JSON.stringify(r.errors));
+  const m = assemble(`    MACRO DELAYX\n    NOP\n    ENDM\n    MOVLW 1\n`);
+  check('(x-c) MACRO báo rõ "chưa được hỗ trợ", chỉ 1 lỗi, code sau vẫn dịch',
+    m.errors.length === 1 && /MACRO.*chưa được hỗ trợ/.test(m.errors[0].message) && m.program[0] === (0x3000 | 1), JSON.stringify(m.errors));
+  const i = assemble(`    IF 1\n    MOVLW 1\n    ELSE\n    MOVLW 2\n    ENDIF\n    MOVLW 3\n`);
+  check('(x-c) IF/ELSE/ENDIF báo rõ "chưa được hỗ trợ", code sau ENDIF vẫn dịch',
+    i.errors.length === 1 && /chưa được hỗ trợ/.test(i.errors[0].message) && i.program[0] === (0x3000 | 3), JSON.stringify(i.errors));
+  const w = assemble(`    WHILE 1\n    NOP\n    ENDW\n`);
+  check('(x-c) WHILE báo rõ "chưa được hỗ trợ"',
+    w.errors.length === 1 && /chưa được hỗ trợ/.test(w.errors[0].message), JSON.stringify(w.errors));
+  const d = assemble(`    ORG 0x2100\n    DE 0x55\n`);
+  check('(x-c) ORG 0x2100 + DE báo rõ về EEPROM (không phải "Không hiểu dòng")',
+    d.errors.length === 2 && /EEPROM/.test(d.errors[0].message) && /EEPROM/.test(d.errors[1].message), JSON.stringify(d.errors));
+  const e = assemble(`    ERROR "het bo nho"\n`);
+  check('(x-c) ERROR đẩy lỗi với đúng thông báo của code',
+    e.errors.length === 1 && /het bo nho/.test(e.errors[0].message), JSON.stringify(e.errors));
+}
+
+// (x-d) EEPROM dữ liệu: ghi đúng trình tự 0x55/0xAA, đọc lại, không mở khoá
+// thì không ghi, loadEeprom, EECON2 đọc về 0, dữ liệu còn sau reset.
+{
+  const code = `
+    BANKSEL EEADR
+    MOVLW 0x10
+    MOVWF EEADR
+    MOVLW 0x5A
+    MOVWF EEDATA
+    BANKSEL EECON1
+    BSF EECON1,WREN
+    MOVLW 0x55
+    MOVWF EECON2
+    MOVLW 0xAA
+    MOVWF EECON2
+    BSF EECON1,WR
+    BANKSEL PIR2
+WAIT_EE
+    BTFSS PIR2,EEIF
+    GOTO WAIT_EE
+    BCF PIR2,EEIF
+    BANKSEL EECON1
+    BCF EECON1,WREN
+    BSF EECON1,RD
+    BANKSEL EEDATA
+    MOVF EEDATA,W
+    BANKSEL 0x20
+    MOVWF 0x20
+  `;
+  const r = assemble(code);
+  check('(x-d) code ghi/đọc EEPROM dịch được', r.errors.length === 0, JSON.stringify(r.errors));
+  const cpu = createCPU();
+  cpu.loadProgram(r.program);
+  cpu.run(20000);
+  check('(x-d) đọc lại được 0x5A đã ghi', cpu.ram[0x20] === 0x5a, '0x' + (cpu.ram[0x20] || 0).toString(16));
+  check('(x-d) WR tự xoá sau khi ghi xong', (cpu.sfr.EECON1 & 0x02) === 0, 'EECON1=0x' + cpu.sfr.EECON1.toString(16));
+  check('(x-d) dữ liệu EEPROM còn sau reset (như phần cứng thật)', (() => { cpu.reset(); return cpu.eeprom[0x10] === 0x5a; })(), '');
+  const cpu2 = createCPU();
+  const r2 = assemble(`
+    BANKSEL EEADR
+    MOVLW 0x10
+    MOVWF EEADR
+    MOVLW 0x99
+    MOVWF EEDATA
+    BANKSEL EECON1
+    BSF EECON1,WREN
+    BSF EECON1,WR
+  `);
+  cpu2.loadProgram(r2.program);
+  cpu2.run(10000);
+  check('(x-d) ghi không mở khoá 0x55/0xAA thì không ghi', cpu2.eeprom[0x10] === 0, '0x' + cpu2.eeprom[0x10].toString(16));
+  const cpu3 = createCPU();
+  cpu3.loadEeprom([0x11, 0x22, 0x33]);
+  check('(x-d) loadEeprom nạp sẵn 3 byte', cpu3.eeprom[0] === 0x11 && cpu3.eeprom[1] === 0x22 && cpu3.eeprom[2] === 0x33, '');
+  check('(x-d) EECON2 đọc về 0 (chỉ ghi)', (() => { const c = createCPU(); c.writeFile(0x03, 0x40); c.writeFile(0x0f, 0x55); return c.readFile(0x0f) === 0; })(), '');
+}
+
+// (x-e) PWM (CCP1->RC2): duty 50%/0%/100%, TMR2 tắt thì ra 0, pinDirection=out.
+{
+  const pwmCode = (ccpr1l) => `
+    BANKSEL PR2
+    MOVLW 3
+    MOVWF PR2
+    BANKSEL CCPR1L
+    MOVLW ${ccpr1l}
+    MOVWF CCPR1L
+    MOVLW b'00001100'
+    MOVWF CCP1CON
+    BANKSEL T2CON
+    MOVLW b'00000100'
+    MOVWF T2CON
+  `;
+  const cpu = createCPU();
+  cpu.loadProgram(assemble(pwmCode(2)).program); // duty=8, chu kỳ 16 -> 50%
+  cpu.run(100);
+  let highs = 0, total = 0;
+  for (let k = 0; k < 400; k++) { cpu.step(); total++; if (cpu.pinLevel(2, 2) === 1) highs++; }
+  const ratio = highs / total;
+  check('(x-e) PWM duty 50%: RC2 cao ~nửa thời gian (0.35-0.65)', ratio > 0.35 && ratio < 0.65, 'ratio=' + ratio.toFixed(2));
+  check('(x-e) PWM: pinDirection RC2 = out (CCP chiếm chân)', cpu.pinDirection(2, 2) === 'out', '');
+  check('(x-e) PWM: đọc PORTC phản ánh mức PWM', ((cpu.readPort(2) >> 2) & 1) === cpu.pinLevel(2, 2), '');
+  const cpu0 = createCPU();
+  cpu0.loadProgram(assemble(pwmCode(0)).program); // duty 0
+  cpu0.run(100);
+  let h0 = 0; for (let k = 0; k < 200; k++) { cpu0.step(); if (cpu0.pinLevel(2, 2) === 1) h0++; }
+  check('(x-e) PWM duty 0%: RC2 luôn 0', h0 === 0, 'h0=' + h0);
+  const cpu100 = createCPU();
+  cpu100.loadProgram(assemble(pwmCode(4)).program); // duty=16 >= 4*(3+1)
+  cpu100.run(100);
+  let h100 = 0; for (let k = 0; k < 200; k++) { cpu100.step(); if (cpu100.pinLevel(2, 2) === 1) h100++; }
+  check('(x-e) PWM duty 100%: RC2 luôn 1', h100 === 200, 'h100=' + h100);
+  const cpuOff = createCPU();
+  cpuOff.loadProgram(assemble(`
+    BANKSEL PR2
+    MOVLW 3
+    MOVWF PR2
+    BANKSEL CCPR1L
+    MOVLW 4
+    MOVWF CCPR1L
+    MOVLW b'00001100'
+    MOVWF CCP1CON
+  `).program);
+  cpuOff.run(100);
+  check('(x-e) PWM: TMR2 tắt thì RC2 = 0', cpuOff.pinLevel(2, 2) === 0, '');
+}
+
+// (x-f) TMR1CS=1 (clock ngoài) thì TMR1 đứng yên; TMR1CS=0 thì chạy.
+// SLEEP đánh thức bằng ngắt ADC (ADCS=11, clock RC chạy trong SLEEP).
+// Đọc PIR1 phải thấy ADIF (sửa mask 0xaf -> 0xcf).
+{
+  const cpu = createCPU();
+  cpu.loadProgram(assemble(`
+    BANKSEL T1CON
+    MOVLW b'00000011'
+    MOVWF T1CON
+  `).program);
+  cpu.run(1010);
+  check('(x-f) TMR1CS=1: TMR1 đứng yên (clock ngoài, không có nguồn ngoài)',
+    cpu.sfr.TMR1L === 0 && cpu.sfr.TMR1H === 0, `TMR1=${(cpu.sfr.TMR1H << 8) | cpu.sfr.TMR1L}`);
+  const cpu2 = createCPU();
+  cpu2.loadProgram(assemble(`
+    BANKSEL T1CON
+    MOVLW b'00000001'
+    MOVWF T1CON
+  `).program);
+  cpu2.run(110);
+  check('(x-f) TMR1CS=0: TMR1 tăng theo clock nội',
+    ((cpu2.sfr.TMR1H << 8) | cpu2.sfr.TMR1L) > 0, `TMR1=${(cpu2.sfr.TMR1H << 8) | cpu2.sfr.TMR1L}`);
+  const cpu3 = createCPU();
+  cpu3.loadProgram(assemble(`
+    BANKSEL ADCON0
+    MOVLW b'11000001'
+    MOVWF ADCON0
+    BANKSEL PIE1
+    MOVLW b'01000000'
+    MOVWF PIE1
+    BANKSEL INTCON
+    MOVLW b'01000000'
+    MOVWF INTCON
+    SLEEP
+    NOP
+  `).program);
+  cpu3.setAnalog(0, 2.5);
+  cpu3.run(50);
+  check('(x-f) SLEEP: CPU ngủ sau SLEEP', cpu3.sleeping === true, '');
+  cpu3.writeFile(0x1f, 0xc3); // ADCON0: ADON=1, GO=1, ADCS=11 (RC)
+  cpu3.run(200);
+  check('(x-f) SLEEP: ngắt ADC (ADCS=11) đánh thức CPU dù GIE=0', cpu3.sleeping === false, '');
+  check('(x-f) đọc PIR1 thấy ADIF (mask cũ 0xaf vô tình xoá bit ADIF)',
+    (() => { const c = createCPU(); c.sfr.PIR1 |= 0x40; return (c.readSFR('PIR1') & 0x40) === 0x40; })(), '');
+}
+
+// (x-g) Tên thanh ghi mới: SSPADD/SSPSTAT/SSPCON2/CMCON/CVRCON/EEDATH/EEADRH
+// (đọc/ghi qua địa chỉ đúng bank, không rơi vào GPR).
+{
+  const cpu = createCPU();
+  cpu.writeFile(0x03, 0x20); // bank 1
+  cpu.writeFile(0x13, 0x55); // SSPADD (bank1, 0x13)
+  cpu.writeFile(0x14, 0x66); // SSPSTAT (bank1, 0x14)
+  cpu.writeFile(0x11, 0x77); // SSPCON2 (bank1, 0x11)
+  cpu.writeFile(0x1c, 0x07); // CMCON (bank1, 0x1c)
+  cpu.writeFile(0x1d, 0x88); // CVRCON (bank1, 0x1d)
+  check('(x-g) SSPADD/SSPSTAT/SSPCON2/CMCON/CVRCON ghi/đọc đúng bank 1',
+    cpu.readFile(0x13) === 0x55 && cpu.readFile(0x14) === 0x66 && cpu.readFile(0x11) === 0x77
+    && cpu.readFile(0x1c) === 0x07 && cpu.readFile(0x1d) === 0x88, '');
+  cpu.writeFile(0x03, 0x40); // bank 2
+  cpu.writeFile(0x1e, 0x12); // EEDATH (bank2, 0x1e)
+  cpu.writeFile(0x1f, 0x03); // EEADRH (bank2, 0x1f)
+  check('(x-g) EEDATH/EEADRH ghi/đọc đúng bank 2',
+    cpu.readFile(0x1e) === 0x12 && cpu.readFile(0x1f) === 0x03, '');
+  check('(x-g) CMCON reset = 0x07 (datasheet POR, comparator tắt)',
+    createCPU().sfr.CMCON === 0x07, '');
+  const r = assemble(`
+    BANKSEL SSPADD
+    MOVLW 0x55
+    MOVWF SSPADD
+    BANKSEL CMCON
+    MOVLW 0x07
+    MOVWF CMCON
+  `);
+  check('(x-g) MOVWF SSPADD/CMCON dịch được (tên thanh ghi mới)',
+    r.errors.length === 0, JSON.stringify(r.errors));
+}
+
 console.log(`\nKết quả: ${pass} pass, ${fail} fail`);
 process.exit(fail ? 1 : 0);
+

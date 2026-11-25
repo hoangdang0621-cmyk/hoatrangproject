@@ -15,30 +15,39 @@ export const REGISTERS = {
   SSPBUF: 0x13, SSPCON: 0x14, CCPR1L: 0x15, CCPR1H: 0x16, CCP1CON: 0x17,
   RCSTA: 0x18, TXREG: 0x19, RCREG: 0x1a, CCPR2L: 0x1b, CCPR2H: 0x1c,
   CCP2CON: 0x1d, ADRESH: 0x1e, ADCON0: 0x1f,
-  OPTION_REG: 0x81, TRISA: 0x85, TRISB: 0x86, TRISC: 0x87, TRISD: 0x88,
-  TRISE: 0x89, PIE1: 0x8c, PIE2: 0x8d, PCON: 0x8e, PR2: 0x92,
-  TXSTA: 0x98, SPBRG: 0x99, ADRESL: 0x9e, ADCON1: 0x9f,
+  OPTION_REG: 0x81, OPTION: 0x81, TRISA: 0x85, TRISB: 0x86, TRISC: 0x87, TRISD: 0x88,
+  TRISE: 0x89, PIE1: 0x8c, PIE2: 0x8d, PCON: 0x8e, SSPCON2: 0x91, PR2: 0x92,
+  SSPADD: 0x93, SSPSTAT: 0x94, TXSTA: 0x98, SPBRG: 0x99,
+  CMCON: 0x9c, CVRCON: 0x9d, ADRESL: 0x9e, ADCON1: 0x9f,
   EEDATA: 0x10c, EEADR: 0x10d, EECON1: 0x10e, EECON2: 0x10f,
+  EEDATH: 0x11e, EEADRH: 0x11f,
 };
 
 // Tên bit thường dùng trong toán hạng bit (BSF STATUS,RP0 / BTFSS INTCON,TMR0IF ...)
 const BIT_NAMES = {
   C: 0, DC: 1, Z: 2, PD: 3, TO: 4, RP0: 5, RP1: 6, IRP: 7,
   RBIF: 0, INTF: 1, TMR0IF: 2, RBIE: 3, INTE: 4, TMR0IE: 5, PEIE: 6, GIE: 7,
-  ADON: 0, GO: 1, GO_DONE: 1, CHS0: 2, CHS1: 3, CHS2: 4, ADCS0: 6, ADCS1: 7,
-  ADIF: 6, RCIF: 5, TXIF: 4, TMR1IF: 0, TMR2IF: 1, CCP1IF: 2, SSPIF: 3,
-  TX9: 6, TXEN: 5, SYNC: 4, BRGH: 2, TRMT: 1, TX9D: 0,
+  ADON: 0, GO: 1, GO_DONE: 1, DONE: 1, NOT_DONE: 1, CHS0: 2, CHS1: 3, CHS2: 4, ADCS0: 6, ADCS1: 7,
+  ADIF: 6, RCIF: 5, TXIF: 4, TMR1IF: 0, TMR2IF: 1, CCP1IF: 2, SSPIF: 3, PSPIF: 7,
+  TX9: 6, TXEN: 5, SYNC: 4, BRGH: 2, TRMT: 1, TX9D: 0, CSRC: 7,
   SPEN: 7, RX9: 6, SREN: 5, CREN: 4, ADDEN: 3, FERR: 2, OERR: 1, RX9D: 0,
   PS0: 0, PS1: 1, PS2: 2, PSA: 3, T0SE: 4, T0CS: 5, INTEDG: 6, RBPU: 7,
   ADFM: 7, PCFG0: 0, PCFG1: 1, PCFG2: 2, PCFG3: 3,
+  PSPMODE: 4, IBOV: 5, OBF: 6, IBF: 7,
+  NOT_BOR: 0, NOT_POR: 1,
+  CCP2IF: 0, BCLIF: 3, EEIF: 4, CMIF: 6,
+  CM0: 0, CM1: 1, CM2: 2, CIS: 3, C1INV: 4, C2INV: 5, C1OUT: 6, C2OUT: 7,
+  CVR0: 0, CVR1: 1, CVR2: 2, CVR3: 3, CVRSS: 4, CVRR: 5, CVROE: 6, CVREN: 7,
+  RD: 0, WR: 1, WREN: 2, WRERR: 3, EEPGD: 7,
+  SEN: 0, RSEN: 1, PEN: 2, RCEN: 3, ACKEN: 4, ACKDT: 5, ACKSTAT: 6, GCEN: 7,
   TMR1ON: 0, TMR1CS: 1, T1SYNC: 2, NOT_T1SYNC: 2, T1OSCEN: 3, T1CKPS0: 4, T1CKPS1: 5,
   T2CKPS0: 0, T2CKPS1: 1, TMR2ON: 2, TOUTPS0: 3, TOUTPS1: 4, TOUTPS2: 5, TOUTPS3: 6,
   CCP1M0: 0, CCP1M1: 1, CCP1M2: 2, CCP1M3: 3, CCP1Y: 4, CCP1X: 5,
   CCP2M0: 0, CCP2M1: 1, CCP2M2: 2, CCP2M3: 3, CCP2Y: 4, CCP2X: 5,
   SSPM0: 0, SSPM1: 1, SSPM2: 2, SSPM3: 3, CKP: 4, SSPEN: 5, SSPOV: 6, WCOL: 7,
   BF: 0, UA: 1, R_NW: 2, D_NA: 5, CKE: 6, SMP: 7,
-  TMR1IE: 0, TMR2IE: 1, CCP1IE: 2, SSPIE: 3, TXIE: 4, RCIE: 5, ADIE: 6,
-  CCP2IE: 0,
+  TMR1IE: 0, TMR2IE: 1, CCP1IE: 2, SSPIE: 3, TXIE: 4, RCIE: 5, ADIE: 6, PSPIE: 7,
+  CCP2IE: 0, BCLIE: 3, EEIE: 4, CMIE: 6,
   RA0: 0, RA1: 1, RA2: 2, RA3: 3, RA4: 4, RA5: 5,
   RB0: 0, RB1: 1, RB2: 2, RB3: 3, RB4: 4, RB5: 5, RB6: 6, RB7: 7,
   RC0: 0, RC1: 1, RC2: 2, RC3: 3, RC4: 4, RC5: 5, RC6: 6, RC7: 7,
@@ -63,12 +72,13 @@ const SFR_MAP = [
   { 0x00: 'INDF', 0x01: 'OPTION_REG', 0x02: 'PCL', 0x03: 'STATUS', 0x04: 'FSR',
     0x05: 'TRISA', 0x06: 'TRISB', 0x07: 'TRISC', 0x08: 'TRISD', 0x09: 'TRISE',
     0x0a: 'PCLATH', 0x0b: 'INTCON', 0x0c: 'PIE1', 0x0d: 'PIE2', 0x0e: 'PCON',
-    0x12: 'PR2', 0x13: 'SSPADD', 0x14: 'SSPSTAT', 0x18: 'TXSTA', 0x19: 'SPBRG',
-    0x1e: 'ADRESL', 0x1f: 'ADCON1' },
+    0x11: 'SSPCON2', 0x12: 'PR2', 0x13: 'SSPADD', 0x14: 'SSPSTAT', 0x18: 'TXSTA', 0x19: 'SPBRG',
+    0x1c: 'CMCON', 0x1d: 'CVRCON', 0x1e: 'ADRESL', 0x1f: 'ADCON1' },
   // bank 2
   { 0x00: 'INDF', 0x01: 'TMR0', 0x02: 'PCL', 0x03: 'STATUS', 0x04: 'FSR',
     0x06: 'PORTB', 0x0a: 'PCLATH', 0x0b: 'INTCON',
-    0x0c: 'EEDATA', 0x0d: 'EEADR', 0x0e: 'EECON1', 0x0f: 'EECON2' },
+    0x0c: 'EEDATA', 0x0d: 'EEADR', 0x0e: 'EECON1', 0x0f: 'EECON2',
+    0x1e: 'EEDATH', 0x1f: 'EEADRH' },
   // bank 3
   { 0x00: 'INDF', 0x01: 'OPTION_REG', 0x02: 'PCL', 0x03: 'STATUS', 0x04: 'FSR',
     0x06: 'TRISB', 0x0a: 'PCLATH', 0x0b: 'INTCON' },
@@ -80,17 +90,49 @@ const PORT_NAMES = ['PORTA', 'PORTB', 'PORTC', 'PORTD', 'PORTE'];
 // ---------------------------------------------------------------------------
 // Tiện ích số
 // ---------------------------------------------------------------------------
-function parseNumberToken(tok, symbols) {
+// Tìm vị trí toán tử + / - ở cấp ngoài cùng (bỏ qua ký tự trong '...' và dấu âm ở đầu).
+function findAddSubOp(t) {
+  let q = null;
+  for (let i = 1; i < t.length; i++) {
+    const ch = t[i];
+    if (q) { if (ch === q) q = null; continue; }
+    if (ch === "'" || ch === '"') q = ch;
+    else if (ch === '+' || ch === '-') return i;
+  }
+  return -1;
+}
+
+// radix: cơ số mặc định cho số không có tiền tố (10 mặc định; directive RADIX đổi được)
+// curAddr: địa chỉ lệnh hiện tại — ký hiệu $ trong MPLAB (vd GOTO $-1 = lặp tại chỗ)
+function parseNumberToken(tok, symbols, radix = 10, curAddr = null) {
   const t = String(tok).trim();
   if (t === '') return null;
+  // HIGH/LOW: HIGH label = byte cao, LOW label = byte thấp (bảng tra, PCLATH)
+  const hl = t.match(/^(HIGH|LOW)\s+(.+)$/i);
+  if (hl) {
+    const v = parseNumberToken(hl[2], symbols, radix, curAddr);
+    if (v === null) return null;
+    return hl[1].toUpperCase() === 'HIGH' ? (v >> 8) & 0xff : v & 0xff;
+  }
+  // Biểu thức cộng/trừ đơn giản: A+B, A-B, label+1 (đệ quy, chỉ + và -)
+  const opIdx = findAddSubOp(t);
+  if (opIdx > 0) {
+    const a = parseNumberToken(t.slice(0, opIdx), symbols, radix, curAddr);
+    const b = parseNumberToken(t.slice(opIdx + 1), symbols, radix, curAddr);
+    if (a === null || b === null) return null;
+    return t[opIdx] === '+' ? a + b : a - b;
+  }
+  if (t === '$') return curAddr; // địa chỉ hiện tại (GOTO $ = lặp tại chỗ)
   if (/^'.'$/.test(t) || /^"."$/.test(t)) return t.charCodeAt(1); // 'A'
-  if (/^0x[0-9a-fA-F]+$/.test(t)) return parseInt(t, 16);
-  if (/^\$[0-9a-fA-F]+$/.test(t)) return parseInt(t.slice(1), 16);
-  if (/^0b[01]+$/.test(t)) return parseInt(t.slice(2), 2);
+  if (/^0x[0-9a-fA-F]+$/i.test(t)) return parseInt(t, 16);
+  if (/^\$[0-9a-fA-F]+$/i.test(t)) return parseInt(t.slice(1), 16);
+  if (/^0b[01]+$/i.test(t)) return parseInt(t.slice(2), 2);
   if (/^H'[0-9a-fA-F]+'$/.test(t.toUpperCase())) return parseInt(t.slice(2, -1), 16);
   if (/^B'[01]+'$/.test(t.toUpperCase())) return parseInt(t.slice(2, -1), 2);
   if (/^D'[0-9]+'$/.test(t.toUpperCase())) return parseInt(t.slice(2, -1), 10);
-  if (/^[0-9]+$/.test(t)) return parseInt(t, 10);
+  if (/^O'[0-7]+'$/.test(t.toUpperCase())) return parseInt(t.slice(2, -1), 8);
+  if (/^\.[0-9]+$/.test(t)) return parseInt(t.slice(1), 10); // .100 kiểu MPLAB
+  if (/^-?[0-9]+$/.test(t)) return parseInt(t, radix); // số trần theo RADIX (mặc định thập phân)
   const up = t.toUpperCase();
   if (up in REGISTERS) return REGISTERS[up];
   if (symbols && up in symbols) return symbols[up];
@@ -176,10 +218,10 @@ function splitOperands(s) {
 
 function bankOfAddress(addr) { return (addr >> 7) & 3; }
 
-function encodeInstruction(mn, ops, symbols, lineNo) {
+function encodeInstruction(mn, ops, symbols, lineNo, radix = 10, curAddr = null) {
   const err = (m) => ({ error: m });
   const num = (tok) => {
-    const v = parseNumberToken(tok, symbols);
+    const v = parseNumberToken(tok, symbols, radix, curAddr);
     return v === null ? undefined : v;
   };
   // Lệnh không toán hạng
@@ -244,6 +286,28 @@ function encodeInstruction(mn, ops, symbols, lineNo) {
   return err(`Lệnh không hỗ trợ: ${mn}`);
 }
 
+// Thay thế #define theo từng từ (toàn từ, không chạm chuỗi '...' / "...").
+// Lặp tối đa 5 lần để #define lồng nhau (A -> B -> 0x20) cũng thay được.
+function applyDefines(line, defines) {
+  const names = Object.keys(defines);
+  if (!names.length) return line;
+  const parts = line.split(/('[^']*'|"[^"]*")/g);
+  for (let i = 0; i < parts.length; i += 2) {
+    let seg = parts[i];
+    for (let iter = 0; iter < 5; iter++) {
+      let changed = false;
+      for (const name of names) {
+        const re = new RegExp(`\\b${name}\\b`, 'gi');
+        const next = seg.replace(re, defines[name]);
+        if (next !== seg) { seg = next; changed = true; }
+      }
+      if (!changed) break;
+    }
+    parts[i] = seg;
+  }
+  return parts.join('');
+}
+
 export function assemble(source) {
   const lines = String(source).split(/\r?\n/);
   const errors = [];
@@ -252,19 +316,51 @@ export function assemble(source) {
   const lineInfo = [];    // mỗi dòng: { lineNo, label, mnemonic, ops, addr, size }
   let pc = 0;
   let cblockAddr = null;  // null = ngoài khối CBLOCK; số = địa chỉ tiếp theo để gán
+  let radix = 10;         // cơ số mặc định cho số trần (directive RADIX đổi được)
+  const defines = {};     // #define NAME -> chuỗi thay thế (theo thứ tự xuất hiện)
+  let skipDepth = 0;      // >0 = đang bỏ qua khối chưa hỗ trợ (MACRO / IF / WHILE / #ifdef)
+  let skipKind = null;    // 'MACRO' | 'IF' | 'WHILE' | 'IFDEF'
 
   // --- Pass 1: quét nhãn, EQU, ORG; tính địa chỉ ---
   for (let i = 0; i < lines.length; i++) {
     const lineNo = i + 1;
-    const clean = stripComment(lines[i]).trim();
-    if (!clean) { lineInfo.push({ lineNo }); continue; }
+    const clean0 = stripComment(lines[i]).trim();
+    if (!clean0) { lineInfo.push({ lineNo }); continue; }
+    // Khối chưa hỗ trợ: bỏ qua tới ENDM/ENDIF/ENDW/#ENDIF tương ứng (đếm
+    // lồng nhau), chỉ báo 1 lỗi rõ ràng ở dòng mở khối.
+    if (skipDepth > 0) {
+      const sk = clean0.split(/\s+/)[0].toUpperCase();
+      if (sk === 'MACRO' || sk === 'IF' || sk === 'WHILE' || sk === '#IFDEF' || sk === '#IFNDEF') skipDepth++;
+      else if (sk === 'ENDM' || sk === 'ENDIF' || sk === 'ENDW' || sk === '#ENDIF') {
+        skipDepth--;
+        if (skipDepth === 0) skipKind = null;
+      }
+      lineInfo.push({ lineNo }); continue;
+    }
+    // #define / #undef: ghi lại rồi bỏ dòng; áp dụng cho các dòng sau.
+    {
+      const firstTok = clean0.split(/\s+/)[0].toUpperCase();
+      if (firstTok === '#DEFINE' || firstTok === 'DEFINE') {
+        const mDef = clean0.match(/^#?DEFINE\s+([A-Za-z_][A-Za-z0-9_]*)\s*(.*)$/i);
+        if (mDef) defines[mDef[1].toUpperCase()] = mDef[2].trim();
+        else errors.push({ line: lineNo, message: `#define không hiểu dòng: "${clean0}"` });
+        lineInfo.push({ lineNo, directive: 'DEFINE' }); continue;
+      }
+      if (firstTok === '#UNDEF' || firstTok === 'UNDEF') {
+        const mUn = clean0.match(/^#?UNDEF\s+([A-Za-z_][A-Za-z0-9_]*)\s*$/i);
+        if (mUn) delete defines[mUn[1].toUpperCase()];
+        else errors.push({ line: lineNo, message: `#undef không hiểu dòng: "${clean0}"` });
+        lineInfo.push({ lineNo, directive: 'UNDEF' }); continue;
+      }
+    }
+    const clean = applyDefines(clean0, defines);
     // CBLOCK/ENDC và tên biến trong khối: xử lý TRƯỚC khi tách nhãn, vì
     // "X:3" trong CBLOCK là giữ 3 byte, không phải nhãn code "X:".
     {
       const firstTok = clean.split(/\s+/)[0].toUpperCase();
       if (firstTok === 'CBLOCK') {
         const tailC = clean.slice(clean.split(/\s+/)[0].length).trim();
-        const v = parseNumberToken(tailC, symbols);
+        const v = parseNumberToken(tailC, symbols, radix, pc);
         if (v === null || v === undefined) errors.push({ line: lineNo, message: `CBLOCK không hiểu "${tailC}"` });
         else cblockAddr = v & 0xff;
         lineInfo.push({ lineNo, directive: 'CBLOCK' }); continue;
@@ -293,35 +389,155 @@ export function assemble(source) {
     let rest = clean; let label = null;
     const mColon = rest.match(/^([A-Za-z_][A-Za-z0-9_]*)\s*:\s*(.*)$/);
     if (mColon) { label = mColon[1]; rest = mColon[2].trim(); }
-    const info = { lineNo, label, addr: pc };
+    const info = { lineNo, label, addr: pc, radix };
     if (label) {
       const up = label.toUpperCase();
       if (up in labels) errors.push({ line: lineNo, message: `Nhãn "${label}" bị trùng` });
       labels[up] = pc; symbols[up] = pc;
     }
     if (!rest) { lineInfo.push(info); continue; }
+    // Nhãn không dấu ':' đứng trước lệnh/directive: "LOOP MOVLW 0x10",
+    // "MSG DB 'Hi'", "BUFFER RES 16" — tách nhãn ra rồi xử lý phần còn lại.
+    // (EQU / VARIABLE / CONSTANT giữ nguyên dạng "TÊN <từ khoá> giá trị" nên
+    // không tách ở đây, chúng tự lấy tên từ parts[0] bên dưới.)
+    {
+      const mLbl = rest.match(/^([A-Za-z_][A-Za-z0-9_]*)\s+(.+)$/);
+      if (mLbl) {
+        const second = mLbl[2].split(/\s+/)[0].toUpperCase();
+        const isDirOrMn = MNEMONICS.has(second) || second === 'DB' || second === 'DW' || second === 'DATA'
+          || second === 'DT' || second === 'DA' || second === 'RES' || second === 'FILL'
+          || second === 'BANKSEL' || second === 'PAGESEL';
+        if (isDirOrMn) {
+          const lbl = mLbl[1];
+          const up = lbl.toUpperCase();
+          if (!(up in labels)) { labels[up] = info.addr; symbols[up] = info.addr; }
+          info.label = lbl;
+          rest = mLbl[2].trim();
+        }
+      }
+    }
     const parts = rest.split(/\s+/);
     const first = parts[0].toUpperCase();
     const tail = rest.slice(parts[0].length).trim();
-    // EQU: "TEN EQU giá trị" (nhãn nằm ở đầu dòng, không có dấu :)
+    // EQU: "TEN EQU giá trị" (nhãn nằm ở đầu dòng, không có dấu :) hoặc
+    // "TEN: EQU giá trị" (nhãn đã tách bởi dấu :, tên nằm trong info.label)
+    if (first === 'EQU') {
+      const eqName = info.label || parts[0];
+      const eqVal = info.label ? tail : parts.slice(2).join(' ');
+      const v = parseNumberToken(eqVal, symbols, radix, pc);
+      if (v === null || v === undefined) errors.push({ line: lineNo, message: `EQU không hiểu giá trị "${eqVal}"` });
+      else { symbols[eqName.toUpperCase()] = v; }
+      info.directive = 'EQU'; lineInfo.push(info); continue;
+    }
     if (parts.length >= 3 && parts[1].toUpperCase() === 'EQU') {
-      const v = parseNumberToken(parts.slice(2).join(' '), symbols);
+      const v = parseNumberToken(parts.slice(2).join(' '), symbols, radix, pc);
       if (v === null || v === undefined) errors.push({ line: lineNo, message: `EQU không hiểu giá trị "${parts.slice(2).join(' ')}"` });
       else { symbols[parts[0].toUpperCase()] = v; }
       info.directive = 'EQU'; lineInfo.push(info); continue;
     }
+    // VARIABLE / CONSTANT: "TÊN VARIABLE giá trị" / "TÊN CONSTANT giá trị"
+    // (tên nằm ở parts[0], giống EQU). Giá trị cho phép có dấu '=' ở đầu.
+    if (parts.length >= 3 && (parts[1].toUpperCase() === 'VARIABLE' || parts[1].toUpperCase() === 'CONSTANT')) {
+      let vcVal = parts.slice(2).join(' ').trim();
+      if (vcVal.startsWith('=')) vcVal = vcVal.slice(1).trim();
+      const v = parseNumberToken(vcVal, symbols, radix, pc);
+      if (v === null || v === undefined) errors.push({ line: lineNo, message: `${parts[1].toUpperCase()} không hiểu giá trị "${vcVal}"` });
+      else { symbols[parts[0].toUpperCase()] = v; }
+      info.directive = parts[1].toUpperCase(); lineInfo.push(info); continue;
+    }
+    if (first === 'VARIABLE' || first === 'CONSTANT') {
+      // Dạng "TÊN: VARIABLE giá trị" (nhãn đã tách bởi dấu :)
+      if (!info.label) { errors.push({ line: lineNo, message: `${first} cần tên biến (viết "TÊN ${first} giá trị")` }); lineInfo.push(info); continue; }
+      let vcVal = tail.trim();
+      if (vcVal.startsWith('=')) vcVal = vcVal.slice(1).trim();
+      const v = parseNumberToken(vcVal, symbols, radix, pc);
+      if (v === null || v === undefined) errors.push({ line: lineNo, message: `${first} không hiểu giá trị "${vcVal}"` });
+      else { symbols[info.label.toUpperCase()] = v; }
+      info.directive = first; lineInfo.push(info); continue;
+    }
     if (first === 'ORG') {
-      const v = parseNumberToken(tail, symbols);
+      const v = parseNumberToken(tail, symbols, radix, pc);
       if (v === null || v === undefined) errors.push({ line: lineNo, message: `ORG không hiểu "${tail}"` });
+      else if (v >= 0x2100) errors.push({ line: lineNo, message: `ORG 0x${v.toString(16).toUpperCase()} là vùng dữ liệu EEPROM (0x2100+), chưa được hỗ trợ — ghi EEPROM bằng EECON1/EEADR trong code thay vì nạp sẵn` });
       else pc = v & 0x1fff;
       info.directive = 'ORG'; info.addr = pc; lineInfo.push(info); continue;
     }
     if (first === 'END') { info.directive = 'END'; lineInfo.push(info); break; }
     if (first === '__CONFIG' || first === 'CONFIG') { info.directive = 'CONFIG'; lineInfo.push(info); continue; }
     if (first === 'LIST' || first === '#INCLUDE' || first === 'INCLUDE') { info.directive = 'IGNORE'; lineInfo.push(info); continue; }
+    // Chỉ thị chỉ ảnh hưởng listing / không ảnh hưởng code: bỏ qua an toàn.
+    if (first === 'PROCESSOR' || first === 'ERRORLEVEL' || first === 'TITLE' || first === 'PAGE'
+      || first === 'SUBTITLE' || first === 'MESSG' || first === 'EXPAND' || first === 'NOEXPAND'
+      || first === 'NOLIST' || first === 'SET') { info.directive = 'IGNORE'; lineInfo.push(info); continue; }
+    // RADIX: đổi cơ số mặc định cho số trần (DEC/HEX/OCT/BIN hoặc 10/16/8/2).
+    if (first === 'RADIX') {
+      const rUp = tail.toUpperCase();
+      const rMap = { DEC: 10, HEX: 16, OCT: 8, BIN: 2, '10': 10, '16': 16, '8': 8, '2': 2 };
+      if (rUp in rMap) radix = rMap[rUp];
+      else errors.push({ line: lineNo, message: `RADIX không hiểu "${tail}" (dùng DEC, HEX, OCT hoặc BIN)` });
+      info.directive = 'RADIX'; lineInfo.push(info); continue;
+    }
+    // Khối chưa hỗ trợ: báo lỗi rõ ràng (không phải "Không hiểu dòng") rồi bỏ
+    // qua tới từ khoá đóng khối tương ứng.
+    if (first === 'MACRO') {
+      errors.push({ line: lineNo, message: `MACRO chưa được hỗ trợ — viết thẳng code ra thay vì dùng macro, hoặc chia macro thành chương trình con (CALL/RETURN)` });
+      skipDepth = 1; skipKind = 'MACRO'; lineInfo.push({ lineNo, directive: 'MACRO' }); continue;
+    }
+    if (first === 'IF') {
+      errors.push({ line: lineNo, message: `IF/ELSE/ENDIF (dịch có điều kiện) chưa được hỗ trợ — tách thành 2 bản code riêng, hoặc dùng EQU rồi sửa tay giá trị` });
+      skipDepth = 1; skipKind = 'IF'; lineInfo.push({ lineNo, directive: 'IF' }); continue;
+    }
+    if (first === 'WHILE') {
+      errors.push({ line: lineNo, message: `WHILE/ENDW (lặp lúc dịch) chưa được hỗ trợ — viết lặp lại bằng tay, hoặc dùng DB/DW liệt kê giá trị` });
+      skipDepth = 1; skipKind = 'WHILE'; lineInfo.push({ lineNo, directive: 'WHILE' }); continue;
+    }
+    if (first === '#IFDEF' || first === '#IFNDEF') {
+      errors.push({ line: lineNo, message: `${first}/#ELSE/#ENDIF chưa được hỗ trợ — bỏ khối điều kiện, chỉ giữ nhánh code cần dùng` });
+      skipDepth = 1; skipKind = 'IFDEF'; lineInfo.push({ lineNo, directive: 'IFDEF' }); continue;
+    }
+    if (first === 'ENDM' || first === 'ENDIF' || first === 'ENDW' || first === '#ENDIF' || first === 'ELSE' || first === '#ELSE') {
+      errors.push({ line: lineNo, message: `${first} không có ${first === 'ENDM' ? 'MACRO' : first === 'ENDIF' || first === '#ENDIF' ? 'IF/#IFDEF' : first === 'ENDW' ? 'WHILE' : 'IF'} tương ứng (khối mở đã bị bỏ qua hoặc thiếu)` });
+      lineInfo.push(info); continue;
+    }
+    if (first === 'DE') {
+      errors.push({ line: lineNo, message: `DE (dữ liệu EEPROM nạp sẵn) chưa được hỗ trợ — ghi EEPROM bằng EECON1/EEADR trong code` });
+      lineInfo.push(info); continue;
+    }
+    if (first === 'ERROR') {
+      errors.push({ line: lineNo, message: `ERROR (theo code): ${tail || '(không có thông báo)'}` });
+      lineInfo.push(info); continue;
+    }
     if (first === 'BANKSEL') {
       info.mnemonic = 'BANKSEL'; info.ops = splitOperands(tail); info.size = 2; info.addr = pc;
       pc += 2; lineInfo.push(info); continue;
+    }
+    if (first === 'PAGESEL') {
+      // PAGESEL nhãn: đặt PCLATH bit 3-4 theo trang (bit 11-12) của nhãn (2 lệnh).
+      info.mnemonic = 'PAGESEL'; info.ops = splitOperands(tail); info.size = 2; info.addr = pc;
+      pc += 2; lineInfo.push(info); continue;
+    }
+    if (first === 'RES') {
+      // RES n: giữ n word (điền 0). Nhãn đứng trước (nếu có) đã tách ở trên.
+      const v = parseNumberToken(tail, symbols, radix, pc);
+      if (v === null || v === undefined || v < 0) errors.push({ line: lineNo, message: `RES không hiểu "${tail}"` });
+      else { info.mnemonic = 'RES'; info.ops = [String(v)]; info.size = v; info.addr = pc; pc += v; }
+      lineInfo.push(info); continue;
+    }
+    if (first === 'FILL') {
+      // FILL giá trị, số lượng: điền n word bằng giá trị cho trước.
+      const fOps = splitOperands(tail);
+      const fv = fOps.length >= 1 ? parseNumberToken(fOps[0], symbols, radix, pc) : null;
+      const fn = fOps.length >= 2 ? parseNumberToken(fOps[1], symbols, radix, pc) : null;
+      if (fv === null || fv === undefined || fn === null || fn === undefined || fn < 0) errors.push({ line: lineNo, message: `FILL cần dạng: FILL giá_trị, số_lượng` });
+      else { info.mnemonic = 'FILL'; info.ops = [String(fv), String(fn)]; info.size = fn; info.addr = pc; pc += fn; }
+      lineInfo.push(info); continue;
+    }
+    if (first === 'DA') {
+      // DA "chuỗi": nén 2 ký tự vào 1 word (ký tự đầu ở byte thấp).
+      const strMatch = tail.match(/"([^"]*)"/);
+      const text = strMatch ? strMatch[1] : tail;
+      info.mnemonic = 'DA'; info.ops = [text]; info.size = Math.ceil(text.length / 2); info.addr = pc;
+      pc += info.size; lineInfo.push(info); continue;
     }
     if (first === 'DB' || first === 'DW' || first === 'DATA') {
       info.mnemonic = first; info.ops = splitOperands(tail); info.size = info.ops.length; info.addr = pc;
@@ -366,7 +582,7 @@ export function assemble(source) {
     if (info.directive === 'END') break;
     if (!info.mnemonic) continue;
     if (info.mnemonic === 'BANKSEL') {
-      const target = parseNumberToken(info.ops[0] || '', symbols);
+      const target = parseNumberToken(info.ops[0] || '', symbols, info.radix || 10, info.addr);
       if (target === undefined || target === null) {
         errors.push({ line: info.lineNo, message: `BANKSEL không hiểu "${info.ops[0] || ''}"` });
         continue;
@@ -385,9 +601,45 @@ export function assemble(source) {
       listing.push({ addr: info.addr + 1, code: c1, text: '', line: info.lineNo });
       continue;
     }
+    if (info.mnemonic === 'PAGESEL') {
+      const target = parseNumberToken(info.ops[0] || '', symbols, info.radix || 10, info.addr);
+      if (target === undefined || target === null) {
+        errors.push({ line: info.lineNo, message: `PAGESEL không hiểu "${info.ops[0] || ''}"` });
+        continue;
+      }
+      const page = (target >> 11) & 3; // bit 11-12 của địa chỉ -> PCLATH bit 3-4
+      const c0 = ((page & 1) ? 0x1400 : 0x1000) | (3 << 7) | 0x0a; // BSF/BCF PCLATH,3
+      const c1 = ((page & 2) ? 0x1400 : 0x1000) | (4 << 7) | 0x0a; // BSF/BCF PCLATH,4
+      program[info.addr] = c0; program[info.addr + 1] = c1;
+      lineToAddr.set(info.lineNo, info.addr); addrToLine.set(info.addr, info.lineNo);
+      listing.push({ addr: info.addr, code: c0, text: `PAGESEL ${info.ops[0]}`, line: info.lineNo });
+      listing.push({ addr: info.addr + 1, code: c1, text: '', line: info.lineNo });
+      continue;
+    }
+    if (info.mnemonic === 'RES') {
+      // Đã giữ chỗ ở pass 1, program mặc định là 0 (NOP) nên không cần ghi gì.
+      lineToAddr.set(info.lineNo, info.addr); addrToLine.set(info.addr, info.lineNo);
+      continue;
+    }
+    if (info.mnemonic === 'FILL') {
+      const fv = parseInt(info.ops[0], 10), fn = parseInt(info.ops[1], 10);
+      for (let idx = 0; idx < fn; idx++) program[info.addr + idx] = fv & 0x3fff;
+      lineToAddr.set(info.lineNo, info.addr); addrToLine.set(info.addr, info.lineNo);
+      continue;
+    }
+    if (info.mnemonic === 'DA') {
+      const text = info.ops[0];
+      for (let idx = 0; idx < text.length; idx += 2) {
+        const lo = text.charCodeAt(idx) & 0xff;
+        const hi = idx + 1 < text.length ? text.charCodeAt(idx + 1) & 0xff : 0;
+        program[info.addr + (idx >> 1)] = ((hi << 8) | lo) & 0x3fff; // word 14-bit
+      }
+      lineToAddr.set(info.lineNo, info.addr); addrToLine.set(info.addr, info.lineNo);
+      continue;
+    }
     if (info.mnemonic === 'DB' || info.mnemonic === 'DW' || info.mnemonic === 'DATA') {
       info.ops.forEach((tok, idx) => {
-        const v = parseNumberToken(tok, symbols);
+        const v = parseNumberToken(tok, symbols, info.radix || 10, info.addr);
         if (v === null || v === undefined) errors.push({ line: info.lineNo, message: `DB/DW không hiểu "${tok}"` });
         else program[info.addr + idx] = v & 0x3fff;
       });
@@ -400,7 +652,7 @@ export function assemble(source) {
       lineToAddr.set(info.lineNo, info.addr); addrToLine.set(info.addr, info.lineNo);
       continue;
     }
-    const r = encodeInstruction(info.mnemonic, info.ops, symbols, info.lineNo);
+    const r = encodeInstruction(info.mnemonic, info.ops, symbols, info.lineNo, info.radix || 10, info.addr);
     if (r.error) { errors.push({ line: info.lineNo, message: r.error }); continue; }
     program[info.addr] = r.code;
     lineToAddr.set(info.lineNo, info.addr); addrToLine.set(info.addr, info.lineNo);
@@ -467,6 +719,12 @@ export class PIC16F877A {
     this.txLog = [];        // mã ký tự đã phát qua TX
     this.onTx = null;       // callback(code) khi CPU phát 1 ký tự
     this.onLcd = null;
+    // EEPROM dữ liệu (256 byte): KHÔNG xoá khi reset (như phần cứng thật,
+    // dữ liệu ghi rồi vẫn còn sau khi nạp lại code). Xoá tay bằng loadEeprom([]).
+    this.eeprom = new Uint8Array(256);
+    this.eeUnlock = 0;      // 0=chưa mở, 1=đã ghi 0x55, 2=đã ghi 0x55+0xAA
+    this.eeWriteCountdown = 0; // chu kỳ lệnh còn lại của lần ghi EEPROM đang chạy
+    this.eeWriteAddr = 0; this.eeWriteData = 0; // chốt khi bắt đầu ghi
     this.reset();
   }
 
@@ -480,15 +738,18 @@ export class PIC16F877A {
       PIR1: 0, PIR2: 0, PIE1: 0, PIE2: 0, PCON: 0,
       TXSTA: 0x02, RCSTA: 0, SPBRG: 0, TXREG: 0, RCREG: 0,
       ADRESH: 0, ADRESL: 0, ADCON0: 0, ADCON1: 0,
-      SSPBUF: 0, SSPCON: 0, SSPADD: 0, SSPSTAT: 0,
+      SSPBUF: 0, SSPCON: 0, SSPADD: 0, SSPSTAT: 0, SSPCON2: 0,
       CCPR1L: 0, CCPR1H: 0, CCP1CON: 0, CCPR2L: 0, CCPR2H: 0, CCP2CON: 0,
-      EEDATA: 0, EEADR: 0, EECON1: 0, EECON2: 0,
+      CMCON: 0x07, CVRCON: 0,
+      EEDATA: 0, EEADR: 0, EECON1: 0, EECON2: 0, EEDATH: 0, EEADRH: 0,
     };
     this.portLatch = [0, 0, 0, 0, 0];
     this.portInput = [0x3f, 0xff, 0xff, 0xff, 0x07]; // mức ngoài: nút nhấn có pull-up -> 1
     this.tris = [0x3f, 0xff, 0xff, 0xff, 0x07];
     this.txEmpty = true; this.rxReady = false;
     this.adcCountdown = 0;
+    this.eeUnlock = 0; this.eeWriteCountdown = 0; // ghi EEPROM đang chạy thì huỷ
+    this.ccp1Pwm = 0; this.ccp2Pwm = 0; // mức ra PWM tức thời (CCP1->RC2, CCP2->RC1)
     this.tmr0Prescale = 0; this.tmr1Prescale = 0; this.tmr2Prescale = 0; this.tmr2Postscale = 0;
     this.prevRB0 = 1; this.prevRB47 = 0xf0;
     this.prevE = 0;
@@ -542,19 +803,23 @@ export class PIC16F877A {
 
   readPort(i) {
     let v = 0;
-    for (let b = 0; b < PORT_BITS[i]; b++) {
-      const bit = (this.tris[i] >> b) & 1 ? (this.portInput[i] >> b) & 1 : (this.portLatch[i] >> b) & 1;
-      v |= bit << b;
-    }
+    for (let b = 0; b < PORT_BITS[i]; b++) v |= this.pinLevel(i, b) << b;
     return v;
   }
-  // Mức chân thật (kể cả input): dùng cho GPIO Inspector / Logic analyzer
+  // Mức chân thật (kể cả input): dùng cho GPIO Inspector / Logic analyzer.
+  // PWM của CCP chiếm chân (bất chấp TRISC): CCP1 -> RC2, CCP2 -> RC1.
   pinLevel(portIdx, bit) {
+    if (portIdx === 2 && bit === 2 && (this.sfr.CCP1CON & 0x0f) === 0x0c) return this.ccp1Pwm;
+    if (portIdx === 2 && bit === 1 && (this.sfr.CCP2CON & 0x0f) === 0x0c) return this.ccp2Pwm;
     return (this.tris[portIdx] >> bit) & 1
       ? (this.portInput[portIdx] >> bit) & 1
       : (this.portLatch[portIdx] >> bit) & 1;
   }
-  pinDirection(portIdx, bit) { return ((this.tris[portIdx] >> bit) & 1) ? 'in' : 'out'; }
+  pinDirection(portIdx, bit) {
+    if (portIdx === 2 && bit === 2 && (this.sfr.CCP1CON & 0x0f) === 0x0c) return 'out';
+    if (portIdx === 2 && bit === 1 && (this.sfr.CCP2CON & 0x0f) === 0x0c) return 'out';
+    return ((this.tris[portIdx] >> bit) & 1) ? 'in' : 'out';
+  }
 
   readSFR(name) {
     switch (name) {
@@ -570,13 +835,14 @@ export class PIC16F877A {
       case 'TRISA': case 'TRISB': case 'TRISC': case 'TRISD': case 'TRISE':
         return this.tris[PORT_NAMES.indexOf(name.replace('TRIS', 'PORT'))];
       case 'PIR1': {
-        let v = this.sfr.PIR1 & 0xaf; // giữ ADIF/TMR1IF/TMR2IF/CCP1IF/SSPIF, bỏ TXIF/RCIF cũ
+        let v = this.sfr.PIR1 & 0xcf; // giữ ADIF/PSPIF/TMR1IF/TMR2IF/CCP1IF/SSPIF, bỏ TXIF/RCIF cũ để tính lại
         if (this.txEmpty) v |= 0x10;
         if (this.rxReady) v |= 0x20;
         return v;
       }
       case 'TXSTA': return (this.sfr.TXSTA & 0xfd) | (this.txEmpty ? 0x02 : 0);
       case 'RCREG': { const v = this.sfr.RCREG; this.rxReady = false; return v; }
+      case 'EECON2': return 0; // thanh ghi chỉ ghi (chuỗi mở khoá), đọc về 0
       default: return this.sfr[name] ?? 0;
     }
   }
@@ -616,6 +882,31 @@ export class PIC16F877A {
         return;
       }
       case 'PIR1': this.sfr.PIR1 = value & 0xcf; return; // TXIF/RCIF chỉ đọc
+      case 'EECON2': {
+        // Chuỗi mở khoá ghi EEPROM: phải ghi 0x55 rồi 0xAA, ghi khác -> reset.
+        if (value === 0x55) this.eeUnlock = 1;
+        else if (value === 0xaa && this.eeUnlock === 1) this.eeUnlock = 2;
+        else this.eeUnlock = 0;
+        this.sfr.EECON2 = value; return;
+      }
+      case 'EECON1': {
+        this.sfr.EECON1 = value;
+        // Đọc EEPROM dữ liệu: RD=1, EEPGD=0 -> EEDATA = eeprom[EEADR], RD tự xoá.
+        if ((value & 0x01) && !(value & 0x80)) {
+          this.sfr.EEDATA = this.eeprom[this.sfr.EEADR & 0xff];
+          this.sfr.EECON1 &= ~0x01;
+        }
+        // Ghi EEPROM dữ liệu: WR=1, WREN=1, EEPGD=0, đã mở khoá 0x55/0xAA.
+        // Ghi mất ~4ms (4000 chu kỳ lệnh @4MHz): WR giữ 1 trong lúc ghi, xong
+        // phần cứng tự xoá WR và đặt EEIF. Không mở khoá đúng -> không ghi.
+        if ((value & 0x02) && (value & 0x04) && !(value & 0x80) && this.eeUnlock === 2) {
+          this.eeWriteAddr = this.sfr.EEADR & 0xff;
+          this.eeWriteData = this.sfr.EEDATA;
+          this.eeWriteCountdown = 4000;
+          this.eeUnlock = 0;
+        }
+        return;
+      }
       case 'ADCON0': {
         const wasGo = (this.sfr.ADCON0 >> 1) & 1;
         this.sfr.ADCON0 = value;
@@ -684,6 +975,14 @@ export class PIC16F877A {
     this.prevRB0 = level;
   }
 
+  // Nạp sẵn dữ liệu EEPROM (mảng byte, tối đa 256). Dùng cho test và cho
+  // code cần dữ liệu có sẵn (thay cho directive DE chưa hỗ trợ).
+  loadEeprom(bytes) {
+    this.eeprom.fill(0);
+    const arr = bytes || [];
+    for (let i = 0; i < arr.length && i < 256; i++) this.eeprom[i] = arr[i] & 0xff;
+  }
+
   setAnalog(channel, volts) { this.analogVolts[channel & 7] = Math.max(0, Math.min(5, volts)); }
 
   receiveChar(code) {
@@ -692,10 +991,10 @@ export class PIC16F877A {
     this.rxReady = true;
   }
 
-  // --- Ngắt ---
-  interruptPending() {
+  // Có ngắt nào đang chờ mà đã được phép không (không xét GIE — dùng cho
+  // cả đánh thức SLEEP lẫn quyết định nhảy ISR).
+  anyEnabledInterrupt() {
     const intcon = this.sfr.INTCON;
-    if (!(intcon & 0x80)) return false; // GIE=0
     if ((intcon & 0x04) && (intcon & 0x20)) return true; // TMR0IF & TMR0IE
     if ((intcon & 0x02) && (intcon & 0x10)) return true; // INTF & INTE
     if ((intcon & 0x01) && (intcon & 0x08)) return true; // RBIF & RBIE
@@ -704,10 +1003,22 @@ export class PIC16F877A {
       if ((pir1 & 0x40) && (pie1 & 0x40)) return true; // ADIF & ADIE
       if ((pir1 & 0x20) && (pie1 & 0x20)) return true; // RCIF & RCIE
       if ((pir1 & 0x10) && (pie1 & 0x10)) return true; // TXIF & TXIE
-      if ((pir1 & 0x01) && (pie1 & 0x01)) return true; // TMR1IF
-      if ((pir1 & 0x02) && (pie1 & 0x02)) return true; // TMR2IF
+      if ((pir1 & 0x01) && (pie1 & 0x01)) return true; // TMR1IF & TMR1IE
+      if ((pir1 & 0x02) && (pie1 & 0x02)) return true; // TMR2IF & TMR2IE
+      if ((pir1 & 0x04) && (pie1 & 0x04)) return true; // CCP1IF & CCP1IE
+      if ((pir1 & 0x08) && (pie1 & 0x08)) return true; // SSPIF & SSPIE
+      if ((pir1 & 0x80) && (pie1 & 0x80)) return true; // PSPIF & PSPIE
+      const pir2 = this.sfr.PIR2, pie2 = this.sfr.PIE2;
+      if ((pir2 & 0x01) && (pie2 & 0x01)) return true; // CCP2IF & CCP2IE
+      if ((pir2 & 0x08) && (pie2 & 0x08)) return true; // BCLIF & BCLIE
+      if ((pir2 & 0x10) && (pie2 & 0x10)) return true; // EEIF & EEIE
+      if ((pir2 & 0x40) && (pie2 & 0x40)) return true; // CMIF & CMIE
     }
     return false;
+  }
+
+  interruptPending() {
+    return (this.sfr.INTCON & 0x80) && this.anyEnabledInterrupt(); // GIE=1
   }
 
   pushStack(v) { this.stack[this.sp] = v & 0x1fff; this.sp = (this.sp + 1) & 7; }
@@ -729,8 +1040,10 @@ export class PIC16F877A {
         if (this.tmr0Prescale >= (1 << (ps + 1))) { this.tmr0Prescale = 0; this.incTMR0(); }
       }
     }
-    // TMR1: chạy khi TMR1ON (T1CON bit0), clock nội Fosc/4
-    if (this.sfr.T1CON & 1) {
+    // TMR1: chạy khi TMR1ON (bit0) và clock nội (TMR1CS=0). TMR1CS=1 là clock
+    // ngoài ở chân RC0/T1CKI — không có nguồn clock ngoài trong mô phỏng nên
+    // timer đứng yên (trước đây chạy cả khi TMR1CS=1, sai datasheet).
+    if ((this.sfr.T1CON & 1) && !((this.sfr.T1CON >> 1) & 1)) {
       this.tmr1Prescale++;
       const ps = (this.sfr.T1CON >> 4) & 3;
       if (this.tmr1Prescale >= (1 << ps)) {
@@ -761,6 +1074,27 @@ export class PIC16F877A {
       this.adcCountdown--;
       if (this.adcCountdown === 0) this.finishAdc();
     }
+    // EEPROM: ghi đang chờ -> hết ~4ms thì chốt, WR=0, EEIF=1
+    if (this.eeWriteCountdown > 0) {
+      this.eeWriteCountdown--;
+      if (this.eeWriteCountdown === 0) {
+        this.eeprom[this.eeWriteAddr] = this.eeWriteData;
+        this.sfr.EECON1 &= ~0x02; // WR=0
+        this.sfr.PIR2 |= 0x10;    // EEIF=1
+      }
+    }
+    // PWM (CCP1->RC2, CCP2->RC1): mode 1100, Timer2 đang chạy. Duty 10-bit =
+    // CCPRxL:CCPxCON<5:4>, chu kỳ = 4*(PR2+1) đơn vị 1/4 TMR2. So sánh theo
+    // TMR2*4 (bỏ qua pha 2-bit mịn — độ phân giải duty ~0.4%, đủ cho bài lab).
+    // Timer2 tắt -> ra 0.
+    if ((this.sfr.T2CON & 0x04) && (this.sfr.CCP1CON & 0x0f) === 0x0c) {
+      const duty1 = (this.sfr.CCPR1L << 2) | ((this.sfr.CCP1CON >> 4) & 3);
+      this.ccp1Pwm = (this.sfr.TMR2 * 4 < duty1) ? 1 : 0;
+    } else this.ccp1Pwm = 0;
+    if ((this.sfr.T2CON & 0x04) && (this.sfr.CCP2CON & 0x0f) === 0x0c) {
+      const duty2 = (this.sfr.CCPR2L << 2) | ((this.sfr.CCP2CON >> 4) & 3);
+      this.ccp2Pwm = (this.sfr.TMR2 * 4 < duty2) ? 1 : 0;
+    } else this.ccp2Pwm = 0;
   }
 
   incTMR0() {
@@ -786,10 +1120,16 @@ export class PIC16F877A {
   // --- Thực thi 1 lệnh ---
   step() {
     if (this.sleeping) {
-      // SLEEP: dừng cho tới khi có ngắt (kể cả khi GIE=0 vẫn đánh thức)
-      const intcon = this.sfr.INTCON;
-      const wake = (intcon & 0x04) || (intcon & 0x02) || (intcon & 0x01);
-      if (!wake) return { addr: this.pc, op: 0, skipped: false };
+      // ADC với clock RC nội (ADCS=11) vẫn chạy trong SLEEP và có thể đánh thức
+      // CPU khi xong (ADIF). Các clock Fosc/2/8/32 dừng theo Fosc nên ADC đứng.
+      if (this.adcCountdown > 0 && ((this.sfr.ADCON0 >> 6) & 3) === 3) {
+        this.adcCountdown--;
+        if (this.adcCountdown === 0) this.finishAdc();
+      }
+      // SLEEP: dừng cho tới khi có ngắt được phép (kể cả ngắt ngoại vi khi
+      // PEIE=1, và kể cả khi GIE=0 vẫn đánh thức — chỉ khác là GIE=0 thì
+      // chạy tiếp lệnh sau SLEEP thay vì nhảy vào ISR).
+      if (!this.anyEnabledInterrupt()) return { addr: this.pc, op: 0, skipped: false };
       this.sleeping = false;
       this.setFlag(ST_PD, 1);
     }
@@ -863,8 +1203,10 @@ export class PIC16F877A {
     return { addr, op, skipped };
   }
 
-  // Chạy n lệnh (dùng cho test + vòng lặp UI)
-  run(n) { for (let i = 0; i < n; i++) { if (this.halted || this.sleeping) break; this.step(); } }
+  // Chạy n lệnh (dùng cho test + vòng lặp UI). KHÔNG dừng khi CPU ngủ:
+  // step() tự xử lý SLEEP (ADC clock RC vẫn chạy, kiểm tra đánh thức) nên
+  // phải step tiếp thì CPU mới tỉnh lại được.
+  run(n) { for (let i = 0; i < n; i++) { if (this.halted) break; this.step(); } }
 
   // Đọc RAM bank 0 vùng GPR 0x20-0x7F (phục vụ panel giám sát)
   readRamBank0() {
