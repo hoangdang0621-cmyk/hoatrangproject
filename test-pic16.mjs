@@ -985,14 +985,16 @@ function rewire(netlist, a, b, a2, b2) {
 }
 
 // ===========================================================================
-// TỰ ĐIỀN RỘNG (SỐ CỘT 5–99) × DÀI (SỐ HÀNG 2–99) — popup Bo mạch
+// TỰ ĐIỀN RỘNG (SỐ CỘT 5–99) × DÀI (SỐ HÀNG 5–100, BỘI SỐ CỦA 5) — popup Bo mạch
 // ===========================================================================
-// (e-a) normalizeSize: chuẩn hoá rows
+// (e-a) normalizeSize: chuẩn hoá rows về bội số của 5 (làm tròn xuống, kẹp 5–100)
 {
-  check('(e-a) {cols:42, rows:12, rails:true} giữ nguyên',
-    JSON.stringify(normalizeSize({ cols: 42, rows: 12, rails: true })) === JSON.stringify({ cols: 42, rows: 12, rails: true }), JSON.stringify(normalizeSize({ cols: 42, rows: 12, rails: true })));
-  check('(e-a) rows 1 kẹp lên 2, rows 150 kẹp xuống 99; rows 30 giữ nguyên',
-    normalizeSize({ cols: 42, rows: 1 }).rows === 2 && normalizeSize({ cols: 42, rows: 30 }).rows === 30 && normalizeSize({ cols: 42, rows: 150 }).rows === 99, '');
+  check('(e-a) {cols:42, rows:12, rails:true} làm tròn xuống 10',
+    JSON.stringify(normalizeSize({ cols: 42, rows: 12, rails: true })) === JSON.stringify({ cols: 42, rows: 10, rails: true }), JSON.stringify(normalizeSize({ cols: 42, rows: 12, rails: true })));
+  check('(e-a) rows 1 -> 5, rows 27 -> 25, rows 99 -> 95, rows 150 -> 100; rows 30 giữ nguyên',
+    normalizeSize({ cols: 42, rows: 1 }).rows === 5 && normalizeSize({ cols: 42, rows: 27 }).rows === 25
+    && normalizeSize({ cols: 42, rows: 99 }).rows === 95 && normalizeSize({ cols: 42, rows: 150 }).rows === 100
+    && normalizeSize({ cols: 42, rows: 30 }).rows === 30, '');
   check('(e-a) {cols:42} không có rows -> rows 10; rows chữ -> 10',
     normalizeSize({ cols: 42 }).rows === 10 && normalizeSize({ cols: 42, rows: 'abc' }).rows === 10, '');
   check('(e-a) mẫu sẵn 830 giữ nguyên số (rows 10 qua boardSize)',
@@ -1003,136 +1005,131 @@ function rewire(netlist, a, b, a2, b2) {
 
 // (e-b) holeCount = cols x rows + 4 rail
 {
-  check('(e-b) 42 cột x 12 hàng có rail = 672 lỗ',
-    holeCount({ cols: 42, rows: 12, rails: true }) === 672, `holes=${holeCount({ cols: 42, rows: 12, rails: true })}`);
-  check('(e-b) 20 cột x 5 hàng không rail = 100 lỗ; 99 x 26 có rail = 2970 lỗ',
+  check('(e-b) 42 cột x 10 hàng có rail = 588 lỗ',
+    holeCount({ cols: 42, rows: 10, rails: true }) === 588, `holes=${holeCount({ cols: 42, rows: 10, rails: true })}`);
+  check('(e-b) 20 cột x 5 hàng không rail = 100 lỗ; 99 x 25 có rail = 2871 lỗ',
     holeCount({ cols: 20, rows: 5, rails: false }) === 100
-    && holeCount({ cols: 99, rows: 26, rails: true }) === 2970, '');
-  check('(e-b) allHoles 42x12 có rail = 672; 20x5 không rail = 100',
-    allHoles({ cols: 42, rows: 12, rails: true }).length === 672
+    && holeCount({ cols: 99, rows: 25, rails: true }) === 2871, '');
+  check('(e-b) allHoles 42x10 có rail = 588; 20x5 không rail = 100',
+    allHoles({ cols: 42, rows: 10, rails: true }).length === 588
     && allHoles({ cols: 20, rows: 5, rails: false }).length === 100, '');
-  check('(e-b) allHoles 99x26 có rail = 2970, không lỗ trùng id',
+  check('(e-b) allHoles 99x25 có rail = 2871, không lỗ trùng id',
     (() => {
-      const ids = allHoles({ cols: 99, rows: 26, rails: true }).map((h) => h.id);
-      return ids.length === 2970 && new Set(ids).size === 2970;
+      const ids = allHoles({ cols: 99, rows: 25, rails: true }).map((h) => h.id);
+      return ids.length === 2871 && new Set(ids).size === 2871;
     })(), '');
-  check('(e-b) sizeLabel 42x12 có rail -> "Tùy chỉnh · 672 lỗ"',
-    sizeLabel({ cols: 42, rows: 12, rails: true }) === 'Tùy chỉnh · 672 lỗ', '');
+  check('(e-b) sizeLabel 42x10 có rail -> "Tùy chỉnh · 588 lỗ"',
+    sizeLabel({ cols: 42, rows: 10, rails: true }) === 'Tùy chỉnh · 588 lỗ', '');
 }
 
 // (e-c) Strip nối theo đoạn 5 hàng; rail B+/B− theo rows
 {
-  const s12 = { cols: 42, rows: 12, rails: true };
-  check('(e-c) 12 hàng: a5/e5 cùng strip (đoạn 1-5), a5/f5 khác strip, f5/j5 cùng strip (đoạn 6-10), k5 khác cả hai (đoạn 11-15)',
-    stripKey('a5', s12) === stripKey('e5', s12) && stripKey('a5', s12) !== stripKey('f5', s12)
-    && stripKey('f5', s12) === stripKey('j5', s12) && stripKey('k5', s12) !== stripKey('f5', s12), '');
+  const s15 = { cols: 42, rows: 15, rails: true };
+  check('(e-c) 15 hàng: a5/e5 cùng strip (đoạn 1-5), a5/f5 khác strip, f5/j5 cùng strip (đoạn 6-10), k5 khác cả hai (đoạn 11-15)',
+    stripKey('a5', s15) === stripKey('e5', s15) && stripKey('a5', s15) !== stripKey('f5', s15)
+    && stripKey('f5', s15) === stripKey('j5', s15) && stripKey('k5', s15) !== stripKey('f5', s15), '');
   check('(e-c) 10 hàng: a5/e5 cùng strip, f5/j5 cùng strip, a5/f5 khác strip (như cũ)',
     stripKey('a5', 830) === stripKey('e5', 830) && stripKey('f5', 830) === stripKey('j5', 830) && stripKey('a5', 830) !== stripKey('f5', 830), '');
   check('(e-c) 5 hàng: a1/b1/c1/e1 cùng 1 strip (chỉ 1 đoạn 5)',
     stripKey('a1', { cols: 20, rows: 5, rails: false }) === stripKey('b1', { cols: 20, rows: 5, rails: false })
     && stripKey('a1', { cols: 20, rows: 5, rails: false }) === stripKey('e1', { cols: 20, rows: 5, rails: false }), '');
-  check('(e-c) 12 hàng: B+ là hàng 12, B− là hàng 13',
-    (() => { const q = parseHole('B+42', s12); return q && q.r === 12 && q.c === 42; })()
-    && (() => { const q = parseHole('B-42', s12); return q && q.r === 13 && q.c === 42; })(), '');
-  check('(e-c) 2 hàng: chỉ có a/b, a1/b1 cùng 1 strip (cùng đoạn 5)',
-    parseHole('c1', { cols: 20, rows: 2, rails: false }) === null
-    && stripKey('a1', { cols: 20, rows: 2, rails: false }) === stripKey('b1', { cols: 20, rows: 2, rails: false }), '');
+  check('(e-c) 15 hàng: B+ là hàng 15, B− là hàng 16',
+    (() => { const q = parseHole('B+42', s15); return q && q.r === 15 && q.c === 42; })()
+    && (() => { const q = parseHole('B-42', s15); return q && q.r === 16 && q.c === 42; })(), '');
+  check('(e-c) rows 2 không còn hợp lệ: boardSize({cols:20, rows:2}) làm tròn lên 5 hàng',
+    boardSize({ cols: 20, rows: 2, rails: false }).rows === 5
+    && normalizeSize({ cols: 20, rows: 2, rails: false }).rows === 5, '');
 }
 
 // (e-d) picRows + picLegs theo công thức mới: hàng chân (2, max(6, rows-2))
 {
-  check('(e-d) picRows: 830 -> [1,7] (b/h), 12 hàng -> [1,9] (b/j), 6 hàng -> [1,5] (b/f), 2 hàng -> [1,5] (hàng 6 treo), 26 hàng -> [1,23] (b/x)',
+  check('(e-d) picRows: 830 -> [1,7] (b/h), 15 hàng -> [1,12] (b/m), 5 hàng -> [1,5] (hàng 6 treo), 25 hàng -> [1,22] (b/w)',
     JSON.stringify(picRows(830)) === JSON.stringify([1, 7])
-    && JSON.stringify(picRows({ cols: 42, rows: 12, rails: true })) === JSON.stringify([1, 9])
-    && JSON.stringify(picRows({ cols: 20, rows: 6, rails: false })) === JSON.stringify([1, 5])
-    && JSON.stringify(picRows({ cols: 20, rows: 2, rails: false })) === JSON.stringify([1, 5])
-    && JSON.stringify(picRows({ cols: 20, rows: 26, rails: false })) === JSON.stringify([1, 23]), '');
-  check('(e-d) chip 42 cột x 12 hàng: đủ 40 chân, chân 1 ở hàng b, chân 21 ở hàng j',
+    && JSON.stringify(picRows({ cols: 42, rows: 15, rails: true })) === JSON.stringify([1, 12])
+    && JSON.stringify(picRows({ cols: 20, rows: 5, rails: false })) === JSON.stringify([1, 5])
+    && JSON.stringify(picRows({ cols: 20, rows: 25, rails: false })) === JSON.stringify([1, 22]), '');
+  check('(e-d) chip 42 cột x 15 hàng: đủ 40 chân, chân 1 ở hàng b, chân 21 ở hàng m',
     (() => {
-      const legs = picLegs({ cols: 42, rows: 12, rails: true });
-      return legs.length === 40 && legs.every((l) => !!l.hole) && legs[0].r === 1 && legs[0].hole === 'b12' && legs[20].r === 9 && legs[20].hole === 'j31';
+      const legs = picLegs({ cols: 42, rows: 15, rails: true });
+      return legs.length === 40 && legs.every((l) => !!l.hole) && legs[0].r === 1 && legs[0].hole === 'b12' && legs[20].r === 12 && legs[20].hole === 'm31';
     })(), '');
-  check('(e-d) chip 20 cột x 6 hàng: đủ 40 chân, chân 1 ở b1, chân 40 ở f1',
+  check('(e-d) chip 20 cột x 5 hàng: 20 chân cắm được (hàng b), 20 chân hàng 6 treo ngoài board',
     (() => {
-      const legs = picLegs({ cols: 20, rows: 6, rails: false });
-      return legs.length === 40 && legs.every((l) => !!l.hole) && legs[0].hole === 'b1' && legs[39].hole === 'f1';
-    })(), '');
-  check('(e-d) chip 20 cột x 2 hàng: 20 chân cắm được (hàng b), 20 chân hàng 6 treo ngoài board',
-    (() => {
-      const legs = picLegs({ cols: 20, rows: 2, rails: false });
+      const legs = picLegs({ cols: 20, rows: 5, rails: false });
       return legs.length === 40 && legs.slice(0, 20).every((l) => !!l.hole) && legs[0].hole === 'b1'
         && legs.slice(20).every((l) => !l.hole);
     })(), '');
-  check('(e-d) chip 20 cột x 26 hàng: đủ 40 chân, chân 1 ở b1, chân 40 ở x1',
+  check('(e-d) chip 20 cột x 25 hàng: đủ 40 chân, chân 1 ở b1, chân 40 ở w1',
     (() => {
-      const legs = picLegs({ cols: 20, rows: 26, rails: false });
-      return legs.length === 40 && legs.every((l) => !!l.hole) && legs[0].hole === 'b1' && legs[39].hole === 'x1';
+      const legs = picLegs({ cols: 20, rows: 25, rails: false });
+      return legs.length === 40 && legs.every((l) => !!l.hole) && legs[0].hole === 'b1' && legs[39].hole === 'w1';
     })(), '');
-  check('(e-d) chip 99 cột x 26 hàng: picCol=40, chân 1 ở b40',
-    picCol({ cols: 99, rows: 26, rails: true }) === 40
-    && picLegs({ cols: 99, rows: 26, rails: true })[0].hole === 'b40', '');
+  check('(e-d) chip 99 cột x 25 hàng: picCol=40, chân 1 ở b40',
+    picCol({ cols: 99, rows: 25, rails: true }) === 40
+    && picLegs({ cols: 99, rows: 25, rails: true })[0].hole === 'b40', '');
 }
 
 // (e-e) Địa chỉ lỗ: chữ hàng a–z theo số hàng
 {
-  check('(e-e) "k5" trên board 10 hàng thì sai, trên board 12 hàng thì đúng (hàng 10)',
+  check('(e-e) "k5" trên board 10 hàng thì sai, trên board 15 hàng thì đúng (hàng 10)',
     parseHole('k5', 830) === null
-    && (() => { const p = parseHole('k5', { cols: 42, rows: 12, rails: true }); return p && p.r === 10 && p.c === 5; })(), '');
-  check('(e-e) "l12" trên 12 hàng thì đúng (hàng 11), "m1" thì sai',
-    (() => { const p = parseHole('l12', { cols: 42, rows: 12, rails: true }); return p && p.r === 11 && p.c === 12; })()
-    && parseHole('m1', { cols: 42, rows: 12, rails: true }) === null, '');
-  check('(e-e) "z99" trên board 99x26 thì đúng (hàng 25, cột 99), "a100" thì sai',
-    (() => { const p = parseHole('z99', { cols: 99, rows: 26, rails: true }); return p && p.r === 25 && p.c === 99; })()
-    && parseHole('a100', { cols: 99, rows: 26, rails: true }) === null, '');
+    && (() => { const p = parseHole('k5', { cols: 42, rows: 15, rails: true }); return p && p.r === 10 && p.c === 5; })(), '');
+  check('(e-e) "l12" trên 15 hàng thì đúng (hàng 11), "p1" thì sai',
+    (() => { const p = parseHole('l12', { cols: 42, rows: 15, rails: true }); return p && p.r === 11 && p.c === 12; })()
+    && parseHole('p1', { cols: 42, rows: 15, rails: true }) === null, '');
+  check('(e-e) "y99" trên board 99x25 thì đúng (hàng 24, cột 99), "a100" thì sai',
+    (() => { const p = parseHole('y99', { cols: 99, rows: 25, rails: true }); return p && p.r === 24 && p.c === 99; })()
+    && parseHole('a100', { cols: 99, rows: 25, rails: true }) === null, '');
   check('(e-e) "K5" hoa vẫn sai ở model (UI thường hoá trước)',
-    parseHole('K5', { cols: 42, rows: 12, rails: true }) === null, '');
+    parseHole('K5', { cols: 42, rows: 15, rails: true }) === null, '');
 }
 
 // (e-f) Đổi size có rows khác: giữ/loại linh kiện + dây nguồn nối lại
 {
-  const st12 = defaultBenchState({ cols: 42, rows: 12, rails: true });
-  st12.components.push({ id: 'LED0', type: 'led', anchor: 'a10', rot: 0, props: { color: '#DC2626' } });
-  st12.components.push({ id: 'LED1', type: 'led', anchor: 'k10', rot: 0, props: { color: '#DC2626' } });
-  st12.wires.push({ id: 'W10', a: 'k10', b: 'a11', color: '#2563EB' });
-  check('(e-f) bàn mặc định 42x12: đủ 7 dây nguồn W1–W7, neo chip b12 (hàng chân trên = hàng b), label "Tùy chỉnh · 672 lỗ"',
-    ['W1', 'W2', 'W3', 'W4', 'W5', 'W6', 'W7'].every((id) => st12.wires.some((w) => w.id === id))
-    && st12.components.find((c) => c.type === 'pic').anchor === 'b12'
-    && sizeLabel({ cols: 42, rows: 12, rails: true }) === 'Tùy chỉnh · 672 lỗ', JSON.stringify(st12.components.find((c) => c.type === 'pic')));
-  const r830 = pruneStateForSize(st12, 830);
-  check('(e-f) 42x12 -> 830: LED k10 + dây W10 bị gỡ (hàng k ngoài board), LED a10 giữ',
+  const st15 = defaultBenchState({ cols: 42, rows: 15, rails: true });
+  st15.components.push({ id: 'LED0', type: 'led', anchor: 'a10', rot: 0, props: { color: '#DC2626' } });
+  st15.components.push({ id: 'LED1', type: 'led', anchor: 'k10', rot: 0, props: { color: '#DC2626' } });
+  st15.wires.push({ id: 'W10', a: 'k10', b: 'a11', color: '#2563EB' });
+  check('(e-f) bàn mặc định 42x15: đủ 7 dây nguồn W1–W7, neo chip b12 (hàng chân trên = hàng b), label "Tùy chỉnh · 798 lỗ"',
+    ['W1', 'W2', 'W3', 'W4', 'W5', 'W6', 'W7'].every((id) => st15.wires.some((w) => w.id === id))
+    && st15.components.find((c) => c.type === 'pic').anchor === 'b12'
+    && sizeLabel({ cols: 42, rows: 15, rails: true }) === 'Tùy chỉnh · 798 lỗ', JSON.stringify(st15.components.find((c) => c.type === 'pic')));
+  const r830 = pruneStateForSize(st15, 830);
+  check('(e-f) 42x15 -> 830: LED k10 + dây W10 bị gỡ (hàng k ngoài board), LED a10 giữ',
     !r830.state.components.some((c) => c.id === 'LED1') && r830.state.components.some((c) => c.id === 'LED0')
     && !r830.state.wires.some((w) => w.id === 'W10') && r830.removed.components.join(',') === 'LED1'
     && r830.removed.wires.join(',') === 'W10', JSON.stringify(r830.removed));
   const st830 = defaultBenchState(830);
   st830.components.push({ id: 'LED0', type: 'led', anchor: 'a10', rot: 0, props: { color: '#DC2626' } });
-  const r42x12 = pruneStateForSize(st830, { cols: 42, rows: 12, rails: true });
-  check('(e-f) 830 -> 42x12: LED a10 giữ, dây nguồn W1 nối lại b12->T+22, W6 về T+40',
-    r42x12.state.components.some((c) => c.id === 'LED0')
+  const r42x15 = pruneStateForSize(st830, { cols: 42, rows: 15, rails: true });
+  check('(e-f) 830 -> 42x15: LED a10 giữ, dây nguồn W1 nối lại b12->T+22, W6 về T+40',
+    r42x15.state.components.some((c) => c.id === 'LED0')
     && (() => {
-      const w1 = r42x12.state.wires.find((w) => w.id === 'W1');
-      const w6 = r42x12.state.wires.find((w) => w.id === 'W6');
+      const w1 = r42x15.state.wires.find((w) => w.id === 'W1');
+      const w6 = r42x15.state.wires.find((w) => w.id === 'W6');
       return w1 && w1.a === 'b12' && w1.b === 'T+22' && w6 && w6.b === 'T+40';
-    })(), JSON.stringify(r42x12.state.wires.filter((w) => ['W1', 'W6'].includes(w.id))));
-  const rSame = pruneStateForSize(st12, { cols: 42, rows: 12, rails: true });
-  check('(e-f) đổi size 42x12 về chính nó: không gỡ gì, size giữ nguyên',
+    })(), JSON.stringify(r42x15.state.wires.filter((w) => ['W1', 'W6'].includes(w.id))));
+  const rSame = pruneStateForSize(st15, { cols: 42, rows: 15, rails: true });
+  check('(e-f) đổi size 42x15 về chính nó: không gỡ gì, size giữ nguyên',
     rSame.removed.components.length === 0 && rSame.removed.wires.length === 0
-    && JSON.stringify(rSame.state.size) === JSON.stringify({ cols: 42, rows: 12, rails: true }), JSON.stringify(rSame.state.size));
+    && JSON.stringify(rSame.state.size) === JSON.stringify({ cols: 42, rows: 15, rails: true }), JSON.stringify(rSame.state.size));
 }
 
-// (e-g) normalizeSize kẹp cols 5–99 / rows 2–99
+// (e-g) normalizeSize kẹp cols 5–99 / rows 5–100 (bội số của 5)
 {
-  check('(e-g) {cols:3, rows:1} -> cols 5, rows 2',
-    (() => { const s = normalizeSize({ cols: 3, rows: 1 }); return s.cols === 5 && s.rows === 2; })(), '');
-  check('(e-g) {cols:150, rows:150} -> cols 99, rows 99; {cols:150, rows:99} giữ rows 99',
-    (() => { const s = normalizeSize({ cols: 150, rows: 150 }); return s.cols === 99 && s.rows === 99; })()
-    && normalizeSize({ cols: 150, rows: 99 }).rows === 99, '');
-  check('(e-g) {cols:99, rows:26, rails:true} giữ nguyên',
-    JSON.stringify(normalizeSize({ cols: 99, rows: 26, rails: true })) === JSON.stringify({ cols: 99, rows: 26, rails: true }), '');
+  check('(e-g) {cols:3, rows:1} -> cols 5, rows 5',
+    (() => { const s = normalizeSize({ cols: 3, rows: 1 }); return s.cols === 5 && s.rows === 5; })(), '');
+  check('(e-g) {cols:150, rows:150} -> cols 99, rows 100; {cols:150, rows:99} -> rows 95',
+    (() => { const s = normalizeSize({ cols: 150, rows: 150 }); return s.cols === 99 && s.rows === 100; })()
+    && normalizeSize({ cols: 150, rows: 99 }).rows === 95, '');
+  check('(e-g) {cols:99, rows:26, rails:true} -> rows 25; {cols:42, rows:12} -> rows 10',
+    normalizeSize({ cols: 99, rows: 26, rails: true }).rows === 25
+    && normalizeSize({ cols: 42, rows: 12 }).rows === 10, '');
 }
 
 // (e-h) Nghịch đảo holePos theo cả 2 chiều (pickHole trong bench.js)
 {
-  for (const size of [830, { cols: 42, rows: 12, rails: true }, { cols: 20, rows: 5, rails: false }]) {
+  for (const size of [830, { cols: 42, rows: 15, rails: true }, { cols: 20, rows: 5, rails: false }]) {
     const cols = boardSize(size).cols;
     const rows = boardSize(size).rows;
     const midRow = String.fromCharCode(97 + Math.floor(rows / 2));
@@ -1150,29 +1147,29 @@ function rewire(netlist, a, b, a2, b2) {
 
 // (e-i) canPlace: vùng dưới thân chip theo hàng chân mới
 {
-  const st = defaultBenchState({ cols: 42, rows: 12, rails: true });
-  check('(e-i) 42x12: LED ở f20/g20 (hàng chân chip, trong cột chip) không đặt được',
+  const st = defaultBenchState({ cols: 42, rows: 15, rails: true });
+  check('(e-i) 42x15: LED ở f20/g20 (hàng chân chip, trong cột chip) không đặt được',
     canPlace(st, 'led', 'f20', 0).ok === false && canPlace(st, 'led', 'g20', 0).ok === false, '');
-  check('(e-i) 42x12: LED ở e20/h20 (trong dải hàng chân chip b–j) không đặt được; LED ở a20/k20 (ngoài hàng chân chip) đặt được',
+  check('(e-i) 42x15: LED ở e20/h20 (trong dải hàng chân chip b–m) không đặt được; LED ở a20/n20 (ngoài hàng chân chip) đặt được',
     canPlace(st, 'led', 'e20', 0).ok === false && canPlace(st, 'led', 'h20', 0).ok === false
-    && canPlace(st, 'led', 'a20', 0).ok === true && canPlace(st, 'led', 'k20', 0).ok === true, '');
-  check('(e-i) 42x12: LED ở f40 (hàng chân chip nhưng ngoài cột chip) đặt được',
+    && canPlace(st, 'led', 'a20', 0).ok === true && canPlace(st, 'led', 'n20', 0).ok === true, '');
+  check('(e-i) 42x15: LED ở f40 (hàng chân chip nhưng ngoài cột chip) đặt được',
     canPlace(st, 'led', 'f40', 0).ok === true, '');
-  check('(e-i) 42x12: LED ở a10 đặt được, LED ở l42 (không xoay) rơi ngoài board vì chân thứ 2 sang cột 43',
+  check('(e-i) 42x15: LED ở a10 đặt được, LED ở l42 (không xoay) rơi ngoài board vì chân thứ 2 sang cột 43',
     canPlace(st, 'led', 'a10', 0).ok === true && canPlace(st, 'led', 'l42', 0).ok === false, '');
-  check('(e-i) 42x2: LED ở a5 đặt được (ngoài cột chip), LED ở a20 đặt được (hàng a ngoài thân chip vì hàng chân 2 treo ngoài board), LED ở b20 không đặt được (dưới thân chip)',
-    canPlace(defaultBenchState({ cols: 42, rows: 2, rails: false }), 'led', 'a5', 0).ok === true
-    && canPlace(defaultBenchState({ cols: 42, rows: 2, rails: false }), 'led', 'a20', 0).ok === true
-    && canPlace(defaultBenchState({ cols: 42, rows: 2, rails: false }), 'led', 'b20', 0).ok === false, '');
+  check('(e-i) 42x5: LED ở a5 đặt được (ngoài cột chip), LED ở a20 đặt được (hàng a ngoài thân chip vì hàng chân dưới treo ngoài board), LED ở b20 không đặt được (dưới thân chip)',
+    canPlace(defaultBenchState({ cols: 42, rows: 5, rails: false }), 'led', 'a5', 0).ok === true
+    && canPlace(defaultBenchState({ cols: 42, rows: 5, rails: false }), 'led', 'a20', 0).ok === true
+    && canPlace(defaultBenchState({ cols: 42, rows: 5, rails: false }), 'led', 'b20', 0).ok === false, '');
 }
 
 // (e-j) validateWireEnd theo chữ hàng của board
 {
-  const st = defaultBenchState({ cols: 42, rows: 12, rails: true });
+  const st = defaultBenchState({ cols: 42, rows: 15, rails: true });
   st.wires.push({ id: 'W10', a: 'a10', b: 'a11', color: '#2563EB' });
-  check('(e-j) 42x12: đổi đầu dây sang k5/l5 thì được, sang m5/k43 thì lỗi',
+  check('(e-j) 42x15: đổi đầu dây sang k5/l5 thì được, sang p5/k43 thì lỗi',
     validateWireEnd(st, 'W10', 'b', 'k5').ok === true && validateWireEnd(st, 'W10', 'b', 'l5').ok === true
-    && validateWireEnd(st, 'W10', 'b', 'm5').ok === false && validateWireEnd(st, 'W10', 'b', 'k43').ok === false, '');
+    && validateWireEnd(st, 'W10', 'b', 'p5').ok === false && validateWireEnd(st, 'W10', 'b', 'k43').ok === false, '');
   const r = retargetWireEnd(st, 'W10', 'b', 'k5');
   check('(e-j) retarget sang k5 áp dụng đúng vào state',
     r.ok === true && st.wires.find((w) => w.id === 'W10').b === 'k5', JSON.stringify(st.wires.find((w) => w.id === 'W10')));
@@ -1180,10 +1177,10 @@ function rewire(netlist, a, b, a2, b2) {
 
 // (e-k) sameSize so sánh cả rows
 {
-  check('(e-k) sameSize: 42x12 == 42x12, 42x12 != 42x10, 42x12 có rail != 42x12 không rail',
-    sameSize({ cols: 42, rows: 12, rails: true }, { cols: 42, rows: 12, rails: true })
-    && !sameSize({ cols: 42, rows: 12, rails: true }, { cols: 42, rows: 10, rails: true })
-    && !sameSize({ cols: 42, rows: 12, rails: true }, { cols: 42, rows: 12, rails: false }), '');
+  check('(e-k) sameSize: 42x15 == 42x15, 42x15 != 42x10, 42x15 có rail != 42x15 không rail',
+    sameSize({ cols: 42, rows: 15, rails: true }, { cols: 42, rows: 15, rails: true })
+    && !sameSize({ cols: 42, rows: 15, rails: true }, { cols: 42, rows: 10, rails: true })
+    && !sameSize({ cols: 42, rows: 15, rails: true }, { cols: 42, rows: 15, rails: false }), '');
   check('(e-k) sameSize: mẫu sẵn 830 == boardSize 63x10, != custom 63x10 có rail',
     sameSize(830, { cols: 63, rows: 10, rails: true }) === false
     && sameSize(830, 830), '');
@@ -1191,11 +1188,11 @@ function rewire(netlist, a, b, a2, b2) {
 
 // (e-l) bodyDepth: chiều sâu thân board theo rows
 {
-  check('(e-l) bodyDepth 830 = 47.02mm; 20x26 = 87.66mm; 20x2 = 26.7mm',
+  check('(e-l) bodyDepth 830 = 47.02mm; 20x25 = 85.12mm; 20x5 = 34.32mm',
     Math.abs(bodyDepth(830) - 47.02) < 0.01
-    && Math.abs(bodyDepth({ cols: 20, rows: 26, rails: false }) - 87.66) < 0.01
-    && Math.abs(bodyDepth({ cols: 20, rows: 2, rails: false }) - 26.7) < 0.01,
-    `${bodyDepth(830)}/${bodyDepth({ cols: 20, rows: 26, rails: false })}/${bodyDepth({ cols: 20, rows: 2, rails: false })}`);
+    && Math.abs(bodyDepth({ cols: 20, rows: 25, rails: false }) - 85.12) < 0.01
+    && Math.abs(bodyDepth({ cols: 20, rows: 5, rails: false }) - 34.32) < 0.01,
+    `${bodyDepth(830)}/${bodyDepth({ cols: 20, rows: 25, rails: false })}/${bodyDepth({ cols: 20, rows: 5, rails: false })}`);
 }
 
 // ===========================================================================
@@ -1332,8 +1329,8 @@ function rewire(netlist, a, b, a2, b2) {
     rowLabel(0, 10) === 'a' && rowLabel(25, 26) === 'z' && rowLabel(9, 10) === 'j', '');
   check('(g-a) rowLabel: board 27 hàng: 0->a1, 25->z1, 26->a2',
     rowLabel(0, 27) === 'a1' && rowLabel(25, 27) === 'z1' && rowLabel(26, 27) === 'a2', '');
-  check('(g-a) rowLabel: board 52 hàng: 51->z2; board 53 hàng: 52->a3; board 99 hàng: 98->u4',
-    rowLabel(51, 52) === 'z2' && rowLabel(52, 53) === 'a3' && rowLabel(98, 99) === 'u4', '');
+  check('(g-a) rowLabel: board 50 hàng: 49->x2; board 55 hàng: 52->a3; board 100 hàng: 98->u4',
+    rowLabel(49, 50) === 'x2' && rowLabel(52, 55) === 'a3' && rowLabel(98, 100) === 'u4', '');
   check('(g-a) holeId trên board 30 hàng: (26,5)->a25, (0,12)->a112',
     holeId(26, 5, { cols: 42, rows: 30, rails: true }) === 'a25'
     && holeId(0, 12, { cols: 42, rows: 30, rails: true }) === 'a112', '');
@@ -1354,10 +1351,10 @@ function rewire(netlist, a, b, a2, b2) {
   check('(g-c) picRows trên board 30 hàng: [1,27] — hàng b (đoạn 1) và hàng b2 (đoạn 6), 2 đoạn khác nhau',
     JSON.stringify(picRows({ cols: 42, rows: 30, rails: true })) === JSON.stringify([1, 27])
     && Math.floor(1 / 5) !== Math.floor(27 / 5), '');
-  check('(g-c) picRows trên board 99 hàng: [1,96], chân 1 ở b112, chân 40 ở s412',
-    JSON.stringify(picRows({ cols: 42, rows: 99, rails: true })) === JSON.stringify([1, 96])
-    && picLegs({ cols: 42, rows: 99, rails: true })[0].hole === 'b112'
-    && picLegs({ cols: 42, rows: 99, rails: true })[39].hole === 's412', '');
+  check('(g-c) picRows trên board 100 hàng: [1,97], chân 1 ở b112, chân 40 ở t412',
+    JSON.stringify(picRows({ cols: 42, rows: 100, rails: true })) === JSON.stringify([1, 97])
+    && picLegs({ cols: 42, rows: 100, rails: true })[0].hole === 'b112'
+    && picLegs({ cols: 42, rows: 100, rails: true })[39].hole === 't412', '');
 }
 
 // (g-d) parseHole cả 2 chế độ
@@ -1369,15 +1366,15 @@ function rewire(netlist, a, b, a2, b2) {
     && (() => { const p = parseHole('a25', s30); return p && p.r === 26 && p.c === 5; })(), '');
   check('(g-d) board dài: "a1" thiếu số cột nên sai; "c12" trên board <=26 hàng vẫn đúng',
     parseHole('a1', s30) === null && (() => { const p = parseHole('c12', 830); return p && p.r === 2 && p.c === 12; })(), '');
-  check('(g-d) board 99 hàng: "u499" = hàng u4 (r=98) cột 99; rail T+5 vẫn đúng',
-    (() => { const p = parseHole('u499', { cols: 99, rows: 99, rails: true }); return p && p.r === 98 && p.c === 99; })()
-    && (() => { const p = parseHole('T+5', { cols: 99, rows: 99, rails: true }); return p && p.r === -2 && p.c === 5; })(), '');
+  check('(g-d) board 100 hàng: "u499" = hàng u4 (r=98) cột 99; rail T+5 vẫn đúng',
+    (() => { const p = parseHole('u499', { cols: 99, rows: 100, rails: true }); return p && p.r === 98 && p.c === 99; })()
+    && (() => { const p = parseHole('T+5', { cols: 99, rows: 100, rails: true }); return p && p.r === -2 && p.c === 5; })(), '');
 }
 
 // (g-e) normalizeSize + holeCount trên board dài
 {
-  check('(g-e) normalizeSize: rows 30 giữ nguyên, rows 150 kẹp xuống 99',
-    normalizeSize({ cols: 42, rows: 30 }).rows === 30 && normalizeSize({ cols: 42, rows: 150 }).rows === 99, '');
+  check('(g-e) normalizeSize: rows 30 giữ nguyên, rows 150 kẹp xuống 100',
+    normalizeSize({ cols: 42, rows: 30 }).rows === 30 && normalizeSize({ cols: 42, rows: 150 }).rows === 100, '');
   check('(g-e) holeCount 42x30 có rail = 1428; allHoles 42x30 đủ 1428 id duy nhất',
     holeCount({ cols: 42, rows: 30, rails: true }) === 1428
     && (() => { const ids = allHoles({ cols: 42, rows: 30, rails: true }).map((h) => h.id); return ids.length === 1428 && new Set(ids).size === 1428; })(), '');
@@ -1466,6 +1463,123 @@ function rewire(netlist, a, b, a2, b2) {
     JSON.stringify(panTarget({ x: 0, z: 0 }, 100, 0, 0, 1)) === JSON.stringify({ x: -100, z: 0 })
     && JSON.stringify(panTarget({ x: 0, z: 0 }, 0, 100, 0, 1)) === JSON.stringify({ x: 0, z: 100 })
     && (() => { const p = panTarget({ x: 0, z: 0 }, 100, 0, Math.PI / 2, 1); return Math.abs(p.x) < 1e-9 && p.z === 100; })(), '');
+}
+
+// ===========================================================================
+// (h) HÀNG BỘI SỐ CỦA 5 + LED CHỈ SÁNG KHI 0 < VOLTS ≤ 10 (round 25/11)
+// ===========================================================================
+// (h-a) Hàng chỉ nhận bội số của 5: chuẩn hoá làm tròn xuống, kẹp 5–100
+{
+  check('(h-a) normalizeSize: rows 12->10, 27->25, 2->5, 1->5, 99->95, 150->100, 100 giữ, 5 giữ',
+    normalizeSize({ cols: 42, rows: 12 }).rows === 10 && normalizeSize({ cols: 42, rows: 27 }).rows === 25
+    && normalizeSize({ cols: 42, rows: 2 }).rows === 5 && normalizeSize({ cols: 42, rows: 1 }).rows === 5
+    && normalizeSize({ cols: 42, rows: 99 }).rows === 95 && normalizeSize({ cols: 42, rows: 150 }).rows === 100
+    && normalizeSize({ cols: 42, rows: 100 }).rows === 100 && normalizeSize({ cols: 42, rows: 5 }).rows === 5, '');
+  check('(h-a) state cũ rows 12 qua sanitizeState -> 10 hàng, linh kiện còn hợp lệ được giữ',
+    (() => {
+      const raw = {
+        size: { cols: 42, rows: 12, rails: true },
+        components: [
+          { id: 'PIC1', type: 'pic', anchor: 'b12', rot: 0, fixed: true, props: {} },
+          { id: 'PSU1', type: 'psu', tx: 0, tz: -150, fixed: true, props: { volts: 5 } },
+          { id: 'LED0', type: 'led', anchor: 'a10', rot: 0, props: { color: '#DC2626' } },
+        ],
+        wires: [],
+      };
+      const s = sanitizeState(raw);
+      return s.size.rows === 10 && s.components.some((c) => c.id === 'LED0');
+    })(), '');
+}
+
+// (h-b) LED nối VCC chỉ sáng khi 0 < volts ≤ 10 (tắt ở 0V và trên 10V)
+{
+  const cpu = createCPU();
+  // Mạch: PSU+ -> LED (c10/c11) -> GND, không điện trở
+  const ledOnAt = (volts) => {
+    const st = defaultBenchState();
+    st.components.find((c) => c.type === 'psu').props = { volts };
+    st.components.push({ id: 'LED0', type: 'led', anchor: 'c10', rot: 0, props: { color: '#DC2626' } });
+    st.wires.push({ id: 'W10', a: 'PSU1.+', b: 'c10', color: '#DC2626' });
+    st.wires.push({ id: 'W11', a: 'c11', b: 'T-5', color: '#0F172A' });
+    const mapping = resolvePeripherals(benchToNetlist(st));
+    return ledStates(cpu, mapping).find((s) => s.id === 'LED0').on;
+  };
+  check('(h-b) LED nối VCC: 0V tắt, 5V sáng, 10V sáng, 10.5V tắt, 12V tắt, 24V tắt',
+    ledOnAt(0) === false && ledOnAt(5) === true && ledOnAt(10) === true
+    && ledOnAt(10.5) === false && ledOnAt(12) === false && ledOnAt(24) === false,
+    `0V=${ledOnAt(0)} 5V=${ledOnAt(5)} 10V=${ledOnAt(10)} 10.5V=${ledOnAt(10.5)} 12V=${ledOnAt(12)} 24V=${ledOnAt(24)}`);
+  // 12V + điện trở nối tiếp: vẫn tắt
+  {
+    const st = defaultBenchState();
+    st.components.find((c) => c.type === 'psu').props = { volts: 12 };
+    st.components.push({ id: 'LED0', type: 'led', anchor: 'c10', rot: 0, props: { color: '#DC2626' } });
+    st.components.push({ id: 'R0', type: 'resistor', anchor: 'd12', rot: 0, props: { value: 220 } });
+    st.wires.push({ id: 'W10', a: 'PSU1.+', b: 'd12', color: '#DC2626' });
+    st.wires.push({ id: 'W11', a: 'd16', b: 'c10', color: '#DC2626' });
+    st.wires.push({ id: 'W12', a: 'c11', b: 'T-5', color: '#0F172A' });
+    const mapping = resolvePeripherals(benchToNetlist(st));
+    const on = ledStates(cpu, mapping).find((s) => s.id === 'LED0').on;
+    check('(h-b) 12V + điện trở nối tiếp: LED vẫn TẮT (quy tắc áp cho cả trường hợp có điện trở)',
+      mapping.leds[0].vccAnode === false && mapping.leds[0].hasResistor === true && on === false, JSON.stringify(mapping.leds[0]));
+  }
+  // 0V + anode VCC + cathode về RB1 (ngõ ra mức 0): tối
+  {
+    const st = defaultBenchState();
+    st.components.find((c) => c.type === 'psu').props = { volts: 0 };
+    st.components.push({ id: 'LED0', type: 'led', anchor: 'c10', rot: 0, props: { color: '#DC2626' } });
+    st.wires.push({ id: 'W10', a: 'PSU1.+', b: 'c10', color: '#DC2626' });
+    st.wires.push({ id: 'W11', a: 'c11', b: 'h28', color: '#0F172A' });
+    const { cpu: cpu2, mapping } = loadWiredExample('blink', benchToNetlist(st));
+    runUntil(cpu2, 100000);
+    const on = ledStates(cpu2, mapping).find((s) => s.id === 'LED0').on;
+    check('(h-b) 0V + anode VCC + cathode về RB1 (ngõ ra mức 0): LED TỐI',
+      mapping.leds[0].vccAnode === false && mapping.leds[0].cathPin && mapping.leds[0].cathPin.id === 'RB1' && on === false, JSON.stringify(mapping.leds[0]));
+  }
+  // LED chạy bằng chân PIC (anode RB0 mức cao, cathode GND): sáng dù nguồn 0V
+  {
+    const st = defaultBenchState();
+    st.components.find((c) => c.type === 'psu').props = { volts: 0 };
+    st.components.push({ id: 'LED0', type: 'led', anchor: 'c10', rot: 0, props: { color: '#DC2626' } });
+    st.wires.push({ id: 'W10', a: 'c10', b: 'h29', color: '#2563EB' }); // anode -> strip RB0
+    st.wires.push({ id: 'W11', a: 'c11', b: 'T-5', color: '#0F172A' });
+    const { cpu: cpu3, mapping } = loadWiredExample('blink', benchToNetlist(st));
+    let guard = 0;
+    while (guard++ < 40 && !(cpu3.pinDirection(1, 0) === 'out' && cpu3.pinLevel(1, 0) === 1)) {
+      runUntil(cpu3, cpu3.cycles + 100000);
+    }
+    const on = ledStates(cpu3, mapping).find((s) => s.id === 'LED0').on;
+    check('(h-b) anode RB0 mức cao + cathode GND, nguồn 0V: LED SÁNG (không phụ thuộc nguồn)',
+      mapping.leds[0].pin && mapping.leds[0].pin.id === 'RB0' && mapping.leds[0].gnd === true && on === true,
+      `pin=${JSON.stringify(mapping.leds[0].pin)} on=${on} cycles=${cpu3.cycles}`);
+  }
+}
+
+// (h-c) Cảnh báo LED theo điện áp nguồn
+{
+  const warnsAt = (volts) => {
+    const st = defaultBenchState();
+    st.components.find((c) => c.type === 'psu').props = { volts };
+    st.components.push({ id: 'LED0', type: 'led', anchor: 'c10', rot: 0, props: { color: '#DC2626' } });
+    st.wires.push({ id: 'W10', a: 'PSU1.+', b: 'c10', color: '#DC2626' });
+    st.wires.push({ id: 'W11', a: 'c11', b: 'T-5', color: '#0F172A' });
+    return checkWiring(benchToNetlist(st)).map((w) => w.message);
+  };
+  check('(h-c) 5V: cảnh báo "sáng liên tục" có; 0V: không có; 10V: có',
+    warnsAt(5).some((m) => m.includes('sáng liên tục'))
+    && !warnsAt(0).some((m) => m.includes('sáng liên tục'))
+    && warnsAt(10).some((m) => m.includes('sáng liên tục')), '');
+  check('(h-c) 12V: không cảnh báo "sáng liên tục", có cảnh báo "vượt quá 10V" ghi 12V; 24V: ghi 24V',
+    !warnsAt(12).some((m) => m.includes('sáng liên tục'))
+    && warnsAt(12).some((m) => m.includes('vượt quá 10V') && m.includes('12V'))
+    && warnsAt(24).some((m) => m.includes('vượt quá 10V') && m.includes('24V')), JSON.stringify(warnsAt(12)));
+  check('(h-c) 0V + cathode nổi: không cảnh báo "chưa nối về GND" (anode không có điện)',
+    (() => {
+      const st = defaultBenchState();
+      st.components.find((c) => c.type === 'psu').props = { volts: 0 };
+      st.components.push({ id: 'LED0', type: 'led', anchor: 'c10', rot: 0, props: { color: '#DC2626' } });
+      st.wires.push({ id: 'W10', a: 'PSU1.+', b: 'c10', color: '#DC2626' });
+      return checkWiring(benchToNetlist(st)).map((w) => w.message);
+    })().some((m) => m.includes('chưa nối về GND')) === false, '');
 }
 
 console.log(`\nKết quả: ${pass} pass, ${fail} fail`);

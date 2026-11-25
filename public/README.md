@@ -30,7 +30,7 @@ nối tiếp) vào strip của chân RB0 thì LED nhấp nháy theo nhịp chip.
   cột 12, `b25` = hàng b2 cột 5).
 - **Chọn size bo mạch:** nhấn vào board (thân board hoặc lỗ trống) để
   mở popup **Bo mạch** bên phải: bấm 1 trong 3 mẫu sẵn để áp dụng ngay,
-  hoặc tự điền rộng (số cột 5–99) × dài (số hàng 2–99) + chọn có rail
+  hoặc tự điền rộng (số cột 5–99) × dài (số hàng 5–100, bội số của 5) + chọn có rail
   nguồn rồi bấm Áp dụng; đổi size thì chip căn lại giữa, linh kiện/dây
   ngoài board mới bị gỡ (có ghi chú ở dòng trạng thái).
 - **Inspector:** bấm chọn linh kiện thì panel trượt từ phải sang để đổi
@@ -38,7 +38,8 @@ nối tiếp) vào strip của chân RB0 thì LED nhấp nháy theo nhịp chip.
   0–24V), xem chân nối đi đâu, xoá linh kiện/dây (phím Delete).
 - **Kiểm tra:** panel bên trái liệt kê cảnh báo đấu nối (nối tắt, LED
   thiếu điện trở, LED có nguồn nhưng chưa nối về GND, LED nối tắt 2 đầu,
-  LCD thiếu dây...), bấm vào cảnh báo để chọn linh kiện liên quan.
+  nguồn quá 10V nên LED không sáng, LCD thiếu dây...), bấm vào cảnh báo
+  để chọn linh kiện liên quan.
 
 ## Breadboard
 
@@ -50,9 +51,9 @@ chiều dài. Chip PIC16F877A luôn căn giữa board (cột 22–41 trên board
 830, cột 6–25 trên board 400, cột 1–17 trên board Mini — trên board
 Mini thì 6 chân ngoài cùng MCLR/RD0/RD1/RD2/RD3/RB7 treo ngoài board).
 Board 10 hàng thì chip ở hàng b/h; board khác thì chân trên ở hàng b,
-chân dưới ở hàng max(6, số hàng−2) (vd 12 hàng → b/j, 6 hàng → b/f;
-board <6 hàng thì hàng chân dưới treo ngoài board). Board tự điền rộng
-5–99 cột × dài 2–99 hàng cũng căn giữa chip theo cùng cách; rail nguồn
+chân dưới ở hàng max(6, số hàng−2) (vd 15 hàng → b/m, 5 hàng → b/f với
+hàng 6 treo ngoài board; 100 hàng → b1/t4). Board tự điền rộng
+5–99 cột × dài 5–100 hàng (chỉ bội số của 5) cũng căn giữa chip theo cùng cách; rail nguồn
 tùy chọn, bật thì rail dài bằng số cột. Dây nguồn VDD/VSS/MCLR đã nối
 sẵn về rail (board Mini không có rail nên không có dây nguồn mặc định).
 

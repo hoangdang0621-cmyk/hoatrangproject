@@ -40,7 +40,7 @@ nối tiếp) vào strip của chân RB0 thì LED nhấp nháy theo nhịp chip.
 6. **Chọn size bo mạch:** nhấn chuột vào board (thân board hoặc lỗ
    trống) để mở popup **Bo mạch** bên phải: bấm 1 trong 3 mẫu sẵn (Mini
    170 / Nửa 400 / Đầy đủ 830 lỗ) để áp dụng ngay, hoặc tự điền rộng
-   (số cột 5–99) × dài (số hàng 2–99) + chọn có rail nguồn rồi bấm Áp
+   (số cột 5–99) × dài (số hàng 5–100, bội số của 5) + chọn có rail nguồn rồi bấm Áp
    dụng. Đổi size thì chip tự căn lại giữa board, linh kiện/dây còn trên
    board mới được giữ nguyên, cái ngoài board bị gỡ (có ghi chú ở dòng
    trạng thái).
@@ -48,8 +48,9 @@ nối tiếp) vào strip của chân RB0 thì LED nhấp nháy theo nhịp chip.
 ## Khay linh kiện
 
 - **LED:** 2 đầu A/K. Sáng khi anode ở mức 1 và cathode về GND (hoặc mức 0),
-  hoặc anode có +5V (từ nguồn/rail +) và cathode về GND — nối thẳng 5V
-  vào LED thì LED sáng luôn (nhớ thêm điện trở hạn dòng).
+  hoặc anode có điện từ nguồn/rail + và cathode về GND — LED nối VCC chỉ
+  sáng khi 0 < điện áp nguồn ≤ 10V (0V thì tắt, trên 10V thì tắt trong lúc
+  điện áp cao, hạ xuống ≤10V thì sáng lại; nhớ thêm điện trở hạn dòng).
 - **Điện trở 220Ω:** 2 đầu, nối tiếp với LED để hạn dòng. Đổi được giá
   trị Ω trong Inspector, vạch màu trên thân đổi theo.
 - **Nút nhấn:** 2 đầu, active-low (nhấn giữ là mức 0, có pull-up).
@@ -77,9 +78,9 @@ cột 22–41 trên board 830, cột 6–25 trên board 400, cột 1–17 trên 
 Mini (chip DIP-40 rộng 20 cột nên trên board Mini thì 6 chân ngoài cùng
 MCLR/RD0/RD1/RD2/RD3/RB7 treo ngoài board, 34 chân còn lại cắm đúng lỗ).
 Board 10 hàng thì chip ở hàng b/h; board khác thì chân trên ở hàng b,
-chân dưới ở hàng max(6, số hàng−2) (vd 12 hàng → b/j, 6 hàng → b/f;
-board <6 hàng thì hàng chân dưới treo ngoài board). Board tự điền rộng
-5–99 cột × dài 2–99 hàng cũng căn giữa chip theo cùng cách; rail nguồn tùy chọn, bật thì rail
+chân dưới ở hàng max(6, số hàng−2) (vd 15 hàng → b/m, 5 hàng → b/f với
+hàng 6 treo ngoài board; 100 hàng → b1/t4). Board tự điền rộng
+5–99 cột × dài 5–100 hàng (chỉ bội số của 5) cũng căn giữa chip theo cùng cách; rail nguồn tùy chọn, bật thì rail
 dài bằng số cột. Dây nguồn VDD/VSS/MCLR đã nối
 sẵn về rail (board Mini không có rail nên không có dây nguồn mặc định).
 
@@ -88,8 +89,10 @@ sẵn về rail (board Mini không có rail nên không có dây nguồn mặc �
 - **Nối tắt +5V–GND:** dây nối cả 2 rail nguồn — sẽ chập nguồn, gỡ ngay.
 - **LED không có điện trở:** LED nối thẳng chân chip mà không qua điện trở
   hạn dòng, dễ cháy LED.
-- **LED có nguồn nhưng chưa nối về GND:** anode đã có +5V mà cathode còn
+- **LED có nguồn nhưng chưa nối về GND:** anode đã có điện mà cathode còn
   nổi — LED không sáng, nối cathode về thanh GND.
+- **LED nối VCC mà nguồn quá 10V:** nguồn đang ở 12V thì LED không sáng
+  (chưa cháy, chỉ tắt trong lúc điện áp cao) — hạ điện áp xuống 10V trở xuống.
 - **LED nối tắt 2 đầu:** anode và cathode nối cùng 1 net nên LED không sáng.
 - **LCD chưa nối đủ dây:** thiếu RS, E hoặc D0–D7 — LCD không hiện chữ
   cho tới khi nối đủ.

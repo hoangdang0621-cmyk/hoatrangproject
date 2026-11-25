@@ -1,7 +1,7 @@
 // bench-model.js — Mô hình lỗ/strip của bàn thực hành 3D (không DOM, không Three.js).
 // Breadboard đổi được kích thước: 3 mẫu sẵn (Mini 170 lỗ, Nửa 400 lỗ,
-// Đầy đủ 830 lỗ) hoặc tự điền rộng (số cột 5–99) × dài (số hàng 2–99)
-// + chọn có rail nguồn hay không. Hàng là chữ cái a–z theo số hàng.
+// Đầy đủ 830 lỗ) hoặc tự điền rộng (số cột 5–99) × dài (số hàng 5–100,
+// bội số của 5) + chọn có rail nguồn hay không. Hàng là chữ cái a–z theo số hàng.
 // Nửa trên của mỗi cột (các hàng trên rãnh) nối nhau thành 1 strip,
 // nửa dưới nối nhau, rail chạy suốt chiều dài (mọi lỗ rail + là +5V,
 // mọi lỗ rail − là GND).
@@ -16,8 +16,8 @@ export const PITCH = 2.54;       // khoảng cách lỗ (mm)
 // Size bo mạch: 3 mẫu sẵn (kiểu ohmimic) hoặc tự điền {cols, rows, rails}.
 // 830 = 63 cột x 10 hàng + 4 rail x 50; 400 = 30 x 10 + 4 x 25;
 // 170 = 17 x 10, không có rail (đúng board mini thật).
-// Tự điền: rộng 5–99 cột, dài 2–99 hàng, rail bật/tắt; rail bật thì dài
-// bằng số cột. Hàng là chữ cái a–z (hàng 1 = 'a').
+// Tự điền: rộng 5–99 cột, dài 5–100 hàng (chỉ bội số của 5: 5, 10, 15...
+// 100), rail bật/tắt; rail bật thì dài bằng số cột. Hàng là chữ cái a–z
 // Chip PIC DIP-40 rộng 20 cột nên trên board Mini 17 cột thì 6 chân ngoài
 // cùng (MCLR, RD0, RD1, RD2, RD3, RB7) treo ngoài board — giới hạn vật lý thật.
 export const BOARD_SIZES = {
@@ -29,10 +29,11 @@ export const BOARD_SIZE_IDS = [170, 400, 830];
 export const DEFAULT_SIZE = 830;
 export const CUSTOM_COLS_MIN = 5;
 export const CUSTOM_COLS_MAX = 99;
-export const CUSTOM_ROWS_MIN = 2;
-export const CUSTOM_ROWS_MAX = 99;
+export const CUSTOM_ROWS_MIN = 5;
+export const CUSTOM_ROWS_MAX = 100;
 // Chuẩn hoá size thành giá trị lưu trong state: số (mẫu sẵn) hoặc
-// {cols, rows, rails} (tự điền, cột kẹp 5–99, hàng kẹp 2–99; state cũ
+// {cols, rows, rails} (tự điền, cột kẹp 5–99, hàng làm tròn XUỐNG về bội
+// số 5 gần nhất rồi kẹp 5–100: 12 -> 10, 2 -> 5, 150 -> 100; state cũ
 // {cols, rails} không có rows thì mặc định 10 hàng). Không hợp lệ -> 830.
 export function normalizeSize(size) {
   if (typeof size === 'number' && BOARD_SIZES[size]) return size;
@@ -41,7 +42,7 @@ export function normalizeSize(size) {
     if (Number.isFinite(cols)) {
       const rowsRaw = Math.round(Number(size.rows));
       const rows = Number.isFinite(rowsRaw)
-        ? Math.max(CUSTOM_ROWS_MIN, Math.min(CUSTOM_ROWS_MAX, rowsRaw))
+        ? Math.max(CUSTOM_ROWS_MIN, Math.min(CUSTOM_ROWS_MAX, Math.floor(rowsRaw / 5) * 5))
         : 10;
       return {
         cols: Math.max(CUSTOM_COLS_MIN, Math.min(CUSTOM_COLS_MAX, cols)),
@@ -89,8 +90,9 @@ export function sameSize(a, b) {
 export function picCol(size) { return Math.max(0, Math.floor((colsOf(size) - 20) / 2) + 1); }
 // Hàng chân chip PIC (internal 0-indexed), luôn 2 hàng ở 2 đoạn 5 khác
 // nhau: hàng trên là hàng 2 (b), hàng dưới là hàng max(6, rows-2)
-// (số 1-indexed). Board 10 hàng -> (2, 8) = b/h như cũ; board 6-9 hàng
-// -> (2, 6); board <6 hàng thì hàng 6 treo ngoài board (holeId null).
+// (số 1-indexed). Board 10 hàng -> (2, 8) = b/h như cũ; board 5 hàng
+// -> (2, 6) với hàng 6 treo ngoài board (holeId null); board 100 hàng
+// -> (2, 98) = b1/t4.
 export function picRows(size) {
   const rows = rowsOf(size);
   return [1, Math.max(5, rows - 3)];
@@ -105,7 +107,7 @@ export const ROWS = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k', 'l',
 // Nhãn của hàng r (0-indexed) trên board có `rows` hàng.
 // Board <=26 hàng: chữ đơn a-z như cũ. Board >26 hàng: toàn bộ nhãn
 // chuyển sang chữ+số khối: hàng 1-26 là a1-z1, 27-52 là a2-z2,
-// 53-78 là a3-z3, 79-99 là a4-... (chữ lặp lại mỗi 26 hàng, số là khối).
+// 53-78 là a3-z3, 79-100 là a4-v4 (chữ lặp lại mỗi 26 hàng, số là khối).
 export function rowLabel(r, rows) {
   if (rows <= 26) return ROWS[r];
   return ROWS[r % 26] + (Math.floor(r / 26) + 1);

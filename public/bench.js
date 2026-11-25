@@ -13,8 +13,8 @@ import {
   normalizeSize, holeCount, sizeLabel, sameSize,
   psuVolts, validatePsuVolts, parsePsuPost, psuPostPos,
   clampCamTarget, zoomTowardPoint, panTarget,
-} from './bench-model.js?v=20261125l';
-import { checkWiring, SIGNAL_COLORS } from './wiring.js?v=20261125l';
+} from './bench-model.js?v=20261125m';
+import { checkWiring, SIGNAL_COLORS } from './wiring.js?v=20261125m';
 
 const $ = (id) => document.getElementById(id);
 const benchView = $('benchView');
@@ -236,13 +236,13 @@ function main() {
           <label class="bench-insp-label">Tự điền thông số</label>
           <label class="bench-insp-label bench-insp-sub" for="inspBoardCols">Rộng (số cột, 5–99)</label>
           <input class="input bench-insp-hole" id="inspBoardCols" type="number" min="5" max="99" step="1" value="${cur.cols}">
-          <label class="bench-insp-label bench-insp-sub" for="inspBoardRows">Dài (số hàng, 2–99)</label>
-          <input class="input bench-insp-hole" id="inspBoardRows" type="number" min="2" max="99" step="1" value="${cur.rows}">
+          <label class="bench-insp-label bench-insp-sub" for="inspBoardRows">Dài (số hàng, 5–100, bội số của 5)</label>
+          <input class="input bench-insp-hole" id="inspBoardRows" type="number" min="5" max="100" step="5" value="${cur.rows}">
           <label class="bench-insp-row"><input type="checkbox" id="inspBoardRails"${cur.railCols > 0 ? ' checked' : ''}> Có rail nguồn</label>
           <p class="bench-insp-err" id="inspBoardErr" role="alert"></p>
           <button type="button" class="btn btn-accent btn-small" data-act="apply-board">Áp dụng</button>
           <p class="sub">Đổi kích thước thì chip tự căn lại giữa board; linh kiện/dây ngoài board mới bị gỡ (có ghi chú ở dòng trạng thái).</p>
-          <p class="sub">Địa chỉ lỗ: board ≤26 hàng thì chữ hàng a–z + số cột (vd c12); board &gt;26 hàng thì chữ hàng + số khối + số cột (vd c112 = hàng c1 cột 12, b25 = hàng b2 cột 5). Mỗi đoạn 5 hàng nối nhau (1–5, 6–10, 11–15…).</p>
+          <p class="sub">Địa chỉ lỗ: board ≤26 hàng thì chữ hàng a–z + số cột (vd c12); board &gt;26 hàng thì chữ hàng + số khối + số cột (vd c112 = hàng c1 cột 12, b25 = hàng b2 cột 5). Mỗi đoạn 5 hàng nối nhau (1–5, 6–10, 11–15…). Số hàng chỉ nhận bội số của 5, từ 5 đến 100.</p>
         </div>`;
       inspectorEl.querySelectorAll('[data-size]').forEach((b) => b.addEventListener('click', () => {
         applyBoardSize(Number(b.dataset.size));
@@ -255,8 +255,8 @@ function main() {
           if (errEl) errEl.textContent = 'Số cột (rộng) phải là số nguyên từ 5 đến 99.';
           return;
         }
-        if (!Number.isFinite(rows) || rows < 2 || rows > 99) {
-          if (errEl) errEl.textContent = 'Số hàng (dài) phải là số nguyên từ 2 đến 99.';
+        if (!Number.isFinite(rows) || rows < 5 || rows > 100 || rows % 5 !== 0) {
+          if (errEl) errEl.textContent = 'Số hàng (dài) phải là bội số của 5, từ 5 đến 100 (5, 10, 15, …, 100).';
           return;
         }
         const rails = inspectorEl.querySelector('#inspBoardRails').checked;

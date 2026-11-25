@@ -163,6 +163,13 @@ export function buildNets(netlist) {
 // ---------------------------------------------------------------------------
 export function resolvePeripherals(netlist) {
   const { netOf, nets } = buildNets(netlist);
+  // Điện áp danh định của nguồn (benchToNetlist mang theo netlist.psu.volts):
+  // LED nối VCC chỉ sáng khi 0 < volts ≤ 10: 0V thì net VCC không có điện,
+  // trên 10V thì LED tắt trong lúc điện áp cao (không cháy vĩnh viễn, hạ
+  // xuống ≤10V thì sáng lại). Netlist không mang psu thì mặc định coi như
+  // 5V (tương thích netlist cũ như defaultNetlist).
+  const psuVoltsRaw = Number(netlist.psu?.volts);
+  const psuLedOn = !Number.isFinite(psuVoltsRaw) ? true : (psuVoltsRaw > 0 && psuVoltsRaw <= 10);
   const membersOf = (term) => {
     const root = netOf.get(term);
     if (!root) return [];
@@ -197,7 +204,10 @@ export function resolvePeripherals(netlist) {
     id: c.id, label: c.label, hasResistor: c.hasResistor !== false,
     pin: picPinInNet(c.id + '.A'),
     gnd: hasTerm(c.id + '.K', 'GND'),
-    vccAnode: hasTerm(c.id + '.A', 'VCC'),
+    // Anode nối net VCC chỉ tính là "có nguồn" khi 0 < psu.volts ≤ 10.
+    // 0V thì net VCC không có điện, trên 10V thì LED tắt trong lúc điện
+    // áp cao. Netlist không mang psu (vd defaultNetlist) thì mặc định 5V.
+    vccAnode: psuLedOn && hasTerm(c.id + '.A', 'VCC'),
     cathPin: picPinInNet(c.id + '.K'),
   }));
   const buttons = netlist.components.filter((c) => c.kind === 'button').map((c) => {
@@ -298,6 +308,13 @@ export function applyPotToCpu(cpu, mapping, potId, volts) {
 // ---------------------------------------------------------------------------
 export function checkWiring(netlist, tris = null) {
   const { netOf, nets } = buildNets(netlist);
+  // Quy tắc LED theo điện áp nguồn: chỉ khi 0 < volts ≤ 10 thì LED nối VCC
+  // mới sáng (và cảnh báo "sáng liên tục"/"anode đã có +5V" mới đúng);
+  // 0V hoặc trên 10V thì LED tắt nên không cảnh báo sáng. Netlist không
+  // mang psu thì mặc định coi như 5V.
+  const psuVoltsRaw = Number(netlist.psu?.volts);
+  const psuLedOn = !Number.isFinite(psuVoltsRaw) ? true : (psuVoltsRaw > 0 && psuVoltsRaw <= 10);
+  const psuOverVolts = Number.isFinite(psuVoltsRaw) && psuVoltsRaw > 10;
   const warnings = [];
   const hasInNet = (members, t) => members.includes(t);
   const wiresInNet = (root) => netlist.wires.filter((w) => netOf.get(w.a) === root || netOf.get(w.b) === root).map((w) => w.id);
@@ -382,10 +399,21 @@ export function checkWiring(netlist, tris = null) {
     }
     const aNet = buildNets(netlist).nets.find((n) => n.members.includes(c.id + '.A'));
     const kNet = buildNets(netlist).nets.find((n) => n.members.includes(c.id + '.K'));
-    if (aNet && kNet && aNet.members.includes('VCC') && kNet.members.includes('GND')) {
+    // Chỉ cảnh báo "sáng liên tục" khi LED thật sự sáng liên tục, tức
+    // 0 < volts ≤ 10: 0V hoặc trên 10V thì LED không sáng nên không cảnh báo.
+    if (psuLedOn && aNet && kNet && aNet.members.includes('VCC') && kNet.members.includes('GND')) {
       warnings.push({
         id: 'ledvcc-' + c.id, kind: 'warn',
         message: `LED ${c.label} nối thẳng VCC–GND nên sẽ sáng liên tục, không điều khiển được bằng code.`,
+        wireIds: [], compIds: [c.id], terminalIds: [c.id + '.A', c.id + '.K'],
+      });
+    }
+    // Nguồn quá 10V: LED nối VCC tắt trong lúc điện áp cao (chưa cháy),
+    // nhắc hạ điện áp xuống ≤10V. Ghi điện áp thật vào thông báo.
+    if (psuOverVolts && aNet && aNet.members.includes('VCC')) {
+      warnings.push({
+        id: 'ledover-' + c.id, kind: 'warn',
+        message: `Nguồn đang ở ${String(Math.round(psuVoltsRaw * 100) / 100)}V, vượt quá 10V nên LED ${c.label} không sáng — hạ điện áp xuống 10V trở xuống.`,
         wireIds: [], compIds: [c.id], terminalIds: [c.id + '.A', c.id + '.K'],
       });
     }
@@ -395,7 +423,7 @@ export function checkWiring(netlist, tris = null) {
         message: `LED ${c.label} anode và cathode nối cùng 1 net (nối tắt 2 đầu LED) nên LED không sáng.`,
         wireIds: [], compIds: [c.id], terminalIds: [c.id + '.A', c.id + '.K'],
       });
-    } else if (aNet && aNet.members.includes('VCC') && kNet && !kNet.members.includes('GND') && kNet.members.length <= 1) {
+    } else if (psuLedOn && aNet && aNet.members.includes('VCC') && kNet && !kNet.members.includes('GND') && kNet.members.length <= 1) {
       warnings.push({
         id: 'lednognd-' + c.id, kind: 'warn',
         message: `LED ${c.label} anode đã có +5V nhưng cathode chưa nối về GND nên LED không sáng — nối cathode về thanh GND.`,
