@@ -23,8 +23,9 @@ nối tiếp) vào strip của chân RB0 thì LED nhấp nháy theo nhịp chip.
    thì đặt đúng 1 cái rồi tự thoát chế độ đặt; muốn thả cái nữa thì bấm
    chọn lại thẻ đó. Bấm lại đúng thẻ đó hoặc Esc để thoát trước khi đặt.
    R vẫn xoay trong lúc đặt bằng bấm.
-2. **Xoay bàn:** kéo chuột vào chỗ trống trên bàn để xoay 360°, cuộn
-   chuột để zoom. Nút **3D** / **Từ trên** đổi góc nhìn.
+2. **Xoay bàn:** kéo chuột vào chỗ trống trên bàn để xoay 360°; chuột
+   phải hoặc Shift+kéo để dịch góc nhìn; cuộn chuột để zoom vào điểm
+   trỏ. Nút **3D** / **Từ trên** đổi góc nhìn.
 3. **Đi dây:** bấm **Dây dẫn** rồi bấm lỗ bắt đầu và lỗ kết thúc, dây
    hiện thành đường cong nối 2 lỗ. Chọn màu dây trong bảng 8 màu.
    Bấm chọn 1 dây thì dây highlight (sáng + dày hơn, 2 đầu hiện núm
@@ -39,14 +40,16 @@ nối tiếp) vào strip của chân RB0 thì LED nhấp nháy theo nhịp chip.
 6. **Chọn size bo mạch:** nhấn chuột vào board (thân board hoặc lỗ
    trống) để mở popup **Bo mạch** bên phải: bấm 1 trong 3 mẫu sẵn (Mini
    170 / Nửa 400 / Đầy đủ 830 lỗ) để áp dụng ngay, hoặc tự điền rộng
-   (số cột 5–99) × dài (số hàng 2–26) + chọn có rail nguồn rồi bấm Áp
+   (số cột 5–99) × dài (số hàng 2–99) + chọn có rail nguồn rồi bấm Áp
    dụng. Đổi size thì chip tự căn lại giữa board, linh kiện/dây còn trên
    board mới được giữ nguyên, cái ngoài board bị gỡ (có ghi chú ở dòng
    trạng thái).
 
 ## Khay linh kiện
 
-- **LED:** 2 đầu A/K. Sáng khi anode ở mức 1 và cathode về GND (hoặc mức 0).
+- **LED:** 2 đầu A/K. Sáng khi anode ở mức 1 và cathode về GND (hoặc mức 0),
+  hoặc anode có +5V (từ nguồn/rail +) và cathode về GND — nối thẳng 5V
+  vào LED thì LED sáng luôn (nhớ thêm điện trở hạn dòng).
 - **Điện trở 220Ω:** 2 đầu, nối tiếp với LED để hạn dòng. Đổi được giá
   trị Ω trong Inspector, vạch màu trên thân đổi theo.
 - **Nút nhấn:** 2 đầu, active-low (nhấn giữ là mức 0, có pull-up).
@@ -63,16 +66,20 @@ nối tiếp) vào strip của chân RB0 thì LED nhấp nháy theo nhịp chip.
 
 ## Breadboard
 
-Hàng a–z theo số hàng của board: nửa trên của mỗi cột (các hàng trên
-rãnh) nối với nhau thành một strip, nửa dưới nối với nhau thành một
-strip riêng; 2 rail +/− chạy suốt chiều dài (mọi lỗ rail + nối về cọc
+Nhãn hàng: board ≤26 hàng thì chữ đơn a–z; board >26 hàng thì nhãn
+chữ+số khối (hàng 1–26 là a1–z1, 27–52 là a2–z2, 53–78 là a3–z3...;
+địa chỉ lỗ dạng chữ+số khối+ số cột, vd `c112` = hàng c1 cột 12,
+`b25` = hàng b2 cột 5). Mỗi đoạn 5 hàng nối nhau thành một strip
+(hàng 1–5, 6–10, 11–15...; board 10 hàng thì vẫn a–e và f–j, rãnh ở
+giữa); 2 rail +/− chạy suốt chiều dài (mọi lỗ rail + nối về cọc
 + của nguồn, mọi lỗ rail − nối về cọc − của nguồn). Chip PIC16F877A luôn căn giữa board: cắm ở
 cột 22–41 trên board 830, cột 6–25 trên board 400, cột 1–17 trên board
 Mini (chip DIP-40 rộng 20 cột nên trên board Mini thì 6 chân ngoài cùng
 MCLR/RD0/RD1/RD2/RD3/RB7 treo ngoài board, 34 chân còn lại cắm đúng lỗ).
-Board 10 hàng thì chip ở hàng b/h; board tự điền dài khác 10 hàng thì
-chip ôm 2 hàng kề rãnh. Board tự điền rộng 5–99 cột × dài 2–26 hàng
-cũng căn giữa chip theo cùng cách; rail nguồn tùy chọn, bật thì rail
+Board 10 hàng thì chip ở hàng b/h; board khác thì chân trên ở hàng b,
+chân dưới ở hàng max(6, số hàng−2) (vd 12 hàng → b/j, 6 hàng → b/f;
+board <6 hàng thì hàng chân dưới treo ngoài board). Board tự điền rộng
+5–99 cột × dài 2–99 hàng cũng căn giữa chip theo cùng cách; rail nguồn tùy chọn, bật thì rail
 dài bằng số cột. Dây nguồn VDD/VSS/MCLR đã nối
 sẵn về rail (board Mini không có rail nên không có dây nguồn mặc định).
 
@@ -81,6 +88,9 @@ sẵn về rail (board Mini không có rail nên không có dây nguồn mặc �
 - **Nối tắt +5V–GND:** dây nối cả 2 rail nguồn — sẽ chập nguồn, gỡ ngay.
 - **LED không có điện trở:** LED nối thẳng chân chip mà không qua điện trở
   hạn dòng, dễ cháy LED.
+- **LED có nguồn nhưng chưa nối về GND:** anode đã có +5V mà cathode còn
+  nổi — LED không sáng, nối cathode về thanh GND.
+- **LED nối tắt 2 đầu:** anode và cathode nối cùng 1 net nên LED không sáng.
 - **LCD chưa nối đủ dây:** thiếu RS, E hoặc D0–D7 — LCD không hiện chữ
   cho tới khi nối đủ.
 - **Hai chân output nối trực tiếp:** 2 chân cùng là ngõ ra nối nhau, có

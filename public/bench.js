@@ -8,12 +8,13 @@ import {
   legOffsets, legsFor, picLegs, canPlace, benchToNetlist,
   describeTerminal, defaultBenchState, nextComponentId, compLabel,
   defaultProps, sanitizeState, boardSize, colsOf, rowsOf, railColsOf, picCol,
-  picRows, bodyDepth, ROWS,
+  picRows, bodyDepth, rowLabel,
   pruneStateForSize, validateWireEnd, retargetWireEnd, togglePlacement,
   normalizeSize, holeCount, sizeLabel, sameSize,
   psuVolts, validatePsuVolts, parsePsuPost, psuPostPos,
-} from './bench-model.js?v=20261125j';
-import { checkWiring, SIGNAL_COLORS } from './wiring.js?v=20261125b';
+  clampCamTarget, zoomTowardPoint, panTarget,
+} from './bench-model.js?v=20261125l';
+import { checkWiring, SIGNAL_COLORS } from './wiring.js?v=20261125l';
 
 const $ = (id) => document.getElementById(id);
 const benchView = $('benchView');
@@ -235,12 +236,13 @@ function main() {
           <label class="bench-insp-label">Tự điền thông số</label>
           <label class="bench-insp-label bench-insp-sub" for="inspBoardCols">Rộng (số cột, 5–99)</label>
           <input class="input bench-insp-hole" id="inspBoardCols" type="number" min="5" max="99" step="1" value="${cur.cols}">
-          <label class="bench-insp-label bench-insp-sub" for="inspBoardRows">Dài (số hàng, 2–26)</label>
-          <input class="input bench-insp-hole" id="inspBoardRows" type="number" min="2" max="26" step="1" value="${cur.rows}">
+          <label class="bench-insp-label bench-insp-sub" for="inspBoardRows">Dài (số hàng, 2–99)</label>
+          <input class="input bench-insp-hole" id="inspBoardRows" type="number" min="2" max="99" step="1" value="${cur.rows}">
           <label class="bench-insp-row"><input type="checkbox" id="inspBoardRails"${cur.railCols > 0 ? ' checked' : ''}> Có rail nguồn</label>
           <p class="bench-insp-err" id="inspBoardErr" role="alert"></p>
           <button type="button" class="btn btn-accent btn-small" data-act="apply-board">Áp dụng</button>
           <p class="sub">Đổi kích thước thì chip tự căn lại giữa board; linh kiện/dây ngoài board mới bị gỡ (có ghi chú ở dòng trạng thái).</p>
+          <p class="sub">Địa chỉ lỗ: board ≤26 hàng thì chữ hàng a–z + số cột (vd c12); board &gt;26 hàng thì chữ hàng + số khối + số cột (vd c112 = hàng c1 cột 12, b25 = hàng b2 cột 5). Mỗi đoạn 5 hàng nối nhau (1–5, 6–10, 11–15…).</p>
         </div>`;
       inspectorEl.querySelectorAll('[data-size]').forEach((b) => b.addEventListener('click', () => {
         applyBoardSize(Number(b.dataset.size));
@@ -253,8 +255,8 @@ function main() {
           if (errEl) errEl.textContent = 'Số cột (rộng) phải là số nguyên từ 5 đến 99.';
           return;
         }
-        if (!Number.isFinite(rows) || rows < 2 || rows > 26) {
-          if (errEl) errEl.textContent = 'Số hàng (dài) phải là số nguyên từ 2 đến 26.';
+        if (!Number.isFinite(rows) || rows < 2 || rows > 99) {
+          if (errEl) errEl.textContent = 'Số hàng (dài) phải là số nguyên từ 2 đến 99.';
           return;
         }
         const rails = inspectorEl.querySelector('#inspBoardRails').checked;
@@ -278,7 +280,7 @@ function main() {
           <input class="input bench-insp-hole" id="inspWireA" type="text" value="${esc(endVal(w.a))}"${endHint(w.a)} autocomplete="off" spellcheck="false">
           <label class="bench-insp-label" for="inspWireB">Đầu B — địa chỉ lỗ</label>
           <input class="input bench-insp-hole" id="inspWireB" type="text" value="${esc(endVal(w.b))}"${endHint(w.b)} autocomplete="off" spellcheck="false">
-          <p class="sub">Địa chỉ lỗ: chữ hàng a–z (theo số hàng của board) + số cột (vd c12, h29, k5) hoặc rail T+/T−/B+/B− + số (vd T+5). Hoặc cọc nguồn: PSU1.+ / PSU1.- (cọc + nối về rail +, cọc − nối về rail −). Gõ xong bấm Áp dụng hoặc Enter. Để trống 1 ô thì giữ nguyên đầu đó.</p>
+          <p class="sub">Địa chỉ lỗ: board ≤26 hàng thì chữ hàng a–z + số cột (vd c12, h29, k5); board &gt;26 hàng thì chữ hàng + số khối + số cột (vd c112 = hàng c1 cột 12, b25 = hàng b2 cột 5). Hoặc rail T+/T−/B+/B− + số (vd T+5). Hoặc cọc nguồn: PSU1.+ / PSU1.- (cọc + nối về rail +, cọc − nối về rail −). Gõ xong bấm Áp dụng hoặc Enter. Để trống 1 ô thì giữ nguyên đầu đó.</p>
           <p class="bench-insp-err" id="inspWireErr" role="alert">${esc(wireAddrError)}</p>
           <button type="button" class="btn btn-accent btn-small" data-act="apply-wire">Áp dụng</button>
           <label class="bench-insp-label">Màu dây</label>
@@ -353,7 +355,7 @@ function main() {
         }).filter(Boolean);
         const pc = picCol(state.size);
         const [rT, rB] = picRows(state.size);
-        body = `<p class="sub">Chip cắm cố định ở cột ${Math.max(1, pc)}–${pc + 19}, hàng ${ROWS[rT]}/${ROWS[rB]}. ${conns.length} chân đang nối dây.</p>
+        body = `<p class="sub">Chip cắm cố định ở cột ${Math.max(1, pc)}–${pc + 19}, hàng ${rowLabel(rT, rowsOf(state.size))}/${rowLabel(rB, rowsOf(state.size))}. ${conns.length} chân đang nối dây.</p>
           <div class="bench-conns">${conns.join('') || '<p class="sub">Chưa chân nào nối dây ngoài nguồn.</p>'}</div>`;
       } else if (comp.type === 'psu') {
         const volts = psuVolts(comp);
@@ -568,9 +570,23 @@ function main() {
     cv.addEventListener('pointermove', onCanvasPointerMove);
     cv.addEventListener('pointerup', onCanvasPointerUp);
     cv.addEventListener('pointercancel', onCanvasPointerUp);
+    // Chặn menu chuột phải để chuột phải dùng để pan.
+    cv.addEventListener('contextmenu', (e) => e.preventDefault());
     cv.addEventListener('wheel', (e) => {
       e.preventDefault();
-      orbitTarget.r = clamp(orbitTarget.r * Math.exp(e.deltaY * 0.001), 120, 900);
+      const oldR = orbitTarget.r;
+      const newR = clamp(oldR * Math.exp(e.deltaY * 0.001), 120, 900);
+      orbitTarget.r = newR;
+      // Zoom vào thì target camera dịch dần về điểm trên mặt bàn dưới
+      // con trỏ, để zoom được vào góc board chứ không chỉ về tâm.
+      if (newR < oldR) {
+        const pt = raycastTablePoint(e);
+        if (pt) {
+          const t = zoomTowardPoint(camTarget, pt, newR / oldR);
+          const c = clampCamTarget(t.x, t.z, TABLE_W, TABLE_D);
+          camTarget.x = c.x; camTarget.z = c.z;
+        }
+      }
     }, { passive: false });
     new ResizeObserver(() => {
       if (!renderer) return;
@@ -609,8 +625,8 @@ function main() {
     }
     for (let r = 0; r < rows; r++) {
       const z = py((r - (rows - 1) / 2) * PITCH);
-      ctx.fillText(ROWS[r], px(-bodyW / 2 + 3), z);
-      ctx.fillText(ROWS[r], px(bodyW / 2 - 3), z);
+      ctx.fillText(rowLabel(r, rows), px(-bodyW / 2 + 3), z);
+      ctx.fillText(rowLabel(r, rows), px(bodyW / 2 - 3), z);
     }
     if (railColsOf(size) > 0) {
       // Dấu +/− của rail: T+ và B+ là +, T− và B− là −.
@@ -649,13 +665,15 @@ function main() {
     top.position.y = BOARD_TOP + 0.05;
     top.receiveShadow = true;
     boardGroup.add(top);
-    // Rãnh giữa (giữa 2 nửa strip: z = 0 với số hàng chẵn, −PITCH/2 với số hàng lẻ)
-    const grooveZ = ((2 * Math.floor(rows / 2) - 1) / 2 - (rows - 1) / 2) * PITCH;
-    const groove = new THREE.Mesh(
-      new THREE.BoxGeometry(bodyW, 0.6, 2.4),
-      new THREE.MeshStandardMaterial({ color: 0xCBD5E1 }));
-    groove.position.set(0, BOARD_TOP + 0.02, grooveZ);
-    boardGroup.add(groove);
+    // Rãnh ở mỗi ranh giới đoạn 5 hàng (sau hàng 5, 10, 15...): board 10
+    // hàng thì chỉ 1 rãnh giữa (sau hàng 5) như cũ.
+    for (let b = 5; b < rows; b += 5) {
+      const groove = new THREE.Mesh(
+        new THREE.BoxGeometry(bodyW, 0.6, 2.4),
+        new THREE.MeshStandardMaterial({ color: 0xCBD5E1 }));
+      groove.position.set(0, BOARD_TOP + 0.02, (b - 0.5 - (rows - 1) / 2) * PITCH);
+      boardGroup.add(groove);
+    }
     // Vạch màu rail +/− (chỉ khi board có rail)
     if (rc > 0) {
       for (const [r, color] of [[-2, 0xDC2626], [-1, 0x2563EB], [rows, 0xDC2626], [rows + 1, 0x2563EB]]) {
@@ -724,7 +742,7 @@ function main() {
   }
   function updateSizeUI() {
     const info = $('benchBoardInfo');
-    if (info) info.textContent = `${sizeLabel(state.size)} · chip PIC16F877A cắm sẵn · nguồn phía sau bàn. Kéo chỗ trống để xoay 360°, cuộn chuột để zoom. Bấm vào board để đổi kích thước, bấm linh kiện để mở Inspector bên phải.`;
+    if (info) info.textContent = `${sizeLabel(state.size)} · chip PIC16F877A cắm sẵn · nguồn phía sau bàn. Kéo chỗ trống để xoay 360°, chuột phải hoặc Shift+kéo để dịch góc nhìn, cuộn chuột để zoom vào điểm trỏ. Bấm vào board để đổi kích thước, bấm linh kiện để mở Inspector bên phải.`;
   }
 
   // --- Vẽ linh kiện 3D ---
@@ -1102,6 +1120,16 @@ function main() {
     if (Math.abs(pt.x) > bodyW / 2 || Math.abs(pt.z) > bodyDepth(state.size) / 2) return null;
     return { x: pt.x, z: pt.z };
   }
+  // Điểm trên mặt bàn (y=0) dưới con trỏ, KHÔNG kẹp — dùng cho zoom về
+  // điểm trỏ; pickTablePoint thì kẹp vào vùng đặt nguồn.
+  function raycastTablePoint(e) {
+    const ndc = pointerNdc(e);
+    if (!ndc.inside) return null;
+    raycaster.setFromCamera(ndc, camera);
+    const pt = new THREE.Vector3();
+    if (!raycaster.ray.intersectPlane(tablePlane(), pt)) return null;
+    return { x: pt.x, z: pt.z };
+  }
   function pickTablePoint(e) {
     const ndc = pointerNdc(e);
     if (!ndc.inside) return null;
@@ -1256,7 +1284,15 @@ function main() {
   // --- Chuột trên canvas: xoay / di chuyển / chọn / đi dây / kéo đầu dây ---
   function onCanvasPointerDown(e) {
     if (e.pointerType && e.pointerType !== 'mouse') return;
-    if (e.button !== 0) return;
+    if (e.button !== 0 && e.button !== 2) return;
+    // Chuột phải (hoặc Shift+chuột trái): kéo để pan — dịch góc nhìn
+    // trên mặt bàn, không xoay, không chọn linh kiện.
+    if (e.button === 2 || (e.button === 0 && e.shiftKey)) {
+      drag = { mode: 'pan', startX: e.clientX, startY: e.clientY, lastX: e.clientX, lastY: e.clientY, moved: false };
+      renderer.domElement.setPointerCapture(e.pointerId);
+      e.preventDefault();
+      return;
+    }
     // Kéo 1 đầu dây đang chọn: núm tròn ở đầu dây được ưu tiên trước.
     const handle = pickWireHandle(e);
     if (handle) {
@@ -1383,6 +1419,18 @@ function main() {
       if (Math.abs(e.clientX - drag.startX) + Math.abs(e.clientY - drag.startY) > 4) drag.moved = true;
       orbitTarget.az -= dx * 0.005;
       orbitTarget.el = clamp(orbitTarget.el + dy * 0.004, 0.15, 1.45);
+      return;
+    }
+    if (drag.mode === 'pan') {
+      const dx = e.clientX - drag.lastX, dy = e.clientY - drag.lastY;
+      drag.lastX = e.clientX; drag.lastY = e.clientY;
+      if (Math.abs(e.clientX - drag.startX) + Math.abs(e.clientY - drag.startY) > 4) drag.moved = true;
+      // mm/pixel tại độ sâu của target: chiều cao khung hình ứng với
+      // 2*r*tan(fov/2) mm trên mặt bàn.
+      const scale = (2 * orbit.r * Math.tan((camera.fov * Math.PI) / 360)) / (wrap.clientHeight || 620);
+      const t = panTarget(camTarget, dx, dy, orbit.az, scale);
+      const c = clampCamTarget(t.x, t.z, TABLE_W, TABLE_D);
+      camTarget.x = c.x; camTarget.z = c.z;
       return;
     }
     if (drag.mode === 'move') {

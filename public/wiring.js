@@ -254,7 +254,14 @@ export function netLevel(cpu, members) {
 export function ledStates(cpu, mapping) {
   return mapping.leds.map((led) => {
     let on = false;
-    if (led.pin && led.gnd) {
+    // Anode đã có +5V (từ nguồn hoặc rail +): LED sáng khi cathode về
+    // GND, hoặc cathode nối chân PIC đang là ngõ ra mức 0. Không cần
+    // điện trở nối tiếp mới sáng (thiếu điện trở chỉ là cảnh báo).
+    if (led.vccAnode) {
+      if (led.cathPin) {
+        on = cpu.pinDirection(led.cathPin.port, led.cathPin.bit) === 'out' && cpu.pinLevel(led.cathPin.port, led.cathPin.bit) === 0;
+      } else if (led.gnd) on = true;
+    } else if (led.pin && led.gnd) {
       const anodeHigh = cpu.pinDirection(led.pin.port, led.pin.bit) === 'out' && cpu.pinLevel(led.pin.port, led.pin.bit) === 1;
       on = anodeHigh;
     } else if (led.pin && led.cathPin) {
@@ -379,6 +386,19 @@ export function checkWiring(netlist, tris = null) {
       warnings.push({
         id: 'ledvcc-' + c.id, kind: 'warn',
         message: `LED ${c.label} nối thẳng VCC–GND nên sẽ sáng liên tục, không điều khiển được bằng code.`,
+        wireIds: [], compIds: [c.id], terminalIds: [c.id + '.A', c.id + '.K'],
+      });
+    }
+    if (aNet && kNet && aNet.id === kNet.id) {
+      warnings.push({
+        id: 'ledshort-' + c.id, kind: 'warn',
+        message: `LED ${c.label} anode và cathode nối cùng 1 net (nối tắt 2 đầu LED) nên LED không sáng.`,
+        wireIds: [], compIds: [c.id], terminalIds: [c.id + '.A', c.id + '.K'],
+      });
+    } else if (aNet && aNet.members.includes('VCC') && kNet && !kNet.members.includes('GND') && kNet.members.length <= 1) {
+      warnings.push({
+        id: 'lednognd-' + c.id, kind: 'warn',
+        message: `LED ${c.label} anode đã có +5V nhưng cathode chưa nối về GND nên LED không sáng — nối cathode về thanh GND.`,
         wireIds: [], compIds: [c.id], terminalIds: [c.id + '.A', c.id + '.K'],
       });
     }

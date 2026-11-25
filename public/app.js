@@ -6,8 +6,8 @@ import { assemble, createCPU } from './pic16.js?v=20261125d';
 import {
   resolvePeripherals, ledStates,
   applyButtonToCpu, applyPotToCpu,
-} from './wiring.js?v=20261125b';
-import { defaultBenchState, benchToNetlist } from './bench-model.js?v=20261125j';
+} from './wiring.js?v=20261125l';
+import { defaultBenchState, benchToNetlist } from './bench-model.js?v=20261125l';
 
 const cpu = createCPU();
 cpu.clockHz = 4000000;
