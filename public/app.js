@@ -42,7 +42,7 @@ let audioCtx = null, buzzerOsc = null, buzzerGain = null;
 
 // Trạng thái breadboard (khai báo sớm: applyWiring() chạy ngay ở khởi động)
 const bbSvg = $('bbSvg');
-let selectedWireId = null, selectedCompId = null, pendingTerm = null;
+let selectedWireId = null, selectedCompId = null;
 let highlight = null; // { wireIds, compIds, terminalIds } từ panel Kiểm tra
 let dragTerm = null, dragMoved = false, dragStartXY = null, downTarget = null, dragCurrent = null;
 let wireSeq = 1000;
@@ -558,7 +558,7 @@ refreshAll();
 // BREADBOARD KÉO DÂY (view "Đấu nối")
 // Bố cục SVG 1000x780, nhìn từ trên: chip DIP-40 ở giữa, thanh +5V (trái),
 // thanh GND (phải), linh kiện xung quanh. Dây vẽ bằng SVG path cong.
-// Kéo-thả chuột hoặc bấm lần lượt 2 đầu nối (dùng được trên điện thoại).
+// Kéo-thả dây bằng chuột (chỉ dùng trên máy tính).
 // ===========================================================================
 const BB_W = 1000, BB_H = 780;
 const PIN_Y0 = 140, PIN_DY = 26;
@@ -621,7 +621,7 @@ function renderChip() {
     const left = pin.num <= 20;
     const stubX = left ? 396 : 596;
     s += `<rect x="${stubX}" y="${pos.y - 4}" width="12" height="8" class="bb-pin-stub"/>`;
-    s += `<g class="bb-term${pendingTerm === 'PIC.' + pin.id ? ' pending' : ''}${highlight && highlight.terminalIds && highlight.terminalIds.includes('PIC.' + pin.id) ? ' hl' : ''}" data-term="PIC.${pin.id}">`;
+    s += `<g class="bb-term${highlight && highlight.terminalIds && highlight.terminalIds.includes('PIC.' + pin.id) ? ' hl' : ''}" data-term="PIC.${pin.id}">`;
     s += `<circle cx="${pos.x}" cy="${pos.y}" r="13" class="bb-term-hit"/><circle cx="${pos.x}" cy="${pos.y}" r="7" class="bb-term-dot"/>`;
     s += `<title>${pin.label} (chân ${pin.num})</title></g>`;
     s += `<text x="${left ? 388 : 612}" y="${pos.y + 4}" text-anchor="${left ? 'end' : 'start'}" class="bb-pin-label">${esc(pin.label)}</text>`;
@@ -643,8 +643,8 @@ function renderRails() {
   let s = `<rect x="28" y="100" width="24" height="560" rx="6" class="bb-rail-vcc"/><text x="40" y="92" text-anchor="middle" class="bb-rail-label-vcc">+5V</text>`;
   s += `<rect x="948" y="100" width="24" height="560" rx="6" class="bb-rail-gnd"/><text x="960" y="92" text-anchor="middle" class="bb-rail-label-gnd">GND</text>`;
   for (const y of [160, 300, 440, 580]) {
-    s += `<g class="bb-term${pendingTerm === 'VCC' ? ' pending' : ''}" data-term="VCC"><circle cx="40" cy="${y}" r="13" class="bb-term-hit"/><circle cx="40" cy="${y}" r="7" class="bb-term-dot bb-term-vcc"/><title>+5V</title></g>`;
-    s += `<g class="bb-term${pendingTerm === 'GND' ? ' pending' : ''}" data-term="GND"><circle cx="960" cy="${y}" r="13" class="bb-term-hit"/><circle cx="960" cy="${y}" r="7" class="bb-term-dot bb-term-gnd"/><title>GND</title></g>`;
+    s += `<g class="bb-term" data-term="VCC"><circle cx="40" cy="${y}" r="13" class="bb-term-hit"/><circle cx="40" cy="${y}" r="7" class="bb-term-dot bb-term-vcc"/><title>+5V</title></g>`;
+    s += `<g class="bb-term" data-term="GND"><circle cx="960" cy="${y}" r="13" class="bb-term-hit"/><circle cx="960" cy="${y}" r="7" class="bb-term-dot bb-term-gnd"/><title>GND</title></g>`;
   }
   return s;
 }
@@ -659,7 +659,7 @@ function renderComponent(comp) {
     const [ox, oy] = offs[t];
     const id = comp.id + '.' + t;
     const label = COMPONENT_DEFS[comp.kind].termLabels[t];
-    return `<g class="bb-term${pendingTerm === id ? ' pending' : ''}${highlight && highlight.terminalIds && highlight.terminalIds.includes(id) ? ' hl' : ''}" data-term="${id}">` +
+    return `<g class="bb-term${highlight && highlight.terminalIds && highlight.terminalIds.includes(id) ? ' hl' : ''}" data-term="${id}">` +
       `<circle cx="${ox}" cy="${oy}" r="13" class="bb-term-hit"/><circle cx="${ox}" cy="${oy}" r="7" class="bb-term-dot"/><title>${esc(comp.label)} — ${esc(label)}</title></g>` +
       `<text x="${ox}" y="${oy - 12}" text-anchor="middle" class="bb-term-label">${esc(t)}</text>`;
   };
@@ -768,7 +768,7 @@ function applyWiring() {
   mapping = resolvePeripherals(netlist);
   cpu.setWiring(mapping);
   saveWiring();
-  selectedWireId = null; selectedCompId = null; pendingTerm = null; highlight = null;
+  selectedWireId = null; selectedCompId = null; highlight = null;
   renderBoard();
   renderBreadboard();
   renderChecks();
@@ -865,6 +865,7 @@ function svgPoint(e) {
   return pt.matrixTransform(bbSvg.getScreenCTM().inverse());
 }
 bbSvg.addEventListener('pointerdown', (e) => {
+  if (e.pointerType && e.pointerType !== 'mouse') return; // chỉ chuột, không chạm/bút
   const term = e.target.closest('.bb-term');
   const wire = e.target.closest('.bb-wire-hit, .bb-wire');
   const comp = e.target.closest('.bb-comp');
@@ -880,6 +881,7 @@ bbSvg.addEventListener('pointerdown', (e) => {
   }
 });
 bbSvg.addEventListener('pointermove', (e) => {
+  if (e.pointerType && e.pointerType !== 'mouse') return; // chỉ chuột, không chạm/bút
   if (!dragTerm) return;
   if (dragStartXY && Math.hypot(e.clientX - dragStartXY.x, e.clientY - dragStartXY.y) > 6) dragMoved = true;
   dragCurrent = svgPoint(e);
@@ -895,31 +897,16 @@ bbSvg.addEventListener('pointermove', (e) => {
   }
 });
 bbSvg.addEventListener('pointerup', (e) => {
+  if (e.pointerType && e.pointerType !== 'mouse') return; // chỉ chuột, không chạm/bút
   if (dragTerm) {
     const target = document.elementFromPoint(e.clientX, e.clientY)?.closest('.bb-term');
     const start = dragTerm;
     dragTerm = null; dragCurrent = null;
     const preview = bbSvg.querySelector('.bb-wire-preview');
     if (preview) preview.remove();
-    if (dragMoved) {
-      // Kéo-thả: thả lên đầu nối khác thì nối dây
-      if (target && target.dataset.term !== start) tryAddWire(start, target.dataset.term);
-      else renderBreadboard();
-    } else {
-      // Bấm-chạm: bấm lần lượt 2 đầu nối (cho mobile)
-      if (pendingTerm === null) {
-        pendingTerm = start;
-        setBbStatus(`Đã chọn đầu ${start} — bấm thêm một đầu nối khác để nối dây.`);
-      } else if (pendingTerm === start) {
-        pendingTerm = null;
-        setBbStatus('Đã bỏ chọn đầu nối.');
-      } else {
-        const a = pendingTerm;
-        pendingTerm = null;
-        tryAddWire(a, start);
-      }
-      renderBreadboard();
-    }
+    // Chỉ nối dây khi kéo-thả bằng chuột tới đầu nối khác
+    if (dragMoved && target && target.dataset.term !== start) tryAddWire(start, target.dataset.term);
+    else renderBreadboard();
     return;
   }
   // Bấm chọn dây / linh kiện (không kéo)

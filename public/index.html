@@ -5,9 +5,10 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Mô phỏng PIC16F877A — HoaTrang Lab</title>
 <meta name="description" content="Mô phỏng vi điều khiển PIC16F877A ngay trên trình duyệt: soạn Assembly, chạy từng lệnh, LED, nút nhấn, LCD 16x2, ADC, UART.">
-<link rel="stylesheet" href="styles.css?v=20261125b">
+<link rel="stylesheet" href="styles.css?v=20261125c">
 </head>
 <body>
+<div class="desktop-only-banner" role="note">Trang mô phỏng này chỉ dùng trên máy tính. Hãy mở bằng trình duyệt trên máy tính để đầy đủ chức năng.</div>
 <header class="site-header">
   <div class="wrap">
     <h1>Mô phỏng PIC16F877A</h1>
@@ -187,7 +188,7 @@
         <button type="button" class="btn btn-small" id="btnDeleteWire" disabled>Xoá dây đã chọn</button>
         <button type="button" class="btn btn-small" id="btnDeleteComp" disabled>Xoá linh kiện</button>
       </div>
-      <p class="sub" id="bbStatus">Kéo từ một đầu nối tới đầu nối khác để đi dây, hoặc bấm lần lượt 2 đầu nối (dùng được trên điện thoại).</p>
+      <p class="sub" id="bbStatus">Kéo chuột từ một đầu nối tới đầu nối khác để đi dây.</p>
     </div>
     <div class="card bb-canvas-card">
       <h2>Breadboard — nhìn từ trên</h2>
@@ -206,6 +207,6 @@
   <p>HoaTrang Lab — Mô phỏng PIC16F877A chạy hoàn toàn trên trình duyệt, không gửi code đi đâu. Hỗ trợ 35 lệnh Assembly, TMR0/1/2, ADC 10-bit, USART, LCD HD44780.</p>
 </footer>
 
-<script type="module" src="app.js?v=20261125b"></script>
+<script type="module" src="app.js?v=20261125c"></script>
 </body>
 </html>

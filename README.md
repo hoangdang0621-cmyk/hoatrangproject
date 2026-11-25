@@ -3,6 +3,7 @@
 Trang web mô phỏng vi điều khiển PIC16F877A ngay trên trình duyệt, không cần
 cài đặt. Viết chương trình Assembly, dịch, chạy và quan sát chip hoạt động
 như trên board thật: LED, nút nhấn, LCD, ADC, UART, thanh ghi, ngắt và timer.
+Trang này chỉ dùng trên máy tính.
 
 ## Dùng nhanh
 
@@ -52,8 +53,8 @@ PIC16F877A (DIP-40) ở giữa, thanh +5V (đỏ) bên trái, thanh GND (đen) b
 phải, VDD/VSS/MCLR đã nối sẵn nguồn. Mọi linh kiện trên board đều là linh
 kiện trên breadboard — đổi dây ở đây thì board và code chạy theo dây mới.
 
-- **Kéo dây:** kéo-thả chuột từ một đầu nối (chấm tròn) tới đầu nối khác,
-  hoặc bấm lần lượt 2 đầu nối (dùng được trên điện thoại). Dây đỏ = +5V,
+- **Kéo dây:** kéo-thả chuột từ một đầu nối (chấm tròn) tới đầu nối khác.
+  Dây đỏ = +5V,
   dây đen = GND, dây màu = tín hiệu.
 - **Xoá dây:** bấm vào dây để chọn rồi bấm **Xoá dây đã chọn** (hoặc phím
   Delete).
