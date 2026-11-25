@@ -1,145 +1,76 @@
-# HoaTrang — Mô phỏng PIC16F877A
+# HoaTrang — Bàn thực hành 3D PIC16F877A
 
-Trang web mô phỏng vi điều khiển PIC16F877A ngay trên trình duyệt, không cần
-cài đặt. Viết chương trình Assembly, dịch, chạy và quan sát chip hoạt động
-như trên board thật: LED, nút nhấn, LCD, ADC, UART, thanh ghi, ngắt và timer.
+Trang web là một bàn thí nghiệm 3D cho vi điều khiển PIC16F877A, chạy ngay
+trên trình duyệt. Trên bàn có sẵn breadboard 830 lỗ, chip PIC16F877A cắm
+sẵn vắt qua rãnh giữa, nguồn 5V đặt phía sau đã nối dây về rail. Linh kiện
+trên bàn nối vào chip thật — đổi dây trên bàn thì chip chạy theo dây mới.
 Trang này chỉ dùng trên máy tính.
+
+Chip chạy sẵn chương trình nhấp nháy LED RB0: nối một LED (kèm điện trở
+nối tiếp) vào strip của chân RB0 thì LED nhấp nháy theo nhịp chip.
 
 ## Dùng nhanh
 
-1. Viết chương trình Assembly trong editor (hoặc nạp file .hex có sẵn).
-2. Bấm **Dịch & Nạp** (hoặc Ctrl+Enter) để dịch code Assembly và nạp vào chip.
-3. Bấm **Chạy tất cả** để chạy. Đổi tốc độ 0.1x / 0.5x / 1x / Tối đa,
-   bấm **Chạy từng lệnh** để chạy từng lệnh một, bấm **Reset** để chạy lại từ đầu.
-4. Bấm vào số dòng trong editor để đặt breakpoint: chương trình chạy tới đó
-   sẽ dừng lại.
+1. **Đặt linh kiện:** kéo linh kiện từ khay **Linh Kiện** bên trái thả
+   vào lỗ breadboard — chân cắm thẳng vào lỗ, breadboard chính là đế.
+   Ô xanh là đặt được, ô đỏ là không (lỗ đã có chân, dưới thân chip,
+   ngoài bàn). Bấm phím R trong lúc kéo để xoay linh kiện 90°.
+   Bấm vào khay (không kéo) rồi bấm vào lỗ cũng đặt được.
+2. **Xoay bàn:** kéo chuột vào chỗ trống trên bàn để xoay 360°, cuộn
+   chuột để zoom. Nút **3D** / **Từ trên** đổi góc nhìn.
+3. **Đi dây:** bấm **Dây dẫn** rồi bấm lỗ bắt đầu và lỗ kết thúc, dây
+   hiện thành đường cong nối 2 lỗ. Chọn màu dây trong bảng 8 màu.
+4. **Chỉnh linh kiện:** bấm chọn linh kiện thì panel Inspector trượt từ
+   phải sang — đổi giá trị điện trở, màu LED, mức chiết áp (%), xem chân
+   nào nối đi đâu, xoá linh kiện/dây (hoặc phím Delete).
+5. **Kiểm tra:** panel bên trái liệt kê cảnh báo đấu nối trên bàn, bấm
+   vào cảnh báo để chọn linh kiện liên quan.
 
-## Viết chương trình Assembly
+## Khay linh kiện
 
-- Soạn code trong editor, đủ 35 lệnh của PIC16F877A: `MOVLW`, `MOVWF`,
-  `MOVF`, `CLRF`, `ADDWF`, `SUBWF`, `ANDWF`, `IORWF`, `XORWF`, `INCF`,
-  `DECF`, `INCFSZ`, `DECFSZ`, `BSF`, `BCF`, `BTFSS`, `BTFSC`, `GOTO`,
-  `CALL`, `RETURN`, `RETLW`, `NOP`, `SLEEP`, `CLRWDT`...
-- Dùng nhãn (`ten_nhan:`), `EQU` đặt tên hằng/thanh ghi, `ORG` đặt địa chỉ,
-  `BANKSEL` chuyển bank, chú thích bằng dấu `;`.
-- Lỗi dịch hiện kèm số dòng, bấm vào lỗi để nhảy tới đúng dòng đó.
-- Chọn tần số thạch anh 1 / 4 / 8 / 20 MHz (mặc định 4 MHz, một lệnh tốn
-  4 chu kỳ clock như chip thật).
+- **LED:** 2 đầu A/K. Sáng khi anode ở mức 1 và cathode về GND (hoặc mức 0).
+- **Điện trở 220Ω:** 2 đầu, nối tiếp với LED để hạn dòng. Đổi được giá
+  trị Ω trong Inspector, vạch màu trên thân đổi theo.
+- **Nút nhấn:** 2 đầu, active-low (nhấn giữ là mức 0, có pull-up).
+- **Chiết áp:** 3 đầu VCC/Wiper/GND. Wiper nối kênh AN nào thì ADC của
+  chip đọc điện áp đó (0–5V, 10-bit).
+- **LCD 16x2:** 10 đầu RS/E/D0–D7. Nối đủ dây thì hiện chữ theo chương
+  trình chạy trên chip.
+- **Còi buzzer:** 2 đầu. Còi kêu khi chân + ra mức 1.
+- **Nguồn 5V:** đặt lên mặt bàn, cọc + (đỏ) và − (đen) nối vào rail
+  trên/dưới của breadboard.
+- **Dây dẫn:** bấm 2 lỗ để nối, dây hiện thành đường cong màu.
 
-## Dùng board
+## Breadboard 830 lỗ
 
-Board đấu dây như kit PIC phổ biến, mọi chân đều nối sẵn với chip
-(đổi dây được ở tab Đấu nối — xem mục bên dưới):
+Hàng a–e của mỗi cột nối với nhau thành một strip, hàng f–j nối với nhau
+thành một strip riêng; 2 rail +/− chạy suốt chiều dài (mọi lỗ rail + là
++5V, mọi lỗ rail − là GND). Chip PIC16F877A cắm ở cột 22–41: chân 1–20
+ở hàng b, chân 21–40 ở hàng h. Dây nguồn VDD/VSS/MCLR đã nối sẵn về rail.
 
-- **8 LED trên PORTB (RB0–RB7):** sáng khi chân là output (`TRISB = 0`)
-  và mức ra là 1. Muốn LED nhấp nháy thì viết code đảo bit PORTB.
-- **4 nút nhấn RC0–RC3:** nhấn giữ là mức 0 (active-low, có pull-up).
-  Đọc bằng `BTFSS` / `BTFSC PORTC, 0`... để rẽ nhánh theo nút.
-- **Chiết áp AN0:** kéo thanh trượt 0–5V, chip đọc qua ADC 10-bit
-  (kênh AN0, kết quả 0–1023 trong `ADRESH:ADRESL`). Bật ADC bằng
-  `ADCON0` (bit `ADON`, rồi set `GO` để bắt đầu chuyển đổi).
-- **LCD 16x2:** data nối PORTD, RS = RE0, E = RE1. Gửi lệnh qua PORTD
-  rồi tạo xung E để LCD nhận: lệnh xóa màn hình, đặt vị trí con trỏ,
-  ghi ký tự.
-- **Terminal UART:** chip gửi ký tự qua `TXREG` (chân RC6/TX) thì hiện
-  trong terminal; gõ ký tự vào terminal để gửi vào `RCREG` (chân RC7/RX),
-  mặc định baud 9600 ở 4 MHz.
+## Cảnh báo thường gặp (panel "Kiểm tra")
 
-## Đấu nối breadboard
-
-Tab **Đấu nối (Breadboard)** cho thấy đúng sơ đồ dây của board: chip
-PIC16F877A (DIP-40) ở giữa, thanh +5V (đỏ) bên trái, thanh GND (đen) bên
-phải, VDD/VSS/MCLR đã nối sẵn nguồn. Mọi linh kiện trên board đều là linh
-kiện trên breadboard — đổi dây ở đây thì board và code chạy theo dây mới.
-
-- **Kéo dây:** kéo-thả chuột từ một đầu nối (chấm tròn) tới đầu nối khác.
-  Dây đỏ = +5V,
-  dây đen = GND, dây màu = tín hiệu.
-- **Xoá dây:** bấm vào dây để chọn rồi bấm **Xoá dây đã chọn** (hoặc phím
-  Delete).
-- **Thêm linh kiện:** bấm nút trong khay linh kiện — LED (kèm sẵn điện trở
-  220Ω), nút nhấn, chiết áp, LCD 16x2, còi buzzer. Mỗi linh kiện có các
-  đầu nối riêng: LED 2 đầu (A/K), nút 2 đầu, chiết áp 3 đầu (VCC/Wiper/
-  GND), LCD 10 đầu (RS/E/D0–D7), còi 2 đầu.
-- **Xoá linh kiện:** bấm chọn linh kiện đã thêm rồi bấm **Xoá linh kiện**.
-  Linh kiện của mạch mẫu không xoá được, chỉ xoá/sửa dây của nó.
-- **Về mạch mẫu:** nút **Về mạch mẫu** khôi phục đấu nối mặc định (LED
-  RB0–RB7, nút RC0–RC3, LCD PORTD/RE0/RE1, chiết áp AN0). Đấu nối tự lưu
-  trên máy (localStorage), mở lại trang vẫn còn.
-- **Còi buzzer:** nối chân + vào một chân digital; còi kêu khi chân đó ra
-  mức 1. Tiếng bíp (WebAudio) mặc định tắt, bấm **Bật tiếng còi** trên
-  board để nghe.
-
-### Mạch mẫu mặc định
-
-8 LED RB0–RB7 (mỗi LED kèm R 220Ω, cathode về GND), 4 nút RC0–RC3 (đầu
-còn lại về GND, active-low), chiết áp VCC–RA0 (AN0)–GND, LCD RS=RE0,
-E=RE1, D0–D7=RD0–RD7.
-
-### Cảnh báo thường gặp (panel "Kiểm tra")
-
-- **Nối tắt +5V–GND:** dây nối cả 2 thanh nguồn — sẽ chập nguồn, gỡ ngay.
-- **LED không có điện trở:** LED nối thẳng chân PIC mà không qua điện trở
+- **Nối tắt +5V–GND:** dây nối cả 2 rail nguồn — sẽ chập nguồn, gỡ ngay.
+- **LED không có điện trở:** LED nối thẳng chân chip mà không qua điện trở
   hạn dòng, dễ cháy LED.
 - **LCD chưa nối đủ dây:** thiếu RS, E hoặc D0–D7 — LCD không hiện chữ
   cho tới khi nối đủ.
-- **Hai chân output nối trực tiếp:** 2 chân cùng là ngõ ra (TRIS=0) nối
-  nhau, có thể hỏng chân.
-- **Chân PIC nối 2 nguồn tín hiệu:** 2 linh kiện cùng lái một chân, mức
+- **Hai chân output nối trực tiếp:** 2 chân cùng là ngõ ra nối nhau, có
+  thể hỏng chân.
+- **Chân chip nối 2 nguồn tín hiệu:** 2 linh kiện cùng lái một chân, mức
   logic xung đột.
 - **Đầu nối chưa nối dây:** đầu nối của linh kiện còn bỏ trống.
 
-Bấm vào một cảnh báo để tô sáng dây/linh kiện liên quan.
+Bấm vào một cảnh báo để chọn linh kiện liên quan.
 
-## Bàn thực hành 3D
+## Bàn mặc định
 
-Tab **Bàn thực hành** là một bàn thí nghiệm 3D (Three.js): breadboard
-830 lỗ, chip PIC16F877A cắm sẵn vắt qua rãnh giữa (chân 1–20 ở hàng b,
-chân 21–40 ở hàng h), nguồn 5V trên bàn đã nối dây về rail. Linh kiện
-trên bàn chạy thật theo code — đổi dây trên bàn thì board chạy theo.
+Bàn mặc định có chip PIC + nguồn 5V + dây nguồn VDD/VSS/MCLR về rail.
+Nút **Dọn hết bàn** giữ lại chip, nguồn và dây nguồn; nút **Về bàn mặc
+định** khôi phục toàn bộ. Trạng thái bàn tự lưu trên máy (localStorage),
+mở lại trang vẫn còn.
 
-- **Xoay bàn:** kéo chuột vào chỗ trống trên bàn để xoay 360°, cuộn
-  chuột để zoom. Nút **3D** / **Từ trên** đổi góc nhìn.
-- **Đặt linh kiện:** kéo từ khay **Linh Kiện** (LED, điện trở, nút nhấn,
-  chiết áp, LCD 16x2, còi buzzer, nguồn 5V) thả vào lỗ breadboard —
-  chân cắm thẳng vào lỗ, breadboard chính là đế. Ô xanh là đặt được,
-  ô đỏ là không (lỗ đã có chân, dưới thân chip, ngoài board). Bấm
-  phím R trong lúc kéo để xoay linh kiện 90°. Bấm vào khay (không kéo)
-  rồi bấm vào lỗ cũng đặt được.
-- **Đi dây:** bấm **Dây dẫn** rồi bấm lỗ bắt đầu và lỗ kết thúc, dây
-  hiện thành đường cong nối 2 lỗ. Chọn màu dây trong bảng 8 màu.
-- **Inspector:** bấm chọn linh kiện thì panel trượt từ phải sang: đổi
-  giá trị điện trở, màu LED, mức chiết áp (%), xem chân nào nối đi đâu,
-  xoá linh kiện/dây (hoặc phím Delete).
-- **Kiểm tra:** panel bên trái liệt kê cảnh báo đấu nối trên bàn
-  (nối tắt, LED thiếu điện trở, LCD thiếu dây...), bấm vào cảnh báo
-  để chọn linh kiện liên quan.
-- Bàn mặc định có chip + nguồn + dây nguồn VDD/VSS/MCLR về rail.
-  Nút **Dọn hết bàn** giữ lại chip, nguồn và dây nguồn; nút
-  **Về bàn mặc định** khôi phục toàn bộ. Trạng thái bàn tự lưu
-  trên máy (localStorage), mở lại trang vẫn còn.
-
-## Giám sát chip đang chạy
-
-- **Thanh ghi:** W, STATUS (từng cờ C, DC, Z), PCL, PCLATH, FSR, TMR0,
-  INTCON, PORTA–PORTE, TRISA–TRISE, ADCON0/1, ADRESH/L, TXSTA/RCSTA.
-- **RAM bank 0:** bảng hex 0x20–0x7F cập nhật theo thời gian thực.
-- **Listing:** code đã dịch kèm địa chỉ, dòng đang chạy (PC) được tô sáng.
-- **GPIO Inspector:** 33 chân, mỗi chân hiện hướng (in/out theo TRISx)
-  và mức 0 / 1 / Z (Z là chân input đang thả nổi).
-- **Logic Analyzer:** vẽ dạng sóng 4 chân chọn được (mặc định RB0, RB1,
-  RC0, RC6/TX), kèm ước lượng tần số và duty của kênh đầu tiên.
-- **Trạng thái:** thời gian mô phỏng, số chu kỳ CPU, PC hiện tại.
-
-## Nạp file ngoài
-
-- **Nạp file .hex:** bấm "Nạp file .hex", chọn file Intel HEX biên dịch
-  từ MPLAB XC8, mikroC hoặc trình biên dịch PIC khác (kèm config word).
-  Chip sẽ chạy đúng firmware đó.
-- **Tải về:** tải code Assembly đang soạn (`.asm`) hoặc chương trình đã
-  dịch (`.hex`) về máy.
-
-Chức năng lấy cảm hứng từ cách tổ chức bàn thí nghiệm của
-[ohmimic.com](https://ohmimic.com/vi) (board trực quan,
-inspector GPIO, logic analyzer) — nhưng toàn bộ code mô phỏng PIC viết mới
-hoàn toàn, không copy code hay giao diện của trang đó.
+Bố cục lấy cảm hứng từ bàn thí nghiệm của
+[ohmimic.com/vi/bench](https://ohmimic.com/vi/bench) (bàn 3D xoay được,
+breadboard làm đế cắm, inspector bên phải) — nhưng toàn bộ code mô phỏng
+PIC viết mới hoàn toàn, không copy code hay giao diện của trang đó.

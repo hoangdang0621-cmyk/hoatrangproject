@@ -249,7 +249,7 @@ function main() {
           ? `<p class="sub">${lcd.complete ? 'LCD đã nối đủ dây, hiện chữ theo code.' : 'LCD chưa nối đủ dây — thiếu: ' + (lcd.missing.join(', ') || 'không rõ') + '.'}</p>`
           : `<p class="sub">LCD hiển thị 2 dòng 16 ký tự theo code (data + RS/E).</p>`;
       } else if (comp.type === 'buzzer') {
-        body = `<p class="sub">Còi kêu khi chân + ra mức 1. Tiếng bíp (WebAudio) bật ở panel board.</p>`;
+        body = `<p class="sub">Còi kêu khi chân + ra mức 1.</p>`;
       } else if (comp.type === 'pic') {
         const conns = picLegs().map((l) => {
           const d = describeTerminal(state, l.term);
@@ -1233,10 +1233,14 @@ function main() {
     }
   });
 
-  // --- Mở tab bàn: tải scene + áp netlist bench vào CPU ---
-  $('viewBenchBtn')?.addEventListener('click', () => {
-    syncToCpu();
-    ensureScene();
+  // --- Trang chỉ còn bàn: áp netlist + tải scene ngay khi mở trang ---
+  syncToCpu();
+  ensureScene();
+
+  // --- Thanh gợi ý dưới bàn: bấm × để ẩn ---
+  $('benchHintClose')?.addEventListener('click', () => {
+    const hint = $('benchHint');
+    if (hint) hint.hidden = true;
   });
 
   // --- Khởi động (chưa cần Three.js cho tới khi mở tab) ---
