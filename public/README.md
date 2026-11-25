@@ -7,13 +7,12 @@ Trang này chỉ dùng trên máy tính.
 
 ## Dùng nhanh
 
-1. Chọn ví dụ mẫu (mặc định: Nhấp nháy LED RB0).
+1. Viết chương trình Assembly trong editor (hoặc nạp file .hex có sẵn).
 2. Bấm **Dịch & Nạp** (hoặc Ctrl+Enter).
 3. Bấm **Chạy tất cả**; đổi tốc độ 0.1x / 0.5x / 1x / Tối đa; bấm
    **Chạy từng lệnh** để step; bấm vào số dòng để đặt breakpoint.
 4. Tương tác với board: nhấn giữ nút RC0–RC3, kéo chiết áp AN0,
    gõ ký tự vào Terminal UART.
-5. Làm theo panel **Bài học** để quan sát từng bước.
 
 ## Viết chương trình Assembly
 
@@ -65,7 +64,7 @@ theo dây mới.
 
 8 LED RB0–RB7 (mỗi LED kèm R 220Ω, cathode về GND), 4 nút RC0–RC3 (đầu
 còn lại về GND, active-low), chiết áp VCC–RA0 (AN0)–GND, LCD RS=RE0,
-E=RE1, D0–D7=RD0–RD7. Các lab mẫu chạy đúng với mạch này.
+E=RE1, D0–D7=RD0–RD7.
 
 ### Cảnh báo thường gặp (panel "Kiểm tra")
 
@@ -82,11 +81,21 @@ E=RE1, D0–D7=RD0–RD7. Các lab mẫu chạy đúng với mạch này.
 
 Bấm vào một cảnh báo để tô sáng dây/linh kiện liên quan.
 
-## Các bài lab mẫu
+## Bàn thực hành 3D
 
-Nhấp nháy LED RB0 · LED chạy PORTB · Nút nhấn RC0 bật LED ·
-LCD "Hello PIC16F877A" · Đọc ADC AN0 hiện lên LCD · UART echo 9600 ·
-Timer0 nhấp nháy LED.
+Tab **Bàn thực hành** là bàn thí nghiệm 3D: breadboard 830 lỗ, chip
+PIC16F877A cắm sẵn, nguồn 5V đã nối dây về rail. Linh kiện trên bàn
+chạy thật theo code.
+
+- **Xoay bàn:** kéo chỗ trống để xoay 360°, cuộn chuột để zoom,
+  nút **3D** / **Từ trên** đổi góc nhìn.
+- **Đặt linh kiện:** kéo từ khay Linh Kiện thả vào lỗ (chân cắm thẳng
+  vào lỗ). Ô xanh là đặt được, ô đỏ là không. Phím R xoay linh kiện 90°.
+- **Đi dây:** bấm **Dây dẫn** rồi bấm 2 lỗ; chọn màu dây trong bảng màu.
+- **Inspector:** bấm chọn linh kiện thì panel trượt từ phải sang để đổi
+  tính chất (giá trị điện trở, màu LED, mức chiết áp), xem chân nối đi
+  đâu, xoá linh kiện/dây (phím Delete).
+- Trạng thái bàn tự lưu trên máy, mở lại trang vẫn còn.
 
 ## Giám sát chip đang chạy
 
@@ -102,7 +111,7 @@ khác để chạy firmware có sẵn. **Tải về** code Assembly (`.asm`) ho�
 trình đã dịch (`.hex`).
 
 Chức năng lấy cảm hứng từ cách tổ chức bàn thí nghiệm của ohmimic.com
-(board trực quan, bài lab từng bước, thanh điều khiển tốc độ, inspector
+(board trực quan, thanh điều khiển tốc độ, inspector
 GPIO, logic analyzer) — nhưng viết mới hoàn toàn cho PIC16F877A, không
 copy code hay giao diện của trang đó. Giao diện theo design system riêng
 (navy #1E3A5F, accent #059669, Fira Code / Fira Sans).

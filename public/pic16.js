@@ -1,6 +1,6 @@
 // pic16.js — Lõi mô phỏng PIC16F877A (assembler + CPU + ngoại vi).
 // Không phụ thuộc DOM: chạy được trong trình duyệt (ES module) và trong Node
-// để test tự động. UI nằm ở app.js / examples.js.
+// để test tự động. UI nằm ở app.js.
 // Viết mới hoàn toàn, theo datasheet PIC16F877A (35 lệnh 14-bit, 8K program,
 // RAM 368 byte, 4 bank, stack 8 mức, TMR0, ADC 10-bit, USART, LCD HD44780).
 

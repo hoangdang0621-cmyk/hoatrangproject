@@ -1,8 +1,315 @@
 // test-pic16.mjs — Kiểm thử xác định cho lõi pic16.js (KHÔNG đưa vào public/).
 // Chạy: node test-pic16.mjs   (exit 0 = tất cả pass)
 import { assemble, createCPU, parseIntelHex, exportHex, disassemble } from './public/pic16.js';
-import { EXAMPLES } from './public/examples.js';
-import { defaultNetlist, resolvePeripherals, checkWiring, ledStates, applyButtonToCpu, applyPotToCpu } from './public/wiring.js';
+import { defaultNetlist, resolvePeripherals, checkWiring, ledStates, applyButtonToCpu, applyPotToCpu, PIC_PINS } from './public/wiring.js';
+import { allHoles, stripKey, parseHole, holePos, picLegs, canPlace, benchToNetlist, defaultBenchState, sanitizeState } from './public/bench-model.js';
+
+// Các chương trình Assembly dùng để kiểm thử — inline tại đây (file
+// public/examples.js chứa các bài lab mẫu đã bị gỡ ngày 25/11/2026 nên test
+// không import từ đó nữa). Chỉ giữ id + code, không còn hướng dẫn lab.
+const DELAY_SUB = `DELAY
+    MOVLW 0xFF
+    MOVWF 0x20
+D1
+    MOVLW 0xFF
+    MOVWF 0x21
+D2
+    DECFSZ 0x21, F
+    GOTO D2
+    DECFSZ 0x20, F
+    GOTO D1
+    RETURN`;
+
+const LCD_SUBS = `LCD_CMD
+    MOVWF PORTD
+    BCF PORTE, 0
+    BSF PORTE, 1
+    BCF PORTE, 1
+    CALL DSHORT
+    RETURN
+LCD_DATA
+    MOVWF PORTD
+    BSF PORTE, 0
+    BSF PORTE, 1
+    BCF PORTE, 1
+    CALL DSHORT
+    RETURN
+DSHORT
+    MOVLW 0x20
+    MOVWF 0x22
+DS1
+    DECFSZ 0x22, F
+    GOTO DS1
+    RETURN`;
+
+const LCD_INIT = `    BANKSEL TRISD
+    CLRF TRISD
+    BANKSEL TRISE
+    CLRF TRISE
+    BANKSEL PORTD
+    CALL DSHORT
+    MOVLW 0x38
+    CALL LCD_CMD
+    MOVLW 0x0C
+    CALL LCD_CMD
+    MOVLW 0x01
+    CALL LCD_CMD
+    MOVLW 0x06
+    CALL LCD_CMD`;
+
+const EXAMPLES = [
+  { id: 'blink', code:
+`; Nhap nhay LED RB0 - delay bang vong lap
+    ORG 0
+    BANKSEL TRISB
+    CLRF TRISB
+    BANKSEL PORTB
+LOOP
+    BSF PORTB, 0
+    CALL DELAY
+    BCF PORTB, 0
+    CALL DELAY
+    GOTO LOOP
+${DELAY_SUB}
+    END` },
+  { id: 'chase', code:
+`; LED chay tren PORTB - xoay trai qua co C
+    ORG 0
+    BANKSEL TRISB
+    CLRF TRISB
+    BANKSEL PORTB
+    MOVLW 0x01
+    MOVWF 0x20
+LOOP
+    MOVF 0x20, W
+    MOVWF PORTB
+    CALL DELAY
+    BCF STATUS, C
+    RLF 0x20, F
+    BTFSS STATUS, C
+    GOTO LOOP
+    MOVLW 0x01
+    MOVWF 0x20
+    GOTO LOOP
+${DELAY_SUB}
+    END` },
+  { id: 'button', code:
+`; Nut nhan RC0 (active-low) bat LED RB0
+    ORG 0
+    BANKSEL TRISC
+    MOVLW 0x0F
+    MOVWF TRISC
+    BANKSEL TRISB
+    CLRF TRISB
+    BANKSEL PORTC
+LOOP
+    BTFSC PORTC, 0
+    GOTO TAT
+    BSF PORTB, 0
+    GOTO LOOP
+TAT
+    BCF PORTB, 0
+    GOTO LOOP
+    END` },
+  { id: 'lcd', code:
+`; LCD 16x2: data PORTD, RS=RE0, E=RE1
+    ORG 0
+${LCD_INIT}
+    MOVLW 'H'
+    CALL LCD_DATA
+    MOVLW 'e'
+    CALL LCD_DATA
+    MOVLW 'l'
+    CALL LCD_DATA
+    MOVLW 'l'
+    CALL LCD_DATA
+    MOVLW 'o'
+    CALL LCD_DATA
+    MOVLW ' '
+    CALL LCD_DATA
+    MOVLW 'P'
+    CALL LCD_DATA
+    MOVLW 'I'
+    CALL LCD_DATA
+    MOVLW 'C'
+    CALL LCD_DATA
+    MOVLW '1'
+    CALL LCD_DATA
+    MOVLW '6'
+    CALL LCD_DATA
+    MOVLW 'F'
+    CALL LCD_DATA
+    MOVLW '8'
+    CALL LCD_DATA
+    MOVLW '7'
+    CALL LCD_DATA
+    MOVLW '7'
+    CALL LCD_DATA
+    MOVLW 'A'
+    CALL LCD_DATA
+    MOVLW 0xC0
+    CALL LCD_CMD
+    MOVLW 'H'
+    CALL LCD_DATA
+    MOVLW 'O'
+    CALL LCD_DATA
+    MOVLW 'A'
+    CALL LCD_DATA
+    MOVLW 'T'
+    CALL LCD_DATA
+    MOVLW 'R'
+    CALL LCD_DATA
+    MOVLW 'A'
+    CALL LCD_DATA
+    MOVLW 'N'
+    CALL LCD_DATA
+    MOVLW 'G'
+    CALL LCD_DATA
+    MOVLW ' '
+    CALL LCD_DATA
+    MOVLW 'L'
+    CALL LCD_DATA
+    MOVLW 'A'
+    CALL LCD_DATA
+    MOVLW 'B'
+    CALL LCD_DATA
+LOOP
+    GOTO LOOP
+${LCD_SUBS}
+    END` },
+  { id: 'adc', code:
+`; Doc ADC AN0 (chiet ap 0-5V) hien thi len LCD
+    ORG 0
+${LCD_INIT}
+    BANKSEL TRISA
+    MOVLW 0x01
+    MOVWF TRISA
+    BANKSEL ADCON1
+    MOVLW 0x8E
+    MOVWF ADCON1
+    BANKSEL ADCON0
+    MOVLW 0x81
+    MOVWF ADCON0
+MAIN
+    BANKSEL ADCON0
+    BSF ADCON0, 1
+WAIT
+    BTFSC ADCON0, 1
+    GOTO WAIT
+    BANKSEL PORTD
+    MOVLW 0x80
+    CALL LCD_CMD
+    MOVLW 'A'
+    CALL LCD_DATA
+    MOVLW 'N'
+    CALL LCD_DATA
+    MOVLW '0'
+    CALL LCD_DATA
+    MOVLW '='
+    CALL LCD_DATA
+    BANKSEL ADRESL
+    MOVF ADRESL, W
+    MOVWF 0x21
+    BANKSEL ADRESH
+    MOVF ADRESH, W
+    MOVWF 0x20
+    CALL DISP_NUM
+    GOTO MAIN
+DISP_NUM
+    MOVLW 0x03
+    MOVWF 0x22
+    MOVLW 0xE8
+    MOVWF 0x23
+    CALL DIGIT
+    MOVLW 0x00
+    MOVWF 0x22
+    MOVLW 0x64
+    MOVWF 0x23
+    CALL DIGIT
+    MOVLW 0x00
+    MOVWF 0x22
+    MOVLW 0x0A
+    MOVWF 0x23
+    CALL DIGIT
+    MOVLW 0x00
+    MOVWF 0x22
+    MOVLW 0x01
+    MOVWF 0x23
+    CALL DIGIT
+    RETURN
+DIGIT
+    CLRF 0x24
+DL1
+    MOVF 0x22, W
+    SUBWF 0x20, W
+    BTFSS STATUS, Z
+    GOTO DL1B
+    MOVF 0x23, W
+    SUBWF 0x21, W
+    BTFSC STATUS, C
+    GOTO DL1C
+    GOTO DL1D
+DL1B
+    BTFSS STATUS, C
+    GOTO DL1D
+DL1C
+    MOVF 0x23, W
+    SUBWF 0x21, F
+    BTFSS STATUS, C
+    DECF 0x20, F
+    MOVF 0x22, W
+    SUBWF 0x20, F
+    INCF 0x24, F
+    GOTO DL1
+DL1D
+    MOVF 0x24, W
+    ADDLW '0'
+    CALL LCD_DATA
+    RETURN
+${LCD_SUBS}
+    END` },
+  { id: 'uart', code:
+`; UART echo 9600 baud @4MHz: nhan ky tu roi gui lai
+    ORG 0
+    BANKSEL TXSTA
+    MOVLW 0x24
+    MOVWF TXSTA
+    MOVLW 0x19
+    MOVWF SPBRG
+    BANKSEL RCSTA
+    MOVLW 0x90
+    MOVWF RCSTA
+LOOP
+    BANKSEL PIR1
+    BTFSS PIR1, 5
+    GOTO LOOP
+    MOVF RCREG, W
+    MOVWF TXREG
+    GOTO LOOP
+    END` },
+  { id: 'timer0', code:
+`; Timer0 tran thi dao LED RB0 (prescaler 1:256)
+    ORG 0
+    BANKSEL TRISB
+    CLRF TRISB
+    BANKSEL OPTION_REG
+    MOVLW 0x07
+    MOVWF OPTION_REG
+    BANKSEL TMR0
+    CLRF TMR0
+    BANKSEL PORTB
+LOOP
+    BANKSEL INTCON
+    BTFSS INTCON, 2
+    GOTO LOOP
+    BCF INTCON, 2
+    BANKSEL PORTB
+    MOVF PORTB, W
+    XORLW 0x01
+    MOVWF PORTB
+    GOTO LOOP
+    END` },
+];
 
 let pass = 0, fail = 0;
 function check(name, cond, detail = '') {
@@ -18,7 +325,7 @@ function loadExample(id) {
   return { ex, cpu, asm: r };
 }
 
-// (0) Tất cả 7 ví dụ đều dịch được
+// (0) Tất cả 7 chương trình kiểm thử đều dịch được
 for (const ex of EXAMPLES) {
   const r = assemble(ex.code);
   check(`assemble:${ex.id} không lỗi`, r.errors.length === 0, JSON.stringify(r.errors.slice(0, 2)));
@@ -297,6 +604,121 @@ function rewire(netlist, a, b, a2, b2) {
   let crashed = false;
   try { cpu.run(500000); } catch { crashed = true; }
   check('(w-h) LCD thiếu dây: chạy không crash, không hiện chữ', !crashed && cpu.lcd.getLines()[0].trim() === '', `LCD0="${cpu.lcd.getLines()[0]}"`);
+}
+
+// ===========================================================================
+// BENCH 3D: mô hình lỗ/strip breadboard + dịch sang netlist cho CPU
+// (PIC chân 1 ở b22, chân 20 ở b41, chân 21 ở h41, chân 40 ở h22;
+//  RB0 là chân 33 -> lỗ h29; RC2 là chân 17 -> lỗ b38)
+// ===========================================================================
+// (b-a) Lưới lỗ/strip
+{
+  check('(b-a) board 830 lỗ', allHoles().length === 830, `holes=${allHoles().length}`);
+  check('(b-a) a12 và e12 cùng strip, f12 khác strip',
+    stripKey('a12') === stripKey('e12') && stripKey('a12') !== stripKey('f12'),
+    `${stripKey('a12')} vs ${stripKey('f12')}`);
+  check('(b-a) rail + là VCC, rail - là GND',
+    stripKey('T+5') === 'RAIL+' && stripKey('B+5') === 'RAIL+' && stripKey('T-5') === 'RAIL-' && stripKey('B-5') === 'RAIL-',
+    `${stripKey('T+5')}/${stripKey('T-5')}`);
+  const p = parseHole('c12');
+  check('(b-a) parseHole c12 = hàng c, cột 12', p && p.r === 2 && p.c === 12, JSON.stringify(p));
+  check('(b-a) parseHole T+40 = rail trên +, cột 40', (() => { const q = parseHole('T+40'); return q && q.r === -2 && q.c === 40; })(), JSON.stringify(parseHole('T+40')));
+  check('(b-a) parseHole sai định dạng trả null', parseHole('x99') === null && parseHole('a64') === null && parseHole('T+51') === null, '');
+  const pos = holePos('b22');
+  check('(b-a) holePos b22 = (-25.40, -8.89)mm', pos && Math.abs(pos.x + 25.4) < 0.01 && Math.abs(pos.z + 8.89) < 0.01, JSON.stringify(pos));
+}
+
+// (b-b) Chân chip khớp datasheet / wiring.js
+{
+  const legs = picLegs();
+  check('(b-b) chip có 40 chân', legs.length === 40, `legs=${legs.length}`);
+  const byPin = Object.fromEntries(legs.map((l) => [l.pin, l.hole]));
+  check('(b-b) chân 1 MCLR=b22, chân 20 RD1=b41', byPin[1] === 'b22' && byPin[20] === 'b41', `${byPin[1]}/${byPin[20]}`);
+  check('(b-b) chân 21 RD2=h41, chân 40 RB7=h22', byPin[21] === 'h41' && byPin[40] === 'h22', `${byPin[21]}/${byPin[40]}`);
+  check('(b-b) chân 33 RB0=h29, chân 17 RC2=b38', byPin[33] === 'h29' && byPin[17] === 'b38', `${byPin[33]}/${byPin[17]}`);
+  const ids = legs.map((l) => l.term.slice(4));
+  const ref = PIC_PINS.map((p) => p.id);
+  check('(b-b) thứ tự chân khớp PIC_PINS trong wiring.js', JSON.stringify(ids) === JSON.stringify(ref), JSON.stringify(ids.slice(0, 5)));
+}
+
+// (b-c) LED trên bàn: anode vào strip RB0 (h29), cathode về rail GND
+{
+  const st = defaultBenchState();
+  st.components.push({ id: 'LED0', type: 'led', anchor: 'h29', rot: 0, props: { color: '#DC2626' } });
+  st.wires.push({ id: 'W10', a: 'h30', b: 'T-5', color: '#0F172A' });
+  const mapping = resolvePeripherals(benchToNetlist(st));
+  check('(b-c) LED bàn: anode -> RB0, cathode -> GND, không kèm điện trở',
+    mapping.leds[0].pin.id === 'RB0' && mapping.leds[0].gnd === true && mapping.leds[0].hasResistor === false,
+    JSON.stringify(mapping.leds[0]));
+  const warns = checkWiring(benchToNetlist(st));
+  check('(b-c) LED bàn không điện trở được cảnh báo', warns.some((w) => w.message.includes('không có điện trở')), JSON.stringify(warns.map((w) => w.message)));
+}
+
+// (b-d) LED trên bàn chạy thật theo code (blink RB0 -> LED0 sáng)
+{
+  const st = defaultBenchState();
+  st.components.push({ id: 'LED0', type: 'led', anchor: 'h29', rot: 0, props: { color: '#DC2626' } });
+  st.wires.push({ id: 'W10', a: 'h30', b: 'T-5', color: '#0F172A' });
+  const { cpu, mapping } = loadWiredExample('blink', benchToNetlist(st));
+  runUntil(cpu, 100000);
+  const on = ledStates(cpu, mapping).find((s) => s.id === 'LED0').on;
+  check('(b-d) LED bàn RB0: sau 100k chu kỳ LED0 sáng', on, `LED0=${on} PORTB=${cpu.readPort(1).toString(16)}`);
+  runUntil(cpu, 300000);
+  const off = ledStates(cpu, mapping).find((s) => s.id === 'LED0').on;
+  check('(b-d) LED bàn RB0: sau 300k chu kỳ LED0 tắt', !off, `LED0=${off}`);
+}
+
+// (b-e) Dây nối 2 strip: LED ở c10, dây c10 -> b38 (strip RC2) thì LED theo RC2
+{
+  const st = defaultBenchState();
+  st.components.push({ id: 'LED0', type: 'led', anchor: 'c10', rot: 0, props: { color: '#DC2626' } });
+  st.wires.push({ id: 'W10', a: 'c10', b: 'b38', color: '#2563EB' });
+  st.wires.push({ id: 'W11', a: 'c11', b: 'T-5', color: '#0F172A' });
+  const mapping = resolvePeripherals(benchToNetlist(st));
+  check('(b-e) dây c10-b38: LED anode -> RC2', mapping.leds[0].pin.id === 'RC2', JSON.stringify(mapping.leds[0].pin));
+}
+
+// (b-f) Điện trở nối tiếp LED thì hết cảnh báo thiếu điện trở
+{
+  const st = defaultBenchState();
+  st.components.push({ id: 'LED0', type: 'led', anchor: 'c10', rot: 0, props: { color: '#DC2626' } });
+  st.components.push({ id: 'R0', type: 'resistor', anchor: 'c10', rot: 0, props: { value: 220 } });
+  st.wires.push({ id: 'W10', a: 'c14', b: 'b38', color: '#2563EB' });
+  st.wires.push({ id: 'W11', a: 'c11', b: 'T-5', color: '#0F172A' });
+  const nl = benchToNetlist(st);
+  const mapping = resolvePeripherals(nl);
+  check('(b-f) điện trở nối tiếp: LED hasResistor=true, anode -> RC2',
+    mapping.leds[0].hasResistor === true && mapping.leds[0].pin.id === 'RC2',
+    JSON.stringify(mapping.leds[0]));
+  const warns = checkWiring(nl);
+  check('(b-f) điện trở nối tiếp: hết cảnh báo thiếu điện trở', !warns.some((w) => w.message.includes('không có điện trở')), JSON.stringify(warns.map((w) => w.message)));
+}
+
+// (b-g) Nối tắt rail + với rail - bị phát hiện
+{
+  const st = defaultBenchState();
+  st.wires.push({ id: 'W10', a: 'T+5', b: 'T-5', color: '#DC2626' });
+  const warns = checkWiring(benchToNetlist(st));
+  check('(b-g) dây nối rail + với rail - -> cảnh báo nối tắt', warns.some((w) => w.kind === 'short' && w.message.includes('Nối tắt')), JSON.stringify(warns.map((w) => w.message)));
+  const clean = checkWiring(benchToNetlist(defaultBenchState()));
+  check('(b-g) bàn mặc định không có cảnh báo nào', clean.length === 0, JSON.stringify(clean.map((w) => w.message)));
+}
+
+// (b-h) canPlace: lỗ đã có chân, dưới thân chip, ngoài board
+{
+  const st = defaultBenchState();
+  check('(b-h) LED vào lỗ chân PIC (b22) không đặt được', canPlace(st, 'led', 'b22', 0).ok === false, JSON.stringify(canPlace(st, 'led', 'b22', 0)));
+  check('(b-h) LED dưới thân chip (d30) không đặt được', canPlace(st, 'led', 'd30', 0).ok === false, '');
+  check('(b-h) LED vào a10 đặt được', canPlace(st, 'led', 'a10', 0).ok === true, '');
+  check('(b-h) LED ở j62 xoay 90° rơi ra ngoài board', canPlace(st, 'led', 'j62', 1).ok === false, JSON.stringify(canPlace(st, 'led', 'j62', 1)));
+  check('(b-h) LED ở a10 xoay 90° đặt được (chân sang b10)', canPlace(st, 'led', 'a10', 1).ok === true, '');
+}
+
+// (b-i) sanitizeState: dữ liệu rác -> về bàn mặc định
+{
+  const s = sanitizeState({ components: [{ id: 'X', type: 'led', anchor: 'zzz' }], wires: 'rong' });
+  check('(b-i) sanitize rác: có chip PIC + nguồn 5V', s.components.some((c) => c.type === 'pic') && s.components.some((c) => c.type === 'psu'), JSON.stringify(s.components.map((c) => c.type)));
+  check('(b-i) sanitize rác: linh kiện lỗi bị loại', s.components.length === 2, `n=${s.components.length}`);
 }
 
 console.log(`\nKết quả: ${pass} pass, ${fail} fail`);

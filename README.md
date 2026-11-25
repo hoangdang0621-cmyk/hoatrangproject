@@ -7,12 +7,11 @@ Trang này chỉ dùng trên máy tính.
 
 ## Dùng nhanh
 
-1. Chọn một bài lab ở menu ví dụ mẫu (mặc định: Nhấp nháy LED RB0).
+1. Viết chương trình Assembly trong editor (hoặc nạp file .hex có sẵn).
 2. Bấm **Dịch & Nạp** (hoặc Ctrl+Enter) để dịch code Assembly và nạp vào chip.
 3. Bấm **Chạy tất cả** để chạy. Đổi tốc độ 0.1x / 0.5x / 1x / Tối đa,
    bấm **Chạy từng lệnh** để chạy từng lệnh một, bấm **Reset** để chạy lại từ đầu.
-4. Làm theo panel **Bài học** từng bước để biết cần quan sát gì ở mỗi bước.
-5. Bấm vào số dòng trong editor để đặt breakpoint: chương trình chạy tới đó
+4. Bấm vào số dòng trong editor để đặt breakpoint: chương trình chạy tới đó
    sẽ dừng lại.
 
 ## Viết chương trình Assembly
@@ -75,7 +74,7 @@ kiện trên breadboard — đổi dây ở đây thì board và code chạy the
 
 8 LED RB0–RB7 (mỗi LED kèm R 220Ω, cathode về GND), 4 nút RC0–RC3 (đầu
 còn lại về GND, active-low), chiết áp VCC–RA0 (AN0)–GND, LCD RS=RE0,
-E=RE1, D0–D7=RD0–RD7. Các lab mẫu chạy đúng với mạch này.
+E=RE1, D0–D7=RD0–RD7.
 
 ### Cảnh báo thường gặp (panel "Kiểm tra")
 
@@ -92,17 +91,33 @@ E=RE1, D0–D7=RD0–RD7. Các lab mẫu chạy đúng với mạch này.
 
 Bấm vào một cảnh báo để tô sáng dây/linh kiện liên quan.
 
-## Các bài lab mẫu
+## Bàn thực hành 3D
 
-| Bài | Học được gì |
-| --- | --- |
-| Nhấp nháy LED RB0 | `TRISB`, vòng lặp trễ, đảo bit PORTB |
-| LED chạy PORTB | Dịch bit, `RLF`, vòng lặp |
-| Nút nhấn RC0 bật LED | Đọc input, `BTFSS` rẽ nhánh |
-| LCD "Hello PIC16F877A" | Giao tiếp LCD HD44780 qua PORTD/RE0/RE1 |
-| Đọc ADC AN0 hiện lên LCD | `ADCON0`, chờ `GO`, đọc `ADRESH:ADRESL` |
-| UART echo 9600 | `TXSTA`/`RCSTA`, `TXREG`/`RCREG`, ngắt nhận |
-| Timer0 nhấp nháy LED | `OPTION_REG` prescaler, cờ `TMR0IF`, ngắt tràn |
+Tab **Bàn thực hành** là một bàn thí nghiệm 3D (Three.js): breadboard
+830 lỗ, chip PIC16F877A cắm sẵn vắt qua rãnh giữa (chân 1–20 ở hàng b,
+chân 21–40 ở hàng h), nguồn 5V trên bàn đã nối dây về rail. Linh kiện
+trên bàn chạy thật theo code — đổi dây trên bàn thì board chạy theo.
+
+- **Xoay bàn:** kéo chuột vào chỗ trống trên bàn để xoay 360°, cuộn
+  chuột để zoom. Nút **3D** / **Từ trên** đổi góc nhìn.
+- **Đặt linh kiện:** kéo từ khay **Linh Kiện** (LED, điện trở, nút nhấn,
+  chiết áp, LCD 16x2, còi buzzer, nguồn 5V) thả vào lỗ breadboard —
+  chân cắm thẳng vào lỗ, breadboard chính là đế. Ô xanh là đặt được,
+  ô đỏ là không (lỗ đã có chân, dưới thân chip, ngoài board). Bấm
+  phím R trong lúc kéo để xoay linh kiện 90°. Bấm vào khay (không kéo)
+  rồi bấm vào lỗ cũng đặt được.
+- **Đi dây:** bấm **Dây dẫn** rồi bấm lỗ bắt đầu và lỗ kết thúc, dây
+  hiện thành đường cong nối 2 lỗ. Chọn màu dây trong bảng 8 màu.
+- **Inspector:** bấm chọn linh kiện thì panel trượt từ phải sang: đổi
+  giá trị điện trở, màu LED, mức chiết áp (%), xem chân nào nối đi đâu,
+  xoá linh kiện/dây (hoặc phím Delete).
+- **Kiểm tra:** panel bên trái liệt kê cảnh báo đấu nối trên bàn
+  (nối tắt, LED thiếu điện trở, LCD thiếu dây...), bấm vào cảnh báo
+  để chọn linh kiện liên quan.
+- Bàn mặc định có chip + nguồn + dây nguồn VDD/VSS/MCLR về rail.
+  Nút **Dọn hết bàn** giữ lại chip, nguồn và dây nguồn; nút
+  **Về bàn mặc định** khôi phục toàn bộ. Trạng thái bàn tự lưu
+  trên máy (localStorage), mở lại trang vẫn còn.
 
 ## Giám sát chip đang chạy
 
@@ -125,6 +140,6 @@ Bấm vào một cảnh báo để tô sáng dây/linh kiện liên quan.
   dịch (`.hex`) về máy.
 
 Chức năng lấy cảm hứng từ cách tổ chức bàn thí nghiệm của
-[ohmimic.com](https://ohmimic.com/vi) (board trực quan, bài lab từng bước,
+[ohmimic.com](https://ohmimic.com/vi) (board trực quan,
 inspector GPIO, logic analyzer) — nhưng toàn bộ code mô phỏng PIC viết mới
 hoàn toàn, không copy code hay giao diện của trang đó.

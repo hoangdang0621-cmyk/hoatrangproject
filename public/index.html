@@ -5,14 +5,17 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Mô phỏng PIC16F877A — HoaTrang Lab</title>
 <meta name="description" content="Mô phỏng vi điều khiển PIC16F877A ngay trên trình duyệt: soạn Assembly, chạy từng lệnh, LED, nút nhấn, LCD 16x2, ADC, UART.">
-<link rel="stylesheet" href="styles.css?v=20261125c">
+<link rel="stylesheet" href="styles.css?v=20261125e">
+<script type="importmap">
+{ "imports": { "three": "https://unpkg.com/three@0.160.0/build/three.module.js" } }
+</script>
 </head>
 <body>
 <div class="desktop-only-banner" role="note">Trang mô phỏng này chỉ dùng trên máy tính. Hãy mở bằng trình duyệt trên máy tính để đầy đủ chức năng.</div>
 <header class="site-header">
   <div class="wrap">
     <h1>Mô phỏng PIC16F877A</h1>
-    <p>Soạn Assembly, nạp và chạy vi điều khiển ngay trên trình duyệt — không cần cài đặt.</p>
+    <p>Soạn Assembly, nạp và chạy vi điều khiển ngay trên trình duyệt.</p>
     <span class="chip">PIC16F877A · 8K x 14-bit · 4 MHz</span>
   </div>
 </header>
@@ -67,6 +70,7 @@
   <div class="wrap">
     <button type="button" id="viewBoardBtn" class="view-tab active" role="tab" aria-selected="true">Board &amp; Giám sát</button>
     <button type="button" id="viewBreadBtn" class="view-tab" role="tab" aria-selected="false">Đấu nối (Breadboard)</button>
+    <button type="button" id="viewBenchBtn" class="view-tab" role="tab" aria-selected="false">Bàn thực hành</button>
   </div>
 </div>
 
@@ -75,9 +79,6 @@
     <section class="card" aria-labelledby="editorTitle">
       <div class="card-head">
         <h2 id="editorTitle">Soạn thảo Assembly</h2>
-        <label class="row" style="gap:6px">Ví dụ mẫu
-          <select class="select" id="exampleSel" aria-label="Chọn ví dụ mẫu"></select>
-        </label>
       </div>
       <p class="sub">Bấm vào số dòng để đặt/bỏ breakpoint. Phím tắt: Ctrl+Enter = Dịch &amp; Nạp.</p>
       <div class="editor-wrap">
@@ -90,17 +91,6 @@
         <input type="file" id="hexFile" accept=".hex,.ihx" hidden>
         <button class="btn btn-outline btn-small" id="btnDownloadAsm" type="button">Tải xuống .asm</button>
         <button class="btn btn-outline btn-small" id="btnDownloadHex" type="button">Tải xuống .hex</button>
-      </div>
-
-      <div class="lab" aria-labelledby="labTitle">
-        <h3 id="labTitle">Bài học</h3>
-        <p class="step-count" id="labStepCount"></p>
-        <p id="labStepText"></p>
-        <ol id="labSteps"></ol>
-        <div class="row">
-          <button class="btn btn-small" id="labPrev" type="button">← Bước trước</button>
-          <button class="btn btn-small" id="labNext" type="button">Bước tiếp →</button>
-        </div>
       </div>
     </section>
 
@@ -203,10 +193,48 @@
   </div>
 </section>
 
-<footer class="site-footer">
-  <p>HoaTrang Lab — Mô phỏng PIC16F877A chạy hoàn toàn trên trình duyệt, không gửi code đi đâu. Hỗ trợ 35 lệnh Assembly, TMR0/1/2, ADC 10-bit, USART, LCD HD44780.</p>
-</footer>
+<section class="bench-view" id="benchView" hidden>
+  <div class="bench-layout">
+    <div class="card bench-side">
+      <div class="bench-mini-tabs" role="tablist" aria-label="Panel bên trái bàn thực hành">
+        <button type="button" class="bench-mini-tab active" role="tab" aria-selected="true">Linh Kiện</button>
+      </div>
+      <input class="input bench-search" id="benchSearch" type="search" placeholder="Tìm linh kiện..." aria-label="Tìm linh kiện">
+      <div class="bench-palette" id="benchPalette"></div>
+      <div class="bench-mode-banner" id="benchModeBanner" hidden>
+        <p id="benchModeText"></p>
+        <div class="bench-colors" id="benchModeColors" hidden></div>
+        <button type="button" class="btn btn-small" id="btnWireCancel">Hủy (Esc)</button>
+      </div>
+      <h2 class="bb-side-h">Thao tác</h2>
+      <div class="row">
+        <button type="button" class="btn btn-small" id="btnBenchClear">Dọn hết bàn</button>
+        <button type="button" class="btn btn-small" id="btnBenchDefault">Về bàn mặc định</button>
+      </div>
+      <p class="sub" id="benchStatus">Kéo linh kiện từ khay vào bàn. Kéo chỗ trống trên bàn để xoay 360°.</p>
+      <h2 class="bb-side-h">Kiểm tra</h2>
+      <p class="sub">Cảnh báo đấu nối trên bàn 3D (kiểu Ohmimic). Bấm vào một cảnh báo để chọn linh kiện liên quan.</p>
+      <ul class="checks" id="benchChecks"></ul>
+    </div>
+    <div class="card bench-canvas-card">
+      <div class="bench-canvas-head">
+        <h2>Bàn thực hành 3D</h2>
+        <div class="seg bench-view-seg" role="group" aria-label="Chế độ xem">
+          <button type="button" id="btnView3D" aria-pressed="true">3D</button>
+          <button type="button" id="btnViewTop" aria-pressed="false">Từ trên</button>
+        </div>
+      </div>
+      <p class="sub">Kéo chỗ trống để xoay 360°, cuộn chuột để zoom. Bấm linh kiện để mở Inspector bên phải. Kéo linh kiện từ khay thả vào lỗ breadboard.</p>
+      <div class="bench-canvas-wrap" id="benchCanvasWrap">
+        <div class="bench-angle" id="benchAngle" aria-live="polite">Góc xoay: 0°</div>
+        <div class="bench-error" id="benchError" hidden>Không tải được thư viện 3D, kiểm tra mạng rồi tải lại trang.</div>
+        <aside class="bench-inspector" id="benchInspector" aria-label="Inspector linh kiện"></aside>
+      </div>
+    </div>
+  </div>
+</section>
 
-<script type="module" src="app.js?v=20261125c"></script>
+<script type="module" src="app.js?v=20261125e"></script>
+<script type="module" src="bench.js?v=20261125e"></script>
 </body>
 </html>

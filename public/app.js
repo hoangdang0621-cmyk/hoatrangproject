@@ -1,6 +1,5 @@
 // app.js — Nối UI với lõi pic16.js (DOM + vòng lặp chạy + board + panel giám sát).
-import { assemble, createCPU, parseIntelHex, exportHex, disassemble } from './pic16.js?v=20261125b';
-import { EXAMPLES } from './examples.js?v=20261125a';
+import { assemble, createCPU, parseIntelHex, exportHex, disassemble } from './pic16.js?v=20261125d';
 import {
   defaultNetlist, resolvePeripherals, checkWiring, ledStates,
   applyButtonToCpu, applyPotToCpu, createComponent, nextComponentId,
@@ -16,8 +15,6 @@ let asmResult = null;          // kết quả assemble gần nhất
 let running = false, timerId = null;
 let speed = '1';               // '0.1' | '0.5' | '1' | 'max'
 let breakpoints = new Set();   // địa chỉ program có breakpoint
-let currentExampleId = 'blink';
-let labIdx = 0;
 
 // --- Đấu nối breadboard (netlist là nguồn sự thật) ---
 const LS_WIRING_KEY = 'hoatrang-wiring-v1';
@@ -196,37 +193,6 @@ document.querySelectorAll('.seg [data-speed]').forEach((b) => {
   });
 });
 $('clockSel').addEventListener('change', (e) => { cpu.clockHz = Number(e.target.value); refreshStatus(); });
-
-// --- Ví dụ mẫu + Bài học (lab) ---
-const exampleSel = $('exampleSel');
-exampleSel.innerHTML = EXAMPLES.map((e) => `<option value="${e.id}">${e.name}</option>`).join('');
-exampleSel.value = currentExampleId;
-function loadExample(id) {
-  const ex = EXAMPLES.find((e) => e.id === id);
-  if (!ex) return;
-  currentExampleId = id;
-  labIdx = 0;
-  editor.value = ex.code;
-  $('labTitle').textContent = `Bài học: ${ex.name}`;
-  renderLab();
-  assembleAndLoad();
-}
-exampleSel.addEventListener('change', (e) => loadExample(e.target.value));
-function renderLab() {
-  const ex = EXAMPLES.find((e) => e.id === currentExampleId);
-  if (!ex) return;
-  $('labStepCount').textContent = `Bước ${labIdx + 1}/${ex.lab.length}: ${ex.lab[labIdx].t}`;
-  $('labStepText').textContent = ex.lab[labIdx].d;
-  $('labSteps').innerHTML = ex.lab.map((s, i) =>
-    `<li class="${i === labIdx ? 'active' : ''}">${s.t}</li>`).join('');
-  $('labPrev').disabled = labIdx === 0;
-  $('labNext').disabled = labIdx === ex.lab.length - 1;
-}
-$('labPrev').addEventListener('click', () => { labIdx = Math.max(0, labIdx - 1); renderLab(); });
-$('labNext').addEventListener('click', () => {
-  const ex = EXAMPLES.find((e) => e.id === currentExampleId);
-  labIdx = Math.min(ex.lab.length - 1, labIdx + 1); renderLab();
-});
 
 // --- Board: LED, nút nhấn, chiết áp, LCD, còi — vẽ lại từ mapping (netlist) ---
 // Áp điện áp của mọi chiết áp vào đúng kênh AN đã nối dây
@@ -549,9 +515,10 @@ function refreshAll() {
 }
 
 // --- Khởi động ---
-$('labTitle').textContent = 'Bài học: Nhấp nháy LED RB0';
+editor.value = '; Viết code Assembly PIC16F877A ở đây\n; Bấm "Dịch & Nạp" (Ctrl+Enter) để dịch và nạp vào CPU.\n';
 applyWiring(); // vẽ board + breadboard từ netlist đã lưu (hoặc mạch mẫu)
-loadExample('blink');
+renderListing();
+updateGutter();
 refreshAll();
 
 // ===========================================================================
@@ -776,6 +743,36 @@ function applyWiring() {
   refreshAll();
 }
 
+// --- Cầu nối cho tab Bàn thực hành 3D (bench.js) ---
+// Bench có netlist riêng (lỗ/strip trên breadboard 3D). Khi tab bàn đang mở,
+// netlist bench là nguồn sự thật cho CPU; quay lại tab Đấu nối 2D thì khôi
+// phục netlist 2D — không ghi đè localStorage của tab 2D.
+function applyBenchNetlist(nl) {
+  mapping = resolvePeripherals(nl);
+  cpu.setWiring(mapping);
+  renderBoard();
+  applyAllPots();
+  refreshAll();
+}
+function restore2DNetlist() {
+  mapping = resolvePeripherals(netlist);
+  cpu.setWiring(mapping);
+  renderBoard();
+  applyAllPots();
+  refreshAll();
+}
+window.HoaTrangBenchBridge = {
+  applyBenchNetlist,
+  restore2DNetlist,
+  getLedStates: () => ledStates(cpu, mapping),
+  getLcd: () => ({ lines: cpu.lcd.getLines(), complete: !mapping.lcd.id || mapping.lcd.complete }),
+  getPin: (port, bit) => ({ dir: cpu.pinDirection(port, bit), level: cpu.pinLevel(port, bit) }),
+  getTris: () => cpu.tris,
+  getMapping: () => mapping,
+  pressButton: (id, pressed) => applyButtonToCpu(cpu, mapping, id, pressed),
+  setPot: (id, volts) => { potVoltsById[id] = volts; applyPotToCpu(cpu, mapping, id, volts); },
+};
+
 function tryAddWire(a, b) {
   if (a === b) { setBbStatus('Hai đầu nối trùng nhau — chọn 2 đầu khác nhau.'); return false; }
   const dup = netlist.wires.some((w) => (w.a === a && w.b === b) || (w.a === b && w.b === a));
@@ -846,18 +843,23 @@ document.addEventListener('keydown', (e) => {
   }
 });
 
-// --- Chuyển tab Board / Breadboard ---
-function switchView(bread) {
-  $('viewBoardBtn').classList.toggle('active', !bread);
+// --- Chuyển tab Board / Breadboard / Bàn thực hành ---
+function switchView(view) {
+  const bread = view === 'bread', bench = view === 'bench';
+  $('viewBoardBtn').classList.toggle('active', !bread && !bench);
   $('viewBreadBtn').classList.toggle('active', bread);
-  $('viewBoardBtn').setAttribute('aria-selected', String(!bread));
+  $('viewBenchBtn').classList.toggle('active', bench);
+  $('viewBoardBtn').setAttribute('aria-selected', String(!bread && !bench));
   $('viewBreadBtn').setAttribute('aria-selected', String(bread));
-  document.querySelector('.workspace').hidden = bread;
+  $('viewBenchBtn').setAttribute('aria-selected', String(bench));
+  document.querySelector('.workspace').hidden = bread || bench;
   $('breadboardView').hidden = !bread;
-  if (bread) { renderBreadboard(); renderChecks(); updateBreadboardLive(); }
+  $('benchView').hidden = !bench;
+  if (bread) { restore2DNetlist(); renderBreadboard(); renderChecks(); updateBreadboardLive(); }
 }
-$('viewBoardBtn').addEventListener('click', () => switchView(false));
-$('viewBreadBtn').addEventListener('click', () => switchView(true));
+$('viewBoardBtn').addEventListener('click', () => switchView('board'));
+$('viewBreadBtn').addEventListener('click', () => switchView('bread'));
+$('viewBenchBtn').addEventListener('click', () => switchView('bench'));
 
 // --- Kéo dây: pointer events trên SVG ---
 function svgPoint(e) {
