@@ -2,10 +2,11 @@
 
 Bàn thí nghiệm 3D cho vi điều khiển PIC16F877A, chạy ngay trên trình
 duyệt: breadboard đổi được kích thước (3 mẫu sẵn Mini 170 lỗ, Nửa 400
-lỗ, Đầy đủ 830 lỗ, hoặc tự điền số cột), chip PIC16F877A cắm sẵn, nguồn
+lỗ, Đầy đủ 830 lỗ, hoặc tự điền rộng × dài), chip PIC16F877A cắm sẵn, nguồn
 5V phía sau đã nối dây về rail. Linh kiện trên bàn nối vào chip thật —
 đổi dây trên bàn thì chip chạy theo dây mới. Trang này chỉ dùng trên
-máy tính.
+máy tính. Trang chính của trang web là index.html (3 mục Lý thuyết,
+Bài tập, Thực hành); bấm Thực hành để vào bàn thực hành này (bench.html).
 
 Chip chạy sẵn chương trình nhấp nháy LED RB0: nối một LED (kèm điện trở
 nối tiếp) vào strip của chân RB0 thì LED nhấp nháy theo nhịp chip.
@@ -24,9 +25,9 @@ nối tiếp) vào strip của chân RB0 thì LED nhấp nháy theo nhịp chip.
   hoặc nhập địa chỉ lỗ cho từng đầu trong Inspector (vd `c12`, `T+5`).
 - **Chọn size bo mạch:** nhấn vào board (thân board hoặc lỗ trống) để
   mở popup **Bo mạch** bên phải: bấm 1 trong 3 mẫu sẵn để áp dụng ngay,
-  hoặc tự điền số cột (5–63) + chọn có rail nguồn rồi bấm Áp dụng; đổi
-  size thì chip căn lại giữa, linh kiện/dây ngoài board mới bị gỡ (có
-  ghi chú ở dòng trạng thái).
+  hoặc tự điền rộng (số cột 5–99) × dài (số hàng 2–26) + chọn có rail
+  nguồn rồi bấm Áp dụng; đổi size thì chip căn lại giữa, linh kiện/dây
+  ngoài board mới bị gỡ (có ghi chú ở dòng trạng thái).
 - **Inspector:** bấm chọn linh kiện thì panel trượt từ phải sang để đổi
   tính chất (giá trị điện trở, màu LED, mức chiết áp), xem chân nối đi
   đâu, xoá linh kiện/dây (phím Delete).
@@ -36,13 +37,16 @@ nối tiếp) vào strip của chân RB0 thì LED nhấp nháy theo nhịp chip.
 
 ## Breadboard
 
-Hàng a–e của mỗi cột nối nhau, hàng f–j nối nhau; 2 rail +/− chạy suốt
-chiều dài. Chip PIC16F877A luôn căn giữa board (cột 22–41 trên board
-830, cột 6–25 trên board 400, cột 1–17 trên board Mini — trên board Mini
-thì 6 chân ngoài cùng MCLR/RD0/RD1/RD2/RD3/RB7 treo ngoài board). Board
-tự điền số cột 5–63 cũng căn giữa chip theo cùng cách; rail nguồn tùy
-chọn, bật thì rail dài bằng số cột. Dây nguồn VDD/VSS/MCLR đã nối sẵn
-về rail (board Mini không có rail nên không có dây nguồn mặc định).
+Hàng a–z theo số hàng của board: nửa trên của mỗi cột (các hàng trên
+rãnh) nối nhau, nửa dưới nối nhau; 2 rail +/− chạy suốt chiều dài. Chip
+PIC16F877A luôn căn giữa board (cột 22–41 trên board 830, cột 6–25 trên
+board 400, cột 1–17 trên board Mini — trên board Mini thì 6 chân ngoài
+cùng MCLR/RD0/RD1/RD2/RD3/RB7 treo ngoài board). Board 10 hàng thì chip
+ở hàng b/h; board tự điền dài khác 10 hàng thì chip ôm 2 hàng kề rãnh.
+Board tự điền rộng 5–99 cột × dài 2–26 hàng cũng căn giữa chip theo
+cùng cách; rail nguồn tùy chọn, bật thì rail dài bằng số cột. Dây nguồn
+VDD/VSS/MCLR đã nối sẵn về rail (board Mini không có rail nên không có
+dây nguồn mặc định).
 
 Bàn mặc định có chip + nguồn + dây nguồn. Nút **Dọn hết bàn** giữ lại
 chip, nguồn và dây nguồn; nút **Về bàn mặc định** khôi phục toàn bộ.

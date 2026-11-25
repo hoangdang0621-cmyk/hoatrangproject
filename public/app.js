@@ -7,7 +7,7 @@ import {
   resolvePeripherals, ledStates,
   applyButtonToCpu, applyPotToCpu,
 } from './wiring.js?v=20261125b';
-import { defaultBenchState, benchToNetlist } from './bench-model.js?v=20261125h';
+import { defaultBenchState, benchToNetlist } from './bench-model.js?v=20261125i';
 
 const cpu = createCPU();
 cpu.clockHz = 4000000;

@@ -1,8 +1,10 @@
 // bench-model.js — Mô hình lỗ/strip của bàn thực hành 3D (không DOM, không Three.js).
 // Breadboard đổi được kích thước: 3 mẫu sẵn (Mini 170 lỗ, Nửa 400 lỗ,
-// Đầy đủ 830 lỗ) hoặc tự điền số cột 5–63 + chọn có rail nguồn hay không.
-// Hàng a–e của mỗi cột nối nhau thành 1 strip, f–j nối nhau, rail chạy suốt
-// chiều dài (mọi lỗ rail + là +5V, mọi lỗ rail − là GND).
+// Đầy đủ 830 lỗ) hoặc tự điền rộng (số cột 5–99) × dài (số hàng 2–26)
+// + chọn có rail nguồn hay không. Hàng là chữ cái a–z theo số hàng.
+// Nửa trên của mỗi cột (các hàng trên rãnh) nối nhau thành 1 strip,
+// nửa dưới nối nhau, rail chạy suốt chiều dài (mọi lỗ rail + là +5V,
+// mọi lỗ rail − là GND).
 // Chân linh kiện cắm thẳng vào lỗ, breadboard chính là đế (kiểu ohmimic).
 // Trạng thái bàn: { size, components: [{id, type, anchor, rot, props, fixed?}],
 //   wires: [{id, a, b, color}] } với a/b là id lỗ ('c12', 'T+40') hoặc
@@ -11,48 +13,63 @@
 // (terminal 'PIC.RB0', 'LED0.A', 'VCC', 'GND') để nối vào CPU.
 
 export const PITCH = 2.54;       // khoảng cách lỗ (mm)
-// Size bo mạch: 3 mẫu sẵn (kiểu ohmimic) hoặc tự điền {cols, rails}.
+// Size bo mạch: 3 mẫu sẵn (kiểu ohmimic) hoặc tự điền {cols, rows, rails}.
 // 830 = 63 cột x 10 hàng + 4 rail x 50; 400 = 30 x 10 + 4 x 25;
 // 170 = 17 x 10, không có rail (đúng board mini thật).
-// Tự điền: số cột 5–63, rail bật/tắt; rail bật thì dài bằng số cột.
+// Tự điền: rộng 5–99 cột, dài 2–26 hàng, rail bật/tắt; rail bật thì dài
+// bằng số cột. Hàng là chữ cái a–z (hàng 1 = 'a').
 // Chip PIC DIP-40 rộng 20 cột nên trên board Mini 17 cột thì 6 chân ngoài
 // cùng (MCLR, RD0, RD1, RD2, RD3, RB7) treo ngoài board — giới hạn vật lý thật.
 export const BOARD_SIZES = {
-  830: { cols: 63, railCols: 50 },
-  400: { cols: 30, railCols: 25 },
-  170: { cols: 17, railCols: 0 },
+  830: { cols: 63, rows: 10, railCols: 50 },
+  400: { cols: 30, rows: 10, railCols: 25 },
+  170: { cols: 17, rows: 10, railCols: 0 },
 };
 export const BOARD_SIZE_IDS = [170, 400, 830];
 export const DEFAULT_SIZE = 830;
 export const CUSTOM_COLS_MIN = 5;
-export const CUSTOM_COLS_MAX = 63;
+export const CUSTOM_COLS_MAX = 99;
+export const CUSTOM_ROWS_MIN = 2;
+export const CUSTOM_ROWS_MAX = 26;
 // Chuẩn hoá size thành giá trị lưu trong state: số (mẫu sẵn) hoặc
-// {cols, rails} (tự điền, số cột kẹp 5–63). Không hợp lệ -> 830.
+// {cols, rows, rails} (tự điền, cột kẹp 5–99, hàng kẹp 2–26; state cũ
+// {cols, rails} không có rows thì mặc định 10 hàng). Không hợp lệ -> 830.
 export function normalizeSize(size) {
   if (typeof size === 'number' && BOARD_SIZES[size]) return size;
   if (size && typeof size === 'object') {
     const cols = Math.round(Number(size.cols));
     if (Number.isFinite(cols)) {
+      const rowsRaw = Math.round(Number(size.rows));
+      const rows = Number.isFinite(rowsRaw)
+        ? Math.max(CUSTOM_ROWS_MIN, Math.min(CUSTOM_ROWS_MAX, rowsRaw))
+        : 10;
       return {
         cols: Math.max(CUSTOM_COLS_MIN, Math.min(CUSTOM_COLS_MAX, cols)),
+        rows,
         rails: !!size.rails,
       };
     }
   }
   return DEFAULT_SIZE;
 }
-// Mô tả size: {id, cols, railCols} — id là số mẫu sẵn hoặc 'custom'.
+// Mô tả size: {id, cols, rows, railCols} — id là số mẫu sẵn hoặc 'custom'.
 export function boardSize(size) {
   const s = normalizeSize(size);
   if (typeof s === 'number') return { id: s, ...BOARD_SIZES[s] };
-  return { id: 'custom', cols: s.cols, railCols: s.rails ? s.cols : 0 };
+  return { id: 'custom', cols: s.cols, rows: s.rows, railCols: s.rails ? s.cols : 0 };
 }
 export function colsOf(size) { return boardSize(size).cols; }
+export function rowsOf(size) { return boardSize(size).rows; }
 export function railColsOf(size) { return boardSize(size).railCols; }
-// Tổng số lỗ trên board (10 hàng + 4 rail).
+// Tổng số lỗ trên board (cols x rows + 4 rail).
 export function holeCount(size) {
   const s = boardSize(size);
-  return s.cols * 10 + 4 * s.railCols;
+  return s.cols * s.rows + 4 * s.railCols;
+}
+// Chiều sâu thân board (mm): từ rail T+ tới rail B− + lề 7mm mỗi bên.
+// Dùng để vẽ mesh, đóng khung camera và nhận diện bấm vào thân board.
+export function bodyDepth(size) {
+  return (rowsOf(size) + 3) * PITCH + 14;
 }
 // Tên hiển thị của size: tên mẫu sẵn hoặc 'Tùy chỉnh · N lỗ'.
 export function sizeLabel(size) {
@@ -62,28 +79,45 @@ export function sizeLabel(size) {
   if (s.id === 830) return 'Đầy đủ 830 lỗ';
   return `Tùy chỉnh · ${holeCount(size)} lỗ`;
 }
-// Hai size có bằng nhau không (so theo id + cols + railCols).
+// Hai size có bằng nhau không (so theo id + cols + rows + railCols).
 export function sameSize(a, b) {
   const x = boardSize(a), y = boardSize(b);
-  return x.id === y.id && x.cols === y.cols && x.railCols === y.railCols;
+  return x.id === y.id && x.cols === y.cols && x.rows === y.rows && x.railCols === y.railCols;
 }
 // Cột bắt đầu của chip PIC (căn giữa board): 830 -> 22, 400 -> 6,
 // 170 -> 0 (chip tràn nửa cột mỗi bên); board tự điền theo cùng công thức.
 export function picCol(size) { return Math.max(0, Math.floor((colsOf(size) - 20) / 2) + 1); }
-export const ROWS = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j'];
-// Hàng trong lưới nội bộ: T+ = -2, T− = -1, a..j = 0..9, B+ = 10, B− = 11
-const RAIL_ROW = { 'T+': -2, 'T-': -1, 'B+': 10, 'B-': 11 };
-const ROW_NAME = { '-2': 'T+', '-1': 'T-', '10': 'B+', '11': 'B-' };
+// 2 hàng chân của chip PIC (chỉ số hàng nội bộ 0..rows-1): board 10 hàng
+// thì giữ b/h như cũ (hàng 1 và 7); board khác thì lấy 2 hàng kề rãnh
+// (floor(rows/2)-1 và floor(rows/2)) để chip luôn ôm rãnh giữa.
+export function picRows(size) {
+  const rows = rowsOf(size);
+  if (rows === 10) return [1, 7];
+  const mid = Math.floor(rows / 2);
+  return [mid - 1, mid];
+}
+// Lỗ neo của chip PIC (chân 1): hàng chân trên, cột picCol (kẹp về 1).
+export function picAnchor(size) {
+  const r = picRows(size)[0];
+  return holeId(r, Math.max(1, picCol(size)), size) ?? (ROWS[r] + '1');
+}
+export const ROWS = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k', 'l', 'm', 'n', 'o', 'p', 'q', 'r', 's', 't', 'u', 'v', 'w', 'x', 'y', 'z'];
+// Hàng trong lưới nội bộ: T+ = -2, T− = -1, a..z = 0..rows-1,
+// B+ = rows, B− = rows+1 (B+/B− phụ thuộc số hàng).
+const railRowName = (r, rows) => (r === -2 ? 'T+' : r === -1 ? 'T-' : r === rows ? 'B+' : r === rows + 1 ? 'B-' : null);
+const railRowOf = (name, rows) => (name === 'T+' ? -2 : name === 'T-' ? -1 : name === 'B+' ? rows : name === 'B-' ? rows + 1 : null);
 
 // Id lỗ từ (hàng nội bộ, cột) trên board size cho trước. Trả null nếu ngoài board.
 export function holeId(r, c, size = DEFAULT_SIZE) {
-  if (r >= 0 && r <= 9) {
+  const rows = rowsOf(size);
+  if (r >= 0 && r < rows) {
     if (c < 1 || c > colsOf(size)) return null;
     return ROWS[r] + c;
   }
-  if (r in ROW_NAME) {
+  const name = railRowName(r, rows);
+  if (name) {
     if (c < 1 || c > railColsOf(size)) return null;
-    return ROW_NAME[r] + c;
+    return name + c;
   }
   return null;
 }
@@ -92,57 +126,59 @@ export function holeId(r, c, size = DEFAULT_SIZE) {
 // hoặc ngoài board size cho trước.
 export function parseHole(id, size = DEFAULT_SIZE) {
   if (typeof id !== 'string') return null;
-  let m = id.match(/^([a-j])(\d+)$/);
+  let m = id.match(/^([a-z])(\d+)$/);
   if (m) {
+    const r = ROWS.indexOf(m[1]);
     const c = Number(m[2]);
-    if (c >= 1 && c <= colsOf(size)) return { r: ROWS.indexOf(m[1]), c };
+    if (r >= 0 && r < rowsOf(size) && c >= 1 && c <= colsOf(size)) return { r, c };
     return null;
   }
   m = id.match(/^([TB])([+-])(\d+)$/);
   if (m) {
     const c = Number(m[3]);
     if (c < 1 || c > railColsOf(size)) return null;
-    return { r: RAIL_ROW[m[1] + m[2]], c };
+    return { r: railRowOf(m[1] + m[2], rowsOf(size)), c };
   }
   return null;
 }
 
 export function isRailHole(id, size = DEFAULT_SIZE) {
   const p = parseHole(id, size);
-  return !!p && (p.r < 0 || p.r > 9);
+  return !!p && (p.r < 0 || p.r >= rowsOf(size));
 }
 
-// Khóa strip của một lỗ: 'S' + mặt (T: a–e, B: f–j) + cột, hoặc 'RAIL+'/'RAIL-'.
+// Khóa strip của một lỗ: 'S' + mặt (T: nửa trên rãnh, B: nửa dưới rãnh)
+// + cột, hoặc 'RAIL+'/'RAIL-'.
 export function stripKey(id, size = DEFAULT_SIZE) {
   const p = parseHole(id, size);
   if (!p) return null;
-  if (p.r < 0 || p.r > 9) return (p.r === -2 || p.r === 10) ? 'RAIL+' : 'RAIL-';
-  return 'S' + (p.r <= 4 ? 'T' : 'B') + p.c;
+  if (p.r < 0 || p.r >= rowsOf(size)) return (p.r === -2 || p.r === rowsOf(size)) ? 'RAIL+' : 'RAIL-';
+  return 'S' + (p.r < Math.floor(rowsOf(size) / 2) ? 'T' : 'B') + p.c;
 }
 
 // Vị trí 3D của tâm lỗ trên mặt bàn (mm, gốc ở giữa board, y tính riêng).
 export function holePos(id, size = DEFAULT_SIZE) {
   const p = parseHole(id, size);
   if (!p) return null;
-  return { x: (p.c - (colsOf(size) + 1) / 2) * PITCH, z: (p.r - 4.5) * PITCH };
+  return { x: (p.c - (colsOf(size) + 1) / 2) * PITCH, z: (p.r - (rowsOf(size) - 1) / 2) * PITCH };
 }
 
 // Mọi lỗ trên board (để vẽ InstancedMesh): [{id, x, z}]
 export function allHoles(size = DEFAULT_SIZE) {
   const out = [];
-  for (let r = -2; r <= 11; r++) {
-    if (r === -2 || r === -1 || r === 10 || r === 11) {
-      for (let c = 1; c <= railColsOf(size); c++) {
-        const id = holeId(r, c, size);
-        const p = holePos(id, size);
-        out.push({ id, x: p.x, z: p.z });
-      }
-    } else {
-      for (let c = 1; c <= colsOf(size); c++) {
-        const id = holeId(r, c, size);
-        const p = holePos(id, size);
-        out.push({ id, x: p.x, z: p.z });
-      }
+  const rows = rowsOf(size);
+  for (const r of [-2, -1, rows, rows + 1]) {
+    for (let c = 1; c <= railColsOf(size); c++) {
+      const id = holeId(r, c, size);
+      const p = holePos(id, size);
+      out.push({ id, x: p.x, z: p.z });
+    }
+  }
+  for (let r = 0; r < rows; r++) {
+    for (let c = 1; c <= colsOf(size); c++) {
+      const id = holeId(r, c, size);
+      const p = holePos(id, size);
+      out.push({ id, x: p.x, z: p.z });
     }
   }
   return out;
@@ -166,24 +202,28 @@ export const LEG_LAYOUTS = {
   buzzer: [{ term: 'P', dc: 0, dr: 0 }, { term: 'N', dc: 1, dr: 0 }],
 };
 
-// Chân chip PIC16F877A DIP-40 (rộng 600 mil = 6 bước lỗ): chân 1..20 ở hàng b,
-// chân 21..40 ở hàng h, cột picCol(size)..picCol(size)+19. Thứ tự chân khớp
-// datasheet (và khớp PIC_PINS trong wiring.js — test kiểm chứng điều này).
+// Chân chip PIC16F877A DIP-40 (rộng 600 mil = 6 bước lỗ): chân 1..20 ở hàng
+// chân trên, chân 21..40 ở hàng chân dưới (picRows: b/h với board 10 hàng,
+// 2 hàng kề rãnh với board khác), cột picCol(size)..picCol(size)+19.
+// Thứ tự chân khớp datasheet (và khớp PIC_PINS trong wiring.js — test
+// kiểm chứng điều này).
 export const PIC_PIN_IDS_LEFT = ['MCLR', 'RA0', 'RA1', 'RA2', 'RA3', 'RA4', 'RA5', 'RE0', 'RE1', 'RE2', 'VDD', 'VSS', 'OSC1', 'OSC2', 'RC0', 'RC1', 'RC2', 'RC3', 'RD0', 'RD1'];
 export const PIC_PIN_IDS_RIGHT = ['RD2', 'RD3', 'RC4', 'RC5', 'RC6', 'RC7', 'RD4', 'RD5', 'RD6', 'RD7', 'VSS', 'VDD', 'RB0', 'RB1', 'RB2', 'RB3', 'RB4', 'RB5', 'RB6', 'RB7'];
 
 // Chân chip: [{term: 'PIC.RA0', hole: 'b23', pin: 2, r: 1, c: 23}] —
-// pin 1 ở (b, picCol), pin 20 ở (b, picCol+19), pin 21 ở (h, picCol+19),
-// pin 40 ở (h, picCol). Trên board Mini 170 thì 6 chân ngoài cùng có
-// hole = null (treo ngoài board, xem ghi chú ở BOARD_SIZES).
+// pin 1 ở (hàng chân trên, picCol), pin 20 ở (hàng chân trên, picCol+19),
+// pin 21 ở (hàng chân dưới, picCol+19), pin 40 ở (hàng chân dưới, picCol).
+// Trên board Mini 170 thì 6 chân ngoài cùng có hole = null (treo ngoài
+// board, xem ghi chú ở BOARD_SIZES).
 export function picLegs(size = DEFAULT_SIZE) {
   const pc = picCol(size);
+  const [rT, rB] = picRows(size);
   const out = [];
   PIC_PIN_IDS_LEFT.forEach((id, i) => {
-    out.push({ term: 'PIC.' + id, hole: holeId(1, pc + i, size), pin: i + 1, r: 1, c: pc + i });
+    out.push({ term: 'PIC.' + id, hole: holeId(rT, pc + i, size), pin: i + 1, r: rT, c: pc + i });
   });
   PIC_PIN_IDS_RIGHT.forEach((id, i) => {
-    out.push({ term: 'PIC.' + id, hole: holeId(7, pc + 19 - i, size), pin: 21 + i, r: 7, c: pc + 19 - i });
+    out.push({ term: 'PIC.' + id, hole: holeId(rB, pc + 19 - i, size), pin: 21 + i, r: rB, c: pc + 19 - i });
   });
   return out;
 }
@@ -251,9 +291,10 @@ export function canPlace(state, type, anchor, rot = 0, ignoreId = null) {
   }
   if (type !== 'pic') {
     const pc = picCol(size);
+    const [rT, rB] = picRows(size);
     for (const leg of legs) {
       const p = parseHole(leg.hole, size);
-      if (p.r >= 1 && p.r <= 7 && p.c >= pc && p.c < pc + 20) {
+      if (p.r >= rT && p.r <= rB && p.c >= pc && p.c < pc + 20) {
         return { ok: false, reason: 'Chân nằm dưới thân chip PIC.' };
       }
     }
@@ -443,7 +484,7 @@ export function defaultBenchState(size = DEFAULT_SIZE) {
   return {
     size: normalizeSize(size),
     components: [
-      { id: 'PIC1', type: 'pic', anchor: holeId(1, Math.max(1, picCol(size)), size) ?? 'b1', rot: 0, fixed: true, props: {} },
+      { id: 'PIC1', type: 'pic', anchor: picAnchor(size), rot: 0, fixed: true, props: {} },
       { id: 'PSU1', type: 'psu', tx: 0, tz: -150, fixed: true, props: {} },
     ],
     wires,
@@ -458,7 +499,7 @@ export function sanitizeState(raw) {
   const components = [];
   for (const c of raw.components) {
     if (!c || typeof c.id !== 'string' || typeof c.type !== 'string') continue;
-    if (c.type === 'pic') { components.push({ id: 'PIC1', type: 'pic', anchor: holeId(1, Math.max(1, picCol(size)), size) ?? 'b1', rot: 0, fixed: true, props: {} }); continue; }
+    if (c.type === 'pic') { components.push({ id: 'PIC1', type: 'pic', anchor: picAnchor(size), rot: 0, fixed: true, props: {} }); continue; }
     if (c.type === 'psu') {
       if (typeof c.tx === 'number' && typeof c.tz === 'number') {
         components.push({ id: c.id, type: 'psu', tx: c.tx, tz: c.tz, fixed: true, props: {} });
@@ -471,7 +512,7 @@ export function sanitizeState(raw) {
     components.push({ id: c.id, type: c.type, anchor: c.anchor, rot: c.rot || 0, props: c.props || defaultProps(c.type) });
   }
   if (!components.some((c) => c.type === 'pic')) {
-    components.unshift({ id: 'PIC1', type: 'pic', anchor: holeId(1, Math.max(1, picCol(size)), size) ?? 'b1', rot: 0, fixed: true, props: {} });
+    components.unshift({ id: 'PIC1', type: 'pic', anchor: picAnchor(size), rot: 0, fixed: true, props: {} });
   }
   if (!components.some((c) => c.type === 'psu')) {
     components.push({ id: 'PSU1', type: 'psu', tx: 0, tz: -150, fixed: true, props: {} });
@@ -505,12 +546,12 @@ export function pruneStateForSize(state, newSize) {
     if (!p) return null;
     const rc = railColsOf(size);
     if (rc === 0) return null;
-    if (p.r >= 0 && p.r <= 9) return id;
-    const rowName = { '-2': 'T+', '-1': 'T-', '10': 'B+', '11': 'B-' }[String(p.r)];
+    if (p.r >= 0 && p.r < rowsOf(oldSize)) return id;
+    const rowName = railRowName(p.r, rowsOf(oldSize));
     return rowName + Math.min(p.c, rc);
   };
   const keptComponents = [
-    { id: 'PIC1', type: 'pic', anchor: holeId(1, Math.max(1, picCol(size)), size) ?? 'b1', rot: 0, fixed: true, props: {} },
+    { id: 'PIC1', type: 'pic', anchor: picAnchor(size), rot: 0, fixed: true, props: {} },
   ];
   const probe = { size, components: keptComponents, wires: [] };
   for (const comp of state.components) {

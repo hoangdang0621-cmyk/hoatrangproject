@@ -7,7 +7,8 @@ import {
   PITCH, holeId, holePos, allHoles,
   legOffsets, legsFor, picLegs, canPlace, benchToNetlist,
   describeTerminal, defaultBenchState, nextComponentId, compLabel,
-  defaultProps, sanitizeState, boardSize, colsOf, railColsOf, picCol,
+  defaultProps, sanitizeState, boardSize, colsOf, rowsOf, railColsOf, picCol,
+  picRows, bodyDepth, ROWS,
   pruneStateForSize, validateWireEnd, retargetWireEnd, togglePlacement,
   normalizeSize, holeCount, sizeLabel, sameSize,
 } from './bench-model.js?v=20261125h';
@@ -77,8 +78,9 @@ function main() {
   const lcdTexs = new Map();      // compId -> {canvas, ctx, tex, last}
   const buzzerMats = new Map();   // compId -> material còi
   const btnTops = new Map();      // compId -> mesh nút bấm (để nhấn xuống)
-  // Khoảng cách camera đóng khung vừa board (tỉ lệ theo chiều rộng board).
-  const frameR = (size) => Math.max(150, Math.round(480 * ((colsOf(size) * PITCH + 10) / 170)));
+  // Khoảng cách camera đóng khung vừa board (tỉ lệ theo chiều lớn nhất
+  // của board: rộng hoặc sâu).
+  const frameR = (size) => Math.max(150, Math.round(480 * (Math.max(colsOf(size) * PITCH + 10, bodyDepth(size)) / 170)));
   const orbit = { az: 0.5, el: 0.72, r: 480 };
   const orbitTarget = { az: 0.5, el: 0.72, r: 480 };
   const camTarget = { x: 0, y: 0, z: -20 };
@@ -221,16 +223,18 @@ function main() {
       const cur = boardSize(state.size);
       const isPreset = (n) => state.size === n;
       inspectorEl.innerHTML = `
-        <div class="bench-insp-head"><div><strong>Bo mạch</strong><div class="bench-insp-pos">${esc(sizeLabel(state.size))} · ${cur.cols} cột${cur.railCols > 0 ? ' · có rail nguồn' : ' · không rail'}</div></div>
+        <div class="bench-insp-head"><div><strong>Bo mạch</strong><div class="bench-insp-pos">${esc(sizeLabel(state.size))} · ${cur.cols} cột × ${cur.rows} hàng${cur.railCols > 0 ? ' · có rail nguồn' : ' · không rail'}</div></div>
         <button type="button" class="bench-insp-close" data-act="close" aria-label="Đóng">×</button></div>
         <div class="bench-insp-body">
           <label class="bench-insp-label">Mẫu sẵn — bấm để áp dụng ngay</label>
           <div class="bench-board-presets">
             ${[170, 400, 830].map((n) => `<button type="button" class="btn btn-small bench-board-preset" data-size="${n}" aria-pressed="${isPreset(n)}">${sizeLabel(n)}</button>`).join('')}
           </div>
-          <label class="bench-insp-label" for="inspBoardCols">Tự điền thông số</label>
-          <label class="bench-insp-label bench-insp-sub" for="inspBoardCols">Số cột (5–63)</label>
-          <input class="input bench-insp-hole" id="inspBoardCols" type="number" min="5" max="63" step="1" value="${cur.cols}">
+          <label class="bench-insp-label">Tự điền thông số</label>
+          <label class="bench-insp-label bench-insp-sub" for="inspBoardCols">Rộng (số cột, 5–99)</label>
+          <input class="input bench-insp-hole" id="inspBoardCols" type="number" min="5" max="99" step="1" value="${cur.cols}">
+          <label class="bench-insp-label bench-insp-sub" for="inspBoardRows">Dài (số hàng, 2–26)</label>
+          <input class="input bench-insp-hole" id="inspBoardRows" type="number" min="2" max="26" step="1" value="${cur.rows}">
           <label class="bench-insp-row"><input type="checkbox" id="inspBoardRails"${cur.railCols > 0 ? ' checked' : ''}> Có rail nguồn</label>
           <p class="bench-insp-err" id="inspBoardErr" role="alert"></p>
           <button type="button" class="btn btn-accent btn-small" data-act="apply-board">Áp dụng</button>
@@ -242,18 +246,23 @@ function main() {
       const applyCustom = () => {
         const errEl = inspectorEl.querySelector('#inspBoardErr');
         const cols = Math.round(Number(inspectorEl.querySelector('#inspBoardCols').value));
-        if (!Number.isFinite(cols) || cols < 5 || cols > 63) {
-          if (errEl) errEl.textContent = 'Số cột phải là số nguyên từ 5 đến 63.';
+        const rows = Math.round(Number(inspectorEl.querySelector('#inspBoardRows').value));
+        if (!Number.isFinite(cols) || cols < 5 || cols > 99) {
+          if (errEl) errEl.textContent = 'Số cột (rộng) phải là số nguyên từ 5 đến 99.';
+          return;
+        }
+        if (!Number.isFinite(rows) || rows < 2 || rows > 26) {
+          if (errEl) errEl.textContent = 'Số hàng (dài) phải là số nguyên từ 2 đến 26.';
           return;
         }
         const rails = inspectorEl.querySelector('#inspBoardRails').checked;
-        applyBoardSize({ cols, rails });
+        applyBoardSize({ cols, rows, rails });
       };
       inspectorEl.querySelector('[data-act="apply-board"]')?.addEventListener('click', applyCustom);
-      inspectorEl.querySelector('#inspBoardCols')?.addEventListener('keydown', (e) => {
+      inspectorEl.querySelectorAll('#inspBoardCols, #inspBoardRows').forEach((inp) => inp.addEventListener('keydown', (e) => {
         if (e.key === 'Enter') { e.preventDefault(); applyCustom(); }
         e.stopPropagation();
-      });
+      }));
     } else if (selected.kind === 'wire') {
       const w = state.wires.find((x) => x.id === selected.id);
       if (!w) { select(null); return; }
@@ -267,7 +276,7 @@ function main() {
           <input class="input bench-insp-hole" id="inspWireA" type="text" value="${esc(endVal(w.a))}"${endHint(w.a)} autocomplete="off" spellcheck="false">
           <label class="bench-insp-label" for="inspWireB">Đầu B — địa chỉ lỗ</label>
           <input class="input bench-insp-hole" id="inspWireB" type="text" value="${esc(endVal(w.b))}"${endHint(w.b)} autocomplete="off" spellcheck="false">
-          <p class="sub">Địa chỉ lỗ: chữ hàng a–j + số cột (vd c12, h29) hoặc rail T+/T−/B+/B− + số (vd T+5). Gõ xong bấm Áp dụng hoặc Enter. Để trống 1 ô thì giữ nguyên đầu đó.</p>
+          <p class="sub">Địa chỉ lỗ: chữ hàng a–z (theo số hàng của board) + số cột (vd c12, h29, k5) hoặc rail T+/T−/B+/B− + số (vd T+5). Gõ xong bấm Áp dụng hoặc Enter. Để trống 1 ô thì giữ nguyên đầu đó.</p>
           <p class="bench-insp-err" id="inspWireErr" role="alert">${esc(wireAddrError)}</p>
           <button type="button" class="btn btn-accent btn-small" data-act="apply-wire">Áp dụng</button>
           <label class="bench-insp-label">Màu dây</label>
@@ -340,7 +349,9 @@ function main() {
           const txt = [...(d.vcc ? ['+5V'] : []), ...(d.gnd ? ['GND'] : []), ...others.map((m) => m.startsWith('PIC.') ? m.slice(4) : m)].join(', ');
           return `<div class="bench-conn"><span>${l.term.slice(4)}</span><span>${esc(txt)}</span></div>`;
         }).filter(Boolean);
-        body = `<p class="sub">Chip cắm cố định ở cột 22–41, hàng b/h. ${conns.length} chân đang nối dây.</p>
+        const pc = picCol(state.size);
+        const [rT, rB] = picRows(state.size);
+        body = `<p class="sub">Chip cắm cố định ở cột ${Math.max(1, pc)}–${pc + 19}, hàng ${ROWS[rT]}/${ROWS[rB]}. ${conns.length} chân đang nối dây.</p>
           <div class="bench-conns">${conns.join('') || '<p class="sub">Chưa chân nào nối dây ngoài nguồn.</p>'}</div>`;
       } else if (comp.type === 'psu') {
         body = `<p class="sub">Nguồn 5V cố định. Cọc + (đỏ) và − (đen) nối vào rail trên/dưới của breadboard.</p>`;
@@ -403,7 +414,7 @@ function main() {
   // ('C12' -> 'c12'), chữ rail về hoa ('t+5' -> 'T+5').
   function normalizeHoleInput(v) {
     const s = String(v || '').trim();
-    let m = s.match(/^([a-jA-J])(\d+)$/);
+    let m = s.match(/^([a-zA-Z])(\d+)$/);
     if (m) return m[1].toLowerCase() + m[2];
     m = s.match(/^([tTbB])([+-])(\d+)$/);
     if (m) return m[1].toUpperCase() + m[2] + m[3];
@@ -547,36 +558,40 @@ function main() {
 
   function makeBoardTexture(size) {
     const cols = colsOf(size);
+    const rows = rowsOf(size);
     const bodyW = cols * PITCH + 10;
+    const bodyD = bodyDepth(size);
     const c = document.createElement('canvas');
-    c.width = 1024; c.height = 292;
+    c.width = 1024; c.height = Math.max(120, Math.round(1024 * bodyD / bodyW));
     const ctx = c.getContext('2d');
     ctx.fillStyle = '#F8FAFC';
-    ctx.fillRect(0, 0, 1024, 292);
+    ctx.fillRect(0, 0, 1024, c.height);
     const px = (xmm) => (xmm + bodyW / 2) * (1024 / bodyW);
-    const py = (zmm) => (zmm + 24) * (292 / 48);
+    const py = (zmm) => (zmm + bodyD / 2) * (c.height / bodyD);
     ctx.fillStyle = '#94A3B8';
     ctx.font = '600 15px "Fira Code", monospace';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     for (let col = 1; col <= cols; col += 5) {
       const x = px((col - (cols + 1) / 2) * PITCH);
-      ctx.fillText(String(col), x, py(-22));
-      ctx.fillText(String(col), x, py(22));
+      ctx.fillText(String(col), x, py(-(bodyD / 2 - 2)));
+      ctx.fillText(String(col), x, py(bodyD / 2 - 2));
     }
-    for (let r = 0; r <= 9; r++) {
-      const z = py((r - 4.5) * PITCH);
-      ctx.fillText('abcdefghij'[r], px(-bodyW / 2 + 3), z);
-      ctx.fillText('abcdefghij'[r], px(bodyW / 2 - 3), z);
+    for (let r = 0; r < rows; r++) {
+      const z = py((r - (rows - 1) / 2) * PITCH);
+      ctx.fillText(ROWS[r], px(-bodyW / 2 + 3), z);
+      ctx.fillText(ROWS[r], px(bodyW / 2 - 3), z);
     }
     if (railColsOf(size) > 0) {
+      // Dấu +/− của rail: T+ và B+ là +, T− và B− là −.
+      const railZ = (r) => py((r - (rows - 1) / 2) * PITCH);
       ctx.font = '700 17px "Fira Code", monospace';
       ctx.fillStyle = '#DC2626';
-      ctx.fillText('+', px(-bodyW / 2 + 3), py(-16.5));
-      ctx.fillText('+', px(-bodyW / 2 + 3), py(16.5));
+      ctx.fillText('+', px(-bodyW / 2 + 3), railZ(-2));
+      ctx.fillText('+', px(-bodyW / 2 + 3), railZ(rows));
       ctx.fillStyle = '#2563EB';
-      ctx.fillText('−', px(-bodyW / 2 + 3), py(-14));
-      ctx.fillText('−', px(-bodyW / 2 + 3), py(19));
+      ctx.fillText('−', px(-bodyW / 2 + 3), railZ(-1));
+      ctx.fillText('−', px(-bodyW / 2 + 3), railZ(rows + 1));
     }
     const tex = new THREE.CanvasTexture(c);
     tex.anisotropy = 4;
@@ -585,36 +600,39 @@ function main() {
 
   function buildBreadboardMesh(size) {
     const cols = colsOf(size);
+    const rows = rowsOf(size);
     const rc = railColsOf(size);
     const bodyW = cols * PITCH + 10;
+    const bodyD = bodyDepth(size);
     // Thân board
     const body = new THREE.Mesh(
-      new THREE.BoxGeometry(bodyW, BOARD_TOP, 48),
+      new THREE.BoxGeometry(bodyW, BOARD_TOP, bodyD),
       new THREE.MeshStandardMaterial({ color: 0xF1F5F9, roughness: 0.6 }));
     body.position.y = BOARD_TOP / 2;
     body.receiveShadow = true;
     boardGroup.add(body);
     // Mặt trên có chữ hàng/cột
     const top = new THREE.Mesh(
-      new THREE.PlaneGeometry(bodyW, 48),
+      new THREE.PlaneGeometry(bodyW, bodyD),
       new THREE.MeshStandardMaterial({ map: makeBoardTexture(size), roughness: 0.6 }));
     top.rotation.x = -Math.PI / 2;
     top.position.y = BOARD_TOP + 0.05;
     top.receiveShadow = true;
     boardGroup.add(top);
-    // Rãnh giữa (giữa hàng e và f)
+    // Rãnh giữa (giữa 2 nửa strip: z = 0 với số hàng chẵn, −PITCH/2 với số hàng lẻ)
+    const grooveZ = ((2 * Math.floor(rows / 2) - 1) / 2 - (rows - 1) / 2) * PITCH;
     const groove = new THREE.Mesh(
       new THREE.BoxGeometry(bodyW, 0.6, 2.4),
       new THREE.MeshStandardMaterial({ color: 0xCBD5E1 }));
-    groove.position.y = BOARD_TOP + 0.02;
+    groove.position.set(0, BOARD_TOP + 0.02, grooveZ);
     boardGroup.add(groove);
     // Vạch màu rail +/− (chỉ khi board có rail)
     if (rc > 0) {
-      for (const [r, color] of [[-2, 0xDC2626], [-1, 0x2563EB], [10, 0xDC2626], [11, 0x2563EB]]) {
+      for (const [r, color] of [[-2, 0xDC2626], [-1, 0x2563EB], [rows, 0xDC2626], [rows + 1, 0x2563EB]]) {
         const strip = new THREE.Mesh(
           new THREE.BoxGeometry(rc * PITCH, 0.5, 1.6),
           new THREE.MeshStandardMaterial({ color }));
-        strip.position.set(((rc + 1) / 2 - (cols + 1) / 2) * PITCH, BOARD_TOP + 0.08, (r - 4.5) * PITCH);
+        strip.position.set(((rc + 1) / 2 - (cols + 1) / 2) * PITCH, BOARD_TOP + 0.08, (r - (rows - 1) / 2) * PITCH);
         boardGroup.add(strip);
       }
     }
@@ -649,7 +667,7 @@ function main() {
   }
 
   // Đổi size bo mạch: giữ linh kiện/dây còn trên board mới, gỡ cái ngoài board.
-  // newSize là số mẫu sẵn (170/400/830) hoặc {cols, rails} tự điền.
+  // newSize là số mẫu sẵn (170/400/830) hoặc {cols, rows, rails} tự điền.
   function applyBoardSize(newSize) {
     const size = normalizeSize(newSize);
     if (sameSize(size, state.size)) { updateSizeUI(); return; }
@@ -716,25 +734,29 @@ function main() {
     if (comp.type === 'pic') {
       // Thân chip + 40 chân cắm vào lỗ (căn giữa board theo size).
       // Chân treo ngoài board (Mini 170) vẫn vẽ nhưng nhô lên khỏi mặt board.
+      // Thân chip nằm giữa 2 hàng chân (z = điểm giữa 2 hàng chân).
       const cols = colsOf(state.size);
+      const rows = rowsOf(state.size);
+      const [rT, rB] = picRows(state.size);
+      const chipZ = ((rT + rB) / 2 - (rows - 1) / 2) * PITCH;
       const cx = (picCol(state.size) + 9.5 - (cols + 1) / 2) * PITCH;
       const body = new THREE.Mesh(new THREE.BoxGeometry(52.5, 4.5, 14), stdMat(0x0F172A, { roughness: 0.4 }));
-      body.position.set(cx, BOARD_TOP + 6.2, -1.27);
+      body.position.set(cx, BOARD_TOP + 6.2, chipZ);
       body.castShadow = true;
       g.add(body);
       const label = new THREE.Mesh(
         new THREE.PlaneGeometry(44, 11),
         new THREE.MeshBasicMaterial({ map: makeTextTexture('PIC16F877A', 'DIP-40'), transparent: true }));
       label.rotation.x = -Math.PI / 2;
-      label.position.set(cx, BOARD_TOP + 8.5, -1.27);
+      label.position.set(cx, BOARD_TOP + 8.5, chipZ);
       g.add(label);
       const dot = new THREE.Mesh(new THREE.CylinderGeometry(1.2, 1.2, 0.5, 12), stdMat(0xF8FAFC));
-      dot.position.set(cx - 24.13, BOARD_TOP + 8.5, -8.89);
+      dot.position.set(cx - 24.13, BOARD_TOP + 8.5, (rT - (rows - 1) / 2) * PITCH);
       g.add(dot);
       const pinMat = stdMat(0xCBD5E1, { metalness: 0.7, roughness: 0.35 });
       for (const leg of picLegs(state.size)) {
         const px = (leg.c - (cols + 1) / 2) * PITCH;
-        const pz = (leg.r - 4.5) * PITCH;
+        const pz = (leg.r - (rows - 1) / 2) * PITCH;
         const pin = new THREE.Mesh(new THREE.BoxGeometry(1.0, 4.5, 0.7), pinMat);
         // Chân không có lỗ (treo ngoài board) nhô lên để nhìn rõ là chưa cắm.
         pin.position.set(px, BOARD_TOP + (leg.hole ? 2.2 : 4.6), pz);
@@ -1006,9 +1028,13 @@ function main() {
     // Cột từ x: x = (c − (cols+1)/2) × PITCH -> c = x/PITCH + (cols+1)/2
     // (không hardcode 32 — chỉ đúng với board 830).
     const col = Math.round(pt.x / PITCH + (colsOf(state.size) + 1) / 2);
+    // Hàng từ z: z = (r − (rows−1)/2) × PITCH -> r = z/PITCH + (rows−1)/2
+    // (không hardcode 4.5 — chỉ đúng với board 10 hàng).
+    const rows = rowsOf(state.size);
+    const candRows = [-2, -1, ...Array.from({ length: rows }, (_, i) => i), rows, rows + 1];
     let best = null, bestD = 1e9;
-    for (let r = -2; r <= 11; r++) {
-      const z = (r - 4.5) * PITCH;
+    for (const r of candRows) {
+      const z = (r - (rows - 1) / 2) * PITCH;
       const d = Math.abs(pt.z - z);
       if (d < bestD) { bestD = d; best = r; }
     }
@@ -1027,7 +1053,7 @@ function main() {
     const pt = new THREE.Vector3();
     if (!raycaster.ray.intersectPlane(boardPlane(), pt)) return null;
     const bodyW = colsOf(state.size) * PITCH + 10;
-    if (Math.abs(pt.x) > bodyW / 2 || Math.abs(pt.z) > 24) return null;
+    if (Math.abs(pt.x) > bodyW / 2 || Math.abs(pt.z) > bodyDepth(state.size) / 2) return null;
     return { x: pt.x, z: pt.z };
   }
   function pickTablePoint(e) {
