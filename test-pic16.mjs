@@ -2052,16 +2052,19 @@ const SLEEP_PROG = `    ORG 0
     `boundaries=${JSON.stringify(b30)}`);
 }
 // (n-d) Ranh giới nằm chính giữa 2 hàng lỗ kề (cách mỗi lỗ PITCH/2 = 1.27mm);
-// vạch rộng 1mm nằm phẳng trên mặt board (+0.05), mặt lỗ ở +0.35 nên vạch
-// không che được lỗ
+// vạch rộng 1.5mm nằm phẳng trên mặt board (+0.05), mặt lỗ ở +0.35 nên
+// vạch không che được lỗ: nửa bề rộng vạch 0.75mm chui 0.43mm xuống dưới
+// đĩa lỗ (ranh giới tới mép lỗ 0.32mm) nhưng đĩa 3D luôn che phần đó;
+// nửa bề rộng vẫn nhỏ hơn PITCH/2 (1.27mm) nên vạch không tới được tâm lỗ.
 {
   const rows = 10;
   const zB = segmentBoundaries(830)[0];
   const zE = (4 - (rows - 1) / 2) * PITCH; // tâm lỗ hàng e (chỉ số 4)
   const zF = (5 - (rows - 1) / 2) * PITCH; // tâm lỗ hàng f (chỉ số 5)
-  check('(n-d) ranh giới cách lỗ e và f đều 1.27mm (= PITCH/2); vạch 1mm trong texture, mặt lỗ +0.35 cao hơn mặt board nên vạch không che được lỗ',
+  check('(n-d) ranh giới cách lỗ e và f đều 1.27mm (= PITCH/2); vạch 1.5mm trong texture, mặt lỗ +0.35 cao hơn mặt board nên vạch không che được lỗ',
     Math.abs(Math.abs(zB - zE) - PITCH / 2) < 1e-9 && Math.abs(Math.abs(zF - zB) - PITCH / 2) < 1e-9
-    && SEGMENT_LINE_WIDTH_MM === 1 && HOLE_TOP_ABOVE_BOARD === 0.35,
+    && SEGMENT_LINE_WIDTH_MM === 1.5 && HOLE_TOP_ABOVE_BOARD === 0.35
+    && SEGMENT_LINE_WIDTH_MM / 2 < PITCH / 2,
     `zB=${zB} zE=${zE} zF=${zF}`);
 }
 // (n-e) Không còn khối rãnh 3D nào trong buildBreadboardMesh (bench.js)

@@ -30,11 +30,16 @@ export function depthPrecisionAt(z, near = 1) { return (z * z) / (near * 1677721
 // Khoảng cách camera tới board xa nhất: bán kính orbit kẹp tối đa 900mm
 // (wheel zoom) cộng lệch target → lấy tròn 1000mm làm trường hợp xấu nhất.
 export const MAX_CAMERA_DISTANCE = 1000;
-// Vạch chia đoạn 5 hàng: rộng ~1mm, vẽ trong texture mặt board (không phải
+// Vạch chia đoạn 5 hàng: rộng 1.5mm, vẽ trong texture mặt board (không phải
 // khối 3D) để không bao giờ che lỗ — lỗ là đĩa 3D cao hơn mặt board 0.35mm
 // còn vạch nằm phẳng trên mặt board. Rãnh 3D cũ rộng 2.4mm, mặt trên cao
 // +0.32mm, đè lên gần nửa lỗ e/f (lỗ cách ranh giới 1.27mm, bán kính 0.95mm).
-export const SEGMENT_LINE_WIDTH_MM = 1;
+// Tính tay: ranh giới tới mép lỗ = 1.27 − 0.95 = 0.32mm; nửa bề rộng vạch
+// 1.5mm là 0.75mm nên vạch chui 0.43mm xuống dưới đĩa lỗ — nhưng đĩa 3D
+// luôn che phần đó (depth test), vạch không bao giờ đè lên lỗ nhìn thấy.
+// Phần vạch nhìn thấy: khe 0.64mm giữa 2 hàng đĩa lỗ + đủ 1.5mm ở khe giữa
+// các cột; kết hợp màu đậm #64748B (thay #CBD5E1 mờ) để nhìn rõ ranh giới.
+export const SEGMENT_LINE_WIDTH_MM = 1.5;
 // Vị trí z (mm) của ranh giới giữa các đoạn 5 hàng (sau hàng 5, 10, 15...),
 // tính từ tâm board; board 10 hàng thì chỉ 1 ranh giới ở z = 0 (giữa e/f).
 export function segmentBoundaries(size) {

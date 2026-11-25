@@ -15,10 +15,10 @@ import {
   normalizeSize, holeCount, sizeLabel, sameSize,
   psuVolts, validatePsuVolts, parsePsuPost, psuPostPos, PSU_SCALE, PSU_POST_DX, PSU_POST_Y, PSU_POST_DZ,
   clampCamTarget, zoomTowardPoint, panTarget,
-} from './bench-model.js?v=20261125v';
+} from './bench-model.js?v=20261125x';
 import { checkWiring, SIGNAL_COLORS } from './wiring.js?v=20261125r';
 import { assemble } from './pic16.js?v=20261125q';
-import { LABS, getLab, buildLabState } from './labs.js?v=20261125v';
+import { LABS, getLab, buildLabState } from './labs.js?v=20261125x';
 
 const $ = (id) => document.getElementById(id);
 const benchView = $('benchView');
@@ -682,7 +682,7 @@ D2
       // dạng lỗ nên bỏ qua. Chân treo ngoài board (hole null) thì hiện
       // "ngoài board". Tên chân bỏ tiền tố 'PIC.' (PIC.RA0 -> RA0).
       const legs = comp.type === 'psu' ? [] : legsFor(comp, state.size);
-      const pins = legs.length ? `<label class="bench-insp-label">Chân</label><div class="bench-conns bench-pins">${legs.map((l) => {
+      const pins = legs.length ? `<label class="bench-insp-label">Chân</label><div class="bench-conns">${legs.map((l) => {
         const term = l.term.startsWith('PIC.') ? l.term.slice(4) : l.term;
         return `<div class="bench-conn"><span>${esc(term)}</span><span>${l.hole ? esc(holeName(l.hole)) : 'ngoài board'}</span></div>`;
       }).join('')}</div>` : '';
@@ -962,8 +962,9 @@ D2
     }
     // Vạch chia đoạn 5 hàng (vẽ trong texture, không phải khối 3D): vạch
     // nằm phẳng trên mặt board còn lỗ là đĩa 3D cao hơn 0.35mm nên vạch
-    // không bao giờ che được lỗ.
-    ctx.fillStyle = '#CBD5E1';
+    // không bao giờ che được lỗ. Màu #64748B đậm (thay #CBD5E1 mờ) + rộng
+    // 1.5mm để nhìn rõ ranh giới đoạn, tránh nhầm khi kéo linh kiện qua đoạn.
+    ctx.fillStyle = '#64748B';
     const lineW = SEGMENT_LINE_WIDTH_MM * (c.height / bodyD);
     for (const z of segmentBoundaries(size)) {
       const y = py(z);
@@ -1293,9 +1294,14 @@ D2
     if (!a || !b) return null;
     const isSel = selected && selected.kind === 'wire' && selected.id === wire.id;
     const up = (p, h) => new THREE.Vector3(p.x, p.y + h, p.z);
-    const mid = new THREE.Vector3((a.x + b.x) / 2, Math.max(a.y, b.y) + 42, (a.z + b.z) / 2);
+    // Dây ôm sát mặt board: vòng cung thấp (điểm giữa chỉ +10mm, điểm kề
+    // đầu dây +5mm) thay cho vòng cao cũ (+42/+18). Đầu dây ở mặt board
+    // (y = BOARD_TOP = 8), thân chip cao 4.5mm (đỉnh ~12.5) nên dây cao
+    // ~10mm vẫn vượt qua chip mà không chạm; ống dây bán kính 0.75 giữ
+    // nguyên, ống bắt vô hình 3.2 giữ nguyên để kéo đầu dây vẫn làm việc.
+    const mid = new THREE.Vector3((a.x + b.x) / 2, Math.max(a.y, b.y) + 10, (a.z + b.z) / 2);
     const curve = new THREE.CatmullRomCurve3([
-      new THREE.Vector3(a.x, a.y, a.z), up(a, 18), mid, up(b, 18), new THREE.Vector3(b.x, b.y, b.z),
+      new THREE.Vector3(a.x, a.y, a.z), up(a, 5), mid, up(b, 5), new THREE.Vector3(b.x, b.y, b.z),
     ]);
     const baseColor = new THREE.Color(wire.color);
     const mat = new THREE.MeshStandardMaterial({

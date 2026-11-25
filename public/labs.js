@@ -4,7 +4,7 @@
 // Thêm lab mới chỉ cần thêm 1 phần tử vào mảng LABS.
 // Lỗ chân RB0 (h29), vị trí điện trở/LED và dây nối đã tính bằng legsFor /
 // canPlace trên board mặc định 830 và kiểm chứng bằng netlist (test q).
-import { defaultBenchState, defaultProps, canPlace, parseHole, parsePsuPost } from './bench-model.js?v=20261125v';
+import { defaultBenchState, defaultProps, canPlace, parseHole, parsePsuPost } from './bench-model.js?v=20261125x';
 
 export const LABS = [
   {
