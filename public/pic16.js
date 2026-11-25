@@ -887,9 +887,142 @@ export function exportHex(program, config = 0x3fff) {
   return lines.join('\n') + '\n';
 }
 
+// ---------------------------------------------------------------------------
+// ProgramRunner: điều khiển chạy/tạm dừng/breakpoint cho chương trình đã nạp.
+// Dùng cho tab "Nạp viết code": editor hợp ngữ (assemble) hoặc file .hex.
+// Không phụ thuộc DOM: app.js gọi tick() theo nhịp 50ms, bench.js gọi các
+// phương thức qua bridge. Breakpoint lưu theo SỐ DÒNG của editor; địa chỉ
+// suy ra từ lineToAddr của lần dịch gần nhất. Chạy tới breakpoint thì dừng
+// TRƯỚC khi thực thi lệnh ở đó; "Chạy tiếp" bước qua lệnh đó rồi mới kiểm
+// tra breakpoint tiếp (kẻo dừng lại ngay cùng 1 lệnh).
+// ---------------------------------------------------------------------------
+export class ProgramRunner {
+  constructor(cpu) {
+    this.cpu = cpu;
+    this.state = 'idle';        // 'idle' | 'running' | 'paused'
+    this.pauseReason = null;    // 'breakpoint' | 'step' | 'user' | 'sleep'
+    this.hasProgram = false;
+    this.hexMode = false;
+    this.lineToAddr = new Map();
+    this.addrToLine = new Map();
+    this.breakpointLines = new Set();
+    this.justResumed = false;
+  }
+
+  get breakpointAddrs() {
+    const out = new Set();
+    for (const l of this.breakpointLines) {
+      const a = this.lineToAddr.get(l);
+      if (a !== undefined) out.add(a);
+    }
+    return out;
+  }
+
+  loadAsm(source) {
+    const r = assemble(source);
+    if (r.errors.length) return { ok: false, errors: r.errors };
+    this.cpu.loadProgram(r.program);
+    this.lineToAddr = r.lineToAddr;
+    this.addrToLine = r.addrToLine;
+    this.hexMode = false;
+    this.hasProgram = true;
+    this.state = 'idle';
+    this.pauseReason = null;
+    this.justResumed = false;
+    // Bỏ breakpoint ở dòng không còn dịch ra lệnh sau khi dịch lại.
+    this.breakpointLines = new Set([...this.breakpointLines].filter((l) => this.lineToAddr.has(l)));
+    return { ok: true, lineToAddr: r.lineToAddr, addrToLine: r.addrToLine };
+  }
+
+  loadHex(text) {
+    const r = parseIntelHex(text);
+    if (r.errors.length) return { ok: false, errors: r.errors };
+    this.cpu.loadProgram(r.program, r.config);
+    this.lineToAddr = new Map();
+    this.addrToLine = new Map();
+    this.hexMode = true;
+    this.hasProgram = true;
+    this.state = 'idle';
+    this.pauseReason = null;
+    this.justResumed = false;
+    this.breakpointLines.clear();
+    return { ok: true, words: r.words };
+  }
+
+  // Chỉ giữ các dòng còn dịch ra lệnh (theo lần dịch gần nhất); trả về
+  // danh sách dòng breakpoint còn hiệu lực, đã sắp xếp.
+  setBreakpointLines(lines) {
+    this.breakpointLines = new Set([...lines].filter((l) => this.lineToAddr.has(l)));
+    return [...this.breakpointLines].sort((a, b) => a - b);
+  }
+
+  run() {
+    if (!this.hasProgram) return { ok: false, error: 'Chưa nạp chương trình.' };
+    if (this.cpu.sleeping) {
+      this.cpu.step(); // kiểm tra đánh thức: ngắt đang chờ sẽ đánh thức CPU
+      if (this.cpu.sleeping) return { ok: false, error: 'CPU đang SLEEP — không chạy được.' };
+    }
+    if (this.state === 'paused' && this.pauseReason === 'breakpoint') this.justResumed = true;
+    this.state = 'running';
+    this.pauseReason = null;
+    return { ok: true };
+  }
+
+  pause() {
+    if (this.state === 'running') { this.state = 'paused'; this.pauseReason = 'user'; }
+    return this.getStatus();
+  }
+
+  stepOnce() {
+    if (!this.hasProgram) return { ok: false, error: 'Chưa nạp chương trình.' };
+    if (this.state === 'running') return { ok: false, error: 'Đang chạy — bấm Dừng trước.' };
+    this.cpu.step();
+    this.state = 'paused';
+    this.pauseReason = 'step';
+    return { ok: true, ...this.getStatus() };
+  }
+
+  // Step theo đợt nhỏ (ngân sách tính theo chu kỳ lệnh, như vòng chạy cũ):
+  // kiểm tra PC trước mỗi lệnh, chạm breakpoint thì dừng.
+  tick(budget = 50000) {
+    if (this.state !== 'running') return this.getStatus();
+    let b = budget;
+    if (this.justResumed) {
+      if (!this.cpu.sleeping && !this.cpu.halted) {
+        const c0 = this.cpu.cycles; this.cpu.step(); b -= Math.max(1, this.cpu.cycles - c0);
+      }
+      this.justResumed = false;
+    }
+    const bps = this.breakpointAddrs;
+    while (b > 0 && !this.cpu.sleeping && !this.cpu.halted) {
+      if (bps.has(this.cpu.pc & 0x1fff)) {
+        this.state = 'paused'; this.pauseReason = 'breakpoint';
+        return this.getStatus();
+      }
+      const c0 = this.cpu.cycles; this.cpu.step(); b -= Math.max(1, this.cpu.cycles - c0);
+    }
+    if (this.cpu.sleeping) { this.state = 'paused'; this.pauseReason = 'sleep'; }
+    return this.getStatus();
+  }
+
+  getStatus() {
+    const pc = this.cpu.pc & 0x1fff;
+    return {
+      state: this.state,
+      pauseReason: this.pauseReason,
+      pc,
+      line: this.addrToLine.get(pc) ?? null,
+      hasProgram: this.hasProgram,
+      hexMode: this.hexMode,
+      sleeping: this.cpu.sleeping,
+      breakpointLines: [...this.breakpointLines].sort((a, b) => a - b),
+    };
+  }
+}
+
 export function createCPU() { return new PIC16F877A(); }
 
 // Tiện cho debug trong console trình duyệt (không ảnh hưởng Node test)
 if (typeof globalThis !== 'undefined') {
-  globalThis.PIC16 = { assemble, disassemble, parseIntelHex, exportHex, createCPU, PIC16F877A, LCD, REGISTERS };
+  globalThis.PIC16 = { assemble, disassemble, parseIntelHex, exportHex, createCPU, PIC16F877A, ProgramRunner, LCD, REGISTERS };
 }

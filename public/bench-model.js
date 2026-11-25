@@ -88,14 +88,27 @@ export function sameSize(a, b) {
 // Cột bắt đầu của chip PIC (căn giữa board): 830 -> 22, 400 -> 6,
 // 170 -> 0 (chip tràn nửa cột mỗi bên); board tự điền theo cùng công thức.
 export function picCol(size) { return Math.max(0, Math.floor((colsOf(size) - 20) / 2) + 1); }
-// Hàng chân chip PIC (internal 0-indexed), luôn 2 hàng ở 2 đoạn 5 khác
-// nhau: hàng trên là hàng 2 (b), hàng dưới là hàng max(6, rows-2)
-// (số 1-indexed). Board 10 hàng -> (2, 8) = b/h như cũ; board 5 hàng
-// -> (2, 6) với hàng 6 treo ngoài board (holeId null); board 100 hàng
-// -> (2, 98) = b1/t4.
+// Hàng chân chip PIC (internal 0-indexed). Chân là một phần của CHIP,
+// không phải của board: chip là một khối duy nhất (thân + chân đi cùng
+// nhau), căn giữa board; 2 hàng chân cách nhau CỐ ĐỊNH 6 hàng, đối xứng
+// qua tâm chip. Tâm chip (0-indexed, có thể .5) = (rows−1)/2; hàng chân
+// trên = floor(tâm) − 3, hàng dưới = trên + 6. Kiểm tra: 10 hàng -> (2, 8)
+// b/h; 15 hàng -> (5, 11); 30 hàng -> (12, 18); 100 hàng -> (47, 53).
+// Board <=6 hàng thì hàng trên tính ra <1 (0-indexed <0) -> fallback
+// (2, 6), hàng 6 treo ngoài board nếu board <6 hàng (holeId null).
+// KHÔNG BAO GIỜ tính chân trực tiếp từ số hàng (không dùng rows−2).
 export function picRows(size) {
   const rows = rowsOf(size);
-  return [1, Math.max(5, rows - 3)];
+  const upper = Math.floor((rows - 1) / 2) - 3;
+  if (upper < 0) return [1, 5];
+  return [upper, upper + 6];
+}
+// Chiều sâu thân chip PIC (mm): theo đúng khoảng cách 2 hàng chân
+// ((hàng chân dưới − hàng chân trên) × PITCH) + lề 1,5mm mỗi bên, để chân
+// luôn nằm ở mép thân chip chứ không rời khỏi thân khi board dài ra.
+export function picBodyDepth(size) {
+  const [rT, rB] = picRows(size);
+  return (rB - rT) * PITCH + 3;
 }
 // Lỗ neo của chip PIC (chân 1): hàng chân trên, cột picCol (kẹp về 1).
 export function picAnchor(size) {
@@ -228,8 +241,8 @@ export const LEG_LAYOUTS = {
 };
 
 // Chân chip PIC16F877A DIP-40 (rộng 600 mil = 6 bước lỗ): chân 1..20 ở hàng
-// chân trên, chân 21..40 ở hàng chân dưới (picRows: b/h với board 10 hàng,
-// 2 hàng kề rãnh với board khác), cột picCol(size)..picCol(size)+19.
+// chân trên, chân 21..40 ở hàng chân dưới (picRows: đối xứng qua tâm chip,
+// cách nhau cố định 6 hàng), cột picCol(size)..picCol(size)+19.
 // Thứ tự chân khớp datasheet (và khớp PIC_PINS trong wiring.js — test
 // kiểm chứng điều này).
 export const PIC_PIN_IDS_LEFT = ['MCLR', 'RA0', 'RA1', 'RA2', 'RA3', 'RA4', 'RA5', 'RE0', 'RE1', 'RE2', 'VDD', 'VSS', 'OSC1', 'OSC2', 'RC0', 'RC1', 'RC2', 'RC3', 'RD0', 'RD1'];

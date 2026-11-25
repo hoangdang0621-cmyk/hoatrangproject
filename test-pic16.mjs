@@ -1,8 +1,8 @@
 // test-pic16.mjs — Kiểm thử xác định cho lõi pic16.js (KHÔNG đưa vào public/).
 // Chạy: node test-pic16.mjs   (exit 0 = tất cả pass)
-import { assemble, createCPU, parseIntelHex, exportHex, disassemble } from './public/pic16.js';
+import { assemble, createCPU, parseIntelHex, exportHex, disassemble, ProgramRunner } from './public/pic16.js';
 import { defaultNetlist, resolvePeripherals, checkWiring, ledStates, applyButtonToCpu, applyPotToCpu, PIC_PINS } from './public/wiring.js';
-import { PITCH, allHoles, stripKey, parseHole, holePos, holeId, rowLabel, picLegs, canPlace, buildBenchNets, benchToNetlist, defaultBenchState, sanitizeState, boardSize, picCol, picRows, bodyDepth, pruneStateForSize, validateWireEnd, retargetWireEnd, togglePlacement, normalizeSize, holeCount, sizeLabel, sameSize, compLabel, psuVolts, validatePsuVolts, parsePsuPost, psuPostPos, normalizeWireEnd, clampCamTarget, zoomTowardPoint, panTarget } from './public/bench-model.js';
+import { PITCH, allHoles, stripKey, parseHole, holePos, holeId, rowLabel, picLegs, canPlace, buildBenchNets, benchToNetlist, defaultBenchState, sanitizeState, boardSize, picCol, picRows, picBodyDepth, bodyDepth, pruneStateForSize, validateWireEnd, retargetWireEnd, togglePlacement, normalizeSize, holeCount, sizeLabel, sameSize, compLabel, psuVolts, validatePsuVolts, parsePsuPost, psuPostPos, normalizeWireEnd, clampCamTarget, zoomTowardPoint, panTarget } from './public/bench-model.js';
 
 // Các chương trình Assembly dùng để kiểm thử — inline tại đây (file
 // public/examples.js chứa các bài lab mẫu đã bị gỡ ngày 25/11/2026 nên test
@@ -1041,17 +1041,18 @@ function rewire(netlist, a, b, a2, b2) {
     && normalizeSize({ cols: 20, rows: 2, rails: false }).rows === 5, '');
 }
 
-// (e-d) picRows + picLegs theo công thức mới: hàng chân (2, max(6, rows-2))
+// (e-d) picRows + picLegs: chân đi theo chip — 2 hàng chân cách nhau cố
+// định 6 hàng, đối xứng qua tâm chip (hàng trên = floor((rows+1)/2) − 3).
 {
-  check('(e-d) picRows: 830 -> [1,7] (b/h), 15 hàng -> [1,12] (b/m), 5 hàng -> [1,5] (hàng 6 treo), 25 hàng -> [1,22] (b/w)',
+  check('(e-d) picRows: 830 -> [1,7] (b/h), 15 hàng -> [4,10] (e/k), 5 hàng -> [1,5] (hàng 6 treo), 25 hàng -> [9,15] (j/p)',
     JSON.stringify(picRows(830)) === JSON.stringify([1, 7])
-    && JSON.stringify(picRows({ cols: 42, rows: 15, rails: true })) === JSON.stringify([1, 12])
+    && JSON.stringify(picRows({ cols: 42, rows: 15, rails: true })) === JSON.stringify([4, 10])
     && JSON.stringify(picRows({ cols: 20, rows: 5, rails: false })) === JSON.stringify([1, 5])
-    && JSON.stringify(picRows({ cols: 20, rows: 25, rails: false })) === JSON.stringify([1, 22]), '');
-  check('(e-d) chip 42 cột x 15 hàng: đủ 40 chân, chân 1 ở hàng b, chân 21 ở hàng m',
+    && JSON.stringify(picRows({ cols: 20, rows: 25, rails: false })) === JSON.stringify([9, 15]), '');
+  check('(e-d) chip 42 cột x 15 hàng: đủ 40 chân, chân 1 ở hàng e, chân 21 ở hàng k',
     (() => {
       const legs = picLegs({ cols: 42, rows: 15, rails: true });
-      return legs.length === 40 && legs.every((l) => !!l.hole) && legs[0].r === 1 && legs[0].hole === 'b12' && legs[20].r === 12 && legs[20].hole === 'm31';
+      return legs.length === 40 && legs.every((l) => !!l.hole) && legs[0].r === 4 && legs[0].hole === 'e12' && legs[20].r === 10 && legs[20].hole === 'k31';
     })(), '');
   check('(e-d) chip 20 cột x 5 hàng: 20 chân cắm được (hàng b), 20 chân hàng 6 treo ngoài board',
     (() => {
@@ -1059,14 +1060,14 @@ function rewire(netlist, a, b, a2, b2) {
       return legs.length === 40 && legs.slice(0, 20).every((l) => !!l.hole) && legs[0].hole === 'b1'
         && legs.slice(20).every((l) => !l.hole);
     })(), '');
-  check('(e-d) chip 20 cột x 25 hàng: đủ 40 chân, chân 1 ở b1, chân 40 ở w1',
+  check('(e-d) chip 20 cột x 25 hàng: đủ 40 chân, chân 1 ở j1, chân 40 ở p1',
     (() => {
       const legs = picLegs({ cols: 20, rows: 25, rails: false });
-      return legs.length === 40 && legs.every((l) => !!l.hole) && legs[0].hole === 'b1' && legs[39].hole === 'w1';
+      return legs.length === 40 && legs.every((l) => !!l.hole) && legs[0].hole === 'j1' && legs[39].hole === 'p1';
     })(), '');
-  check('(e-d) chip 99 cột x 25 hàng: picCol=40, chân 1 ở b40',
+  check('(e-d) chip 99 cột x 25 hàng: picCol=40, chân 1 ở j40',
     picCol({ cols: 99, rows: 25, rails: true }) === 40
-    && picLegs({ cols: 99, rows: 25, rails: true })[0].hole === 'b40', '');
+    && picLegs({ cols: 99, rows: 25, rails: true })[0].hole === 'j40', '');
 }
 
 // (e-e) Địa chỉ lỗ: chữ hàng a–z theo số hàng
@@ -1090,9 +1091,9 @@ function rewire(netlist, a, b, a2, b2) {
   st15.components.push({ id: 'LED0', type: 'led', anchor: 'a10', rot: 0, props: { color: '#DC2626' } });
   st15.components.push({ id: 'LED1', type: 'led', anchor: 'k10', rot: 0, props: { color: '#DC2626' } });
   st15.wires.push({ id: 'W10', a: 'k10', b: 'a11', color: '#2563EB' });
-  check('(e-f) bàn mặc định 42x15: đủ 7 dây nguồn W1–W7, neo chip b12 (hàng chân trên = hàng b), label "Tùy chỉnh · 798 lỗ"',
+  check('(e-f) bàn mặc định 42x15: đủ 7 dây nguồn W1–W7, neo chip e12 (hàng chân trên = hàng e), label "Tùy chỉnh · 798 lỗ"',
     ['W1', 'W2', 'W3', 'W4', 'W5', 'W6', 'W7'].every((id) => st15.wires.some((w) => w.id === id))
-    && st15.components.find((c) => c.type === 'pic').anchor === 'b12'
+    && st15.components.find((c) => c.type === 'pic').anchor === 'e12'
     && sizeLabel({ cols: 42, rows: 15, rails: true }) === 'Tùy chỉnh · 798 lỗ', JSON.stringify(st15.components.find((c) => c.type === 'pic')));
   const r830 = pruneStateForSize(st15, 830);
   check('(e-f) 42x15 -> 830: LED k10 + dây W10 bị gỡ (hàng k ngoài board), LED a10 giữ',
@@ -1102,12 +1103,12 @@ function rewire(netlist, a, b, a2, b2) {
   const st830 = defaultBenchState(830);
   st830.components.push({ id: 'LED0', type: 'led', anchor: 'a10', rot: 0, props: { color: '#DC2626' } });
   const r42x15 = pruneStateForSize(st830, { cols: 42, rows: 15, rails: true });
-  check('(e-f) 830 -> 42x15: LED a10 giữ, dây nguồn W1 nối lại b12->T+22, W6 về T+40',
+  check('(e-f) 830 -> 42x15: LED a10 giữ, dây nguồn W1 nối lại e12->T+22, W6 về T+40',
     r42x15.state.components.some((c) => c.id === 'LED0')
     && (() => {
       const w1 = r42x15.state.wires.find((w) => w.id === 'W1');
       const w6 = r42x15.state.wires.find((w) => w.id === 'W6');
-      return w1 && w1.a === 'b12' && w1.b === 'T+22' && w6 && w6.b === 'T+40';
+      return w1 && w1.a === 'e12' && w1.b === 'T+22' && w6 && w6.b === 'T+40';
     })(), JSON.stringify(r42x15.state.wires.filter((w) => ['W1', 'W6'].includes(w.id))));
   const rSame = pruneStateForSize(st15, { cols: 42, rows: 15, rails: true });
   check('(e-f) đổi size 42x15 về chính nó: không gỡ gì, size giữ nguyên',
@@ -1150,7 +1151,7 @@ function rewire(netlist, a, b, a2, b2) {
   const st = defaultBenchState({ cols: 42, rows: 15, rails: true });
   check('(e-i) 42x15: LED ở f20/g20 (hàng chân chip, trong cột chip) không đặt được',
     canPlace(st, 'led', 'f20', 0).ok === false && canPlace(st, 'led', 'g20', 0).ok === false, '');
-  check('(e-i) 42x15: LED ở e20/h20 (trong dải hàng chân chip b–m) không đặt được; LED ở a20/n20 (ngoài hàng chân chip) đặt được',
+  check('(e-i) 42x15: LED ở e20/h20 (trong dải hàng chân chip e–k) không đặt được; LED ở a20/n20 (ngoài hàng chân chip) đặt được',
     canPlace(st, 'led', 'e20', 0).ok === false && canPlace(st, 'led', 'h20', 0).ok === false
     && canPlace(st, 'led', 'a20', 0).ok === true && canPlace(st, 'led', 'n20', 0).ok === true, '');
   check('(e-i) 42x15: LED ở f40 (hàng chân chip nhưng ngoài cột chip) đặt được',
@@ -1348,13 +1349,13 @@ function rewire(netlist, a, b, a2, b2) {
 
 // (g-c) Chân chip ở 2 đoạn 5 khác nhau
 {
-  check('(g-c) picRows trên board 30 hàng: [1,27] — hàng b (đoạn 1) và hàng b2 (đoạn 6), 2 đoạn khác nhau',
-    JSON.stringify(picRows({ cols: 42, rows: 30, rails: true })) === JSON.stringify([1, 27])
-    && Math.floor(1 / 5) !== Math.floor(27 / 5), '');
-  check('(g-c) picRows trên board 100 hàng: [1,97], chân 1 ở b112, chân 40 ở t412',
-    JSON.stringify(picRows({ cols: 42, rows: 100, rails: true })) === JSON.stringify([1, 97])
-    && picLegs({ cols: 42, rows: 100, rails: true })[0].hole === 'b112'
-    && picLegs({ cols: 42, rows: 100, rails: true })[39].hole === 't412', '');
+  check('(g-c) picRows trên board 30 hàng: [11,17] — hàng l (đoạn 3) và hàng r (đoạn 4), 2 đoạn khác nhau',
+    JSON.stringify(picRows({ cols: 42, rows: 30, rails: true })) === JSON.stringify([11, 17])
+    && Math.floor(11 / 5) !== Math.floor(17 / 5), '');
+  check('(g-c) picRows trên board 100 hàng: [46,52], chân 1 ở u212, chân 40 ở a312',
+    JSON.stringify(picRows({ cols: 42, rows: 100, rails: true })) === JSON.stringify([46, 52])
+    && picLegs({ cols: 42, rows: 100, rails: true })[0].hole === 'u212'
+    && picLegs({ cols: 42, rows: 100, rails: true })[39].hole === 'a312', '');
 }
 
 // (g-d) parseHole cả 2 chế độ
@@ -1707,6 +1708,167 @@ function switchCircuit() {
   check('(i-d) nút nối thẳng VCC–GND: cảnh báo nối tắt nguồn cả khi mở lẫn khi nhấn',
     warnsOpen.some((m) => m.includes('nối thẳng VCC–GND')) && warnsPressed.some((m) => m.includes('nối thẳng VCC–GND')),
     JSON.stringify(warnsOpen));
+}
+
+// ===========================================================================
+// (j) TAB "NẠP VIẾT CODE": ProgramRunner — chạy/tạm dừng/breakpoint (round 25/11)
+// Vòng chạy + editor/gutter/panel tự to-nhỏ là DOM nên không test được bằng
+// Node — kiểm tra bằng trình duyệt.
+// ===========================================================================
+const BP_PROG = `    ORG 0
+    MOVLW 0x01
+    MOVWF 0x20
+L1
+    MOVLW 0x02
+    MOVWF 0x20
+    GOTO L1`;
+const SLEEP_PROG = `    ORG 0
+    MOVLW 0x01
+    SLEEP
+    MOVLW 0x02`;
+
+// (j-a) Bảng dòng->địa chỉ của assembler (code nhấp nháy mẫu)
+{
+  const r = assemble(EXAMPLES.find((e) => e.id === 'blink').code);
+  check('(j-a) lineToAddr: dòng BSF PORTB,0 (dòng 7) -> địa chỉ 5; BANKSEL TRISB (dòng 3) -> 0',
+    r.errors.length === 0 && r.lineToAddr.get(7) === 5 && r.lineToAddr.get(3) === 0, JSON.stringify([...r.lineToAddr.entries()]));
+  check('(j-a) addrToLine: địa chỉ 5 -> dòng 7, địa chỉ 0 -> dòng 3; dòng chú thích/nhãn không có địa chỉ',
+    r.addrToLine.get(5) === 7 && r.addrToLine.get(0) === 3 && !r.lineToAddr.has(1) && !r.lineToAddr.has(6), '');
+}
+
+// (j-b) Breakpoint: chạy tới breakpoint thì dừng đúng địa chỉ, Chạy tiếp thì chạy tới breakpoint sau
+{
+  const cpu = createCPU();
+  const run = new ProgramRunner(cpu);
+  const loaded = run.loadAsm(BP_PROG);
+  check('(j-b) loadAsm chương trình breakpoint: ok, hasProgram, idle',
+    loaded.ok && run.getStatus().hasProgram && run.getStatus().state === 'idle', JSON.stringify(loaded.errors || ''));
+  run.setBreakpointLines([5]);
+  const started = run.run();
+  const st1 = run.tick(100);
+  check('(j-b) breakpoint dòng 5 (địa chỉ 2): chạy tới thì dừng, PC=2, dòng=5, W=0x01',
+    started.ok && st1.state === 'paused' && st1.pauseReason === 'breakpoint' && st1.pc === 2 && st1.line === 5 && cpu.w === 0x01,
+    JSON.stringify(st1) + ` W=${cpu.w}`);
+  const resumed = run.run();
+  const st2 = run.tick(100);
+  check('(j-b) Chạy tiếp: bước qua lệnh breakpoint rồi dừng lại ở breakpoint sau, PC=2, W=0x02',
+    resumed.ok && st2.state === 'paused' && st2.pauseReason === 'breakpoint' && st2.pc === 2 && st2.line === 5 && cpu.w === 0x02,
+    JSON.stringify(st2) + ` W=${cpu.w}`);
+}
+
+// (j-c) Chạy từng lệnh (step) + Dừng + SLEEP
+{
+  const cpu = createCPU();
+  const run = new ProgramRunner(cpu);
+  run.loadAsm(BP_PROG);
+  const s1 = run.stepOnce();
+  check('(j-c) step 1: PC=1, dòng=3, W=0x01, paused/step',
+    s1.ok && s1.state === 'paused' && s1.pauseReason === 'step' && s1.pc === 1 && s1.line === 3 && cpu.w === 0x01, JSON.stringify(s1));
+  const s2 = run.stepOnce();
+  check('(j-c) step 2: PC=2, dòng=5, W vẫn 0x01 (MOVWF không đổi W)',
+    s2.ok && s2.pc === 2 && s2.line === 5 && cpu.w === 0x01, JSON.stringify(s2));
+  const r = run.run();
+  run.tick(100); // không có breakpoint: chạy vòng lặp vô hạn, vẫn running
+  const paused = run.pause();
+  check('(j-c) Dừng: từ running -> paused/user',
+    r.ok && paused.state === 'paused' && paused.pauseReason === 'user', JSON.stringify(paused));
+  const cpu2 = createCPU();
+  const run2 = new ProgramRunner(cpu2);
+  run2.loadAsm(SLEEP_PROG);
+  run2.run();
+  const st = run2.tick(100);
+  check('(j-c) SLEEP: CPU ngủ, runner paused/sleep, PC=2',
+    st.state === 'paused' && st.pauseReason === 'sleep' && st.sleeping === true && st.pc === 2, JSON.stringify(st));
+}
+
+// (j-d) Nạp file .hex: chạy được, breakpoint không áp dụng
+{
+  const hex = exportHex(assemble(EXAMPLES.find((e) => e.id === 'blink').code).program);
+  const cpu = createCPU();
+  const run = new ProgramRunner(cpu);
+  const loaded = run.loadHex(hex);
+  check('(j-d) loadHex chương trình blink: ok, words > 0, hexMode',
+    loaded.ok && loaded.words > 0 && run.getStatus().hexMode === true, JSON.stringify(loaded));
+  const kept = run.setBreakpointLines([7]);
+  check('(j-d) breakpoint trên chương trình .hex: không giữ dòng nào (không có bảng dòng)',
+    kept.length === 0, JSON.stringify(kept));
+  run.run();
+  const st = run.tick(100);
+  check('(j-d) chương trình .hex chạy bình thường, không dừng ở breakpoint',
+    st.state === 'running', JSON.stringify(st));
+  run.pause();
+}
+
+// (j-e) Dịch lỗi thì không nạp; dịch lại thì breakpoint ở dòng không còn lệnh bị bỏ
+{
+  const cpu = createCPU();
+  const run = new ProgramRunner(cpu);
+  const noProg = run.run();
+  const noStep = run.stepOnce();
+  check('(j-e) chưa nạp chương trình: run()/stepOnce() báo lỗi',
+    noProg.ok === false && typeof noProg.error === 'string' && noStep.ok === false, JSON.stringify(noProg));
+  const bad = run.loadAsm('    ORG 0\n    FOO BAR\n');
+  check('(j-e) dịch lỗi: ok=false, có errors kèm số dòng, không nạp chương trình',
+    bad.ok === false && bad.errors.length > 0 && bad.errors[0].line === 2 && run.getStatus().hasProgram === false,
+    JSON.stringify(bad.errors));
+  run.loadAsm(BP_PROG);
+  run.setBreakpointLines([5, 6]);
+  check('(j-e) breakpoint dòng 5, 6 được giữ sau khi nạp',
+    JSON.stringify(run.getStatus().breakpointLines) === JSON.stringify([5, 6]), JSON.stringify(run.getStatus().breakpointLines));
+  const prog2 = `    ORG 0
+    MOVLW 0x01
+; dong chu thich
+    MOVWF 0x20`;
+  run.loadAsm(prog2);
+  check('(j-e) dịch lại code ngắn hơn: breakpoint dòng 5, 6 (không còn lệnh) bị bỏ',
+    JSON.stringify(run.getStatus().breakpointLines) === JSON.stringify([]), JSON.stringify(run.getStatus().breakpointLines));
+}
+
+// ===========================================================================
+// (k) CHÂN CHIP ĐI THEO CHIP (round 25/11): 2 hàng chân cách nhau cố định
+// 6 hàng, đối xứng qua tâm chip; thân chip ôm đúng 2 hàng chân.
+// ===========================================================================
+// (k-a) picRows theo tâm chip: 10 hàng -> (2,8); 15 -> (5,11); 20 -> (7,13);
+// 25 -> (10,16); 30 -> (12,18); 100 -> (47,53); <=6 hàng (thực tế chỉ
+// board 5 hàng, vì hàng làm tròn xuống bội số 5) -> fallback (2,6)
+{
+  check('(k-a) picRows: 10->[1,7], 15->[4,10], 20->[6,12], 25->[9,15], 30->[11,17], 100->[46,52], 5->[1,5]',
+    JSON.stringify(picRows(830)) === JSON.stringify([1, 7])
+    && JSON.stringify(picRows({ cols: 42, rows: 15, rails: true })) === JSON.stringify([4, 10])
+    && JSON.stringify(picRows({ cols: 42, rows: 20, rails: true })) === JSON.stringify([6, 12])
+    && JSON.stringify(picRows({ cols: 42, rows: 25, rails: true })) === JSON.stringify([9, 15])
+    && JSON.stringify(picRows({ cols: 42, rows: 30, rails: true })) === JSON.stringify([11, 17])
+    && JSON.stringify(picRows({ cols: 42, rows: 100, rails: true })) === JSON.stringify([46, 52])
+    && JSON.stringify(picRows({ cols: 20, rows: 5, rails: false })) === JSON.stringify([1, 5]), '');
+  check('(k-a) khoảng cách 2 hàng chân luôn 6 hàng (trừ fallback board 5 hàng là 4)',
+    (() => {
+      const span = (rows) => { const [a, b] = picRows({ cols: 42, rows, rails: true }); return b - a; };
+      return span(10) === 6 && span(15) === 6 && span(20) === 6 && span(25) === 6 && span(30) === 6 && span(100) === 6 && span(5) === 4;
+    })(), '');
+  check('(k-a) 2 hàng chân đối xứng qua tâm chip (điểm giữa 2 hàng = tâm board, sai số < 1 hàng)',
+    (() => {
+      const mid = (rows) => { const [a, b] = picRows({ cols: 42, rows, rails: true }); return (a + b) / 2; };
+      return [10, 15, 20, 25, 30, 100].every((rows) => Math.abs(mid(rows) - (rows - 1) / 2) < 1);
+    })(), '');
+}
+// (k-b) picBodyDepth ôm đúng 2 hàng chân: khoảng cách chân x PITCH + lề 3mm
+{
+  const near = (a, b) => Math.abs(a - b) < 0.01;
+  check('(k-b) picBodyDepth: board >=10 hàng -> 18.24mm (6 hàng x 2.54 + 3), board 5 hàng -> 13.16mm',
+    near(picBodyDepth(830), 18.24) && near(picBodyDepth({ cols: 42, rows: 15, rails: true }), 18.24)
+    && near(picBodyDepth({ cols: 42, rows: 100, rails: true }), 18.24)
+    && near(picBodyDepth({ cols: 20, rows: 5, rails: false }), 13.16), '');
+}
+// (k-c) Chân (leg) trên board dài vẫn ở 2 hàng chân của chip, đủ 40 chân
+{
+  check('(k-c) board 30 hàng: chân 1 ở l112, chân 40 ở r112, đủ 40 chân đều có lỗ',
+    (() => {
+      const legs = picLegs({ cols: 42, rows: 30, rails: true });
+      return legs.length === 40 && legs.every((l) => !!l.hole) && legs[0].hole === 'l112' && legs[39].hole === 'r112';
+    })(), '');
+  check('(k-c) board 100 hàng: chân 1 ở u212, chân 40 ở a312',
+    picLegs({ cols: 42, rows: 100, rails: true })[0].hole === 'u212'
+    && picLegs({ cols: 42, rows: 100, rails: true })[39].hole === 'a312', '');
 }
 
 console.log(`\nKết quả: ${pass} pass, ${fail} fail`);

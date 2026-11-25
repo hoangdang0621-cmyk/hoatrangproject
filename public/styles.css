@@ -99,7 +99,10 @@ button { cursor: pointer; }
 .bench-page {
   flex: 1; min-height: 0;
   display: grid; grid-template-columns: minmax(260px, 20%) minmax(0, 80%);
+  transition: grid-template-columns 250ms ease;
 }
+/* Tab code đang bấm vào phần code: panel trái tự to lên 40%, bàn còn 60%. */
+.bench-page.code-wide { grid-template-columns: minmax(260px, 40%) minmax(0, 60%); }
 .bench-side {
   background: var(--color-card); border-right: 1px solid var(--color-border);
   padding: var(--space-md) var(--space-md) var(--space-lg);
@@ -246,6 +249,34 @@ button { cursor: pointer; }
   border-bottom: 1px dashed var(--color-border); padding-bottom: 3px;
 }
 .bench-conn span:last-child { color: var(--color-muted-foreground); text-align: right; }
+
+/* --- Tab "Nạp viết code": editor hợp ngữ + cột số dòng đặt breakpoint --- */
+.bench-code-wrap {
+  display: flex; border: 1px solid var(--color-border); border-radius: 8px;
+  overflow: hidden; background: var(--color-card);
+}
+.bench-code-gutter {
+  flex: none; width: 52px; background: var(--color-muted);
+  font-family: "Fira Code", monospace; font-size: 0.85rem; line-height: 1.5;
+  padding: 8px 0; overflow: hidden; user-select: none;
+}
+.bench-code-gutter div {
+  height: 1.5em; padding-right: 8px; text-align: right; cursor: pointer;
+  color: var(--color-muted-foreground); white-space: nowrap;
+}
+.bench-code-gutter div:hover { color: var(--color-primary); }
+.bench-code-gutter div.bp { background: #FECACA; color: #991B1B; font-weight: 700; }
+.bench-code-gutter div.cur { background: #FDE68A; color: #92400E; font-weight: 700; }
+.bench-code-gutter div.bp.cur { background: #FCA5A5; color: #7F1D1D; }
+.bench-code-input {
+  flex: 1; min-width: 0; min-height: 320px; border: none; outline: none;
+  resize: vertical; background: var(--color-card);
+  font-family: "Fira Code", monospace; font-size: 0.85rem; line-height: 1.5;
+  padding: 8px 10px; white-space: pre; overflow: auto; tab-size: 4;
+}
+.bench-code-btns { margin-top: 8px; }
+.bench-code-status { margin-top: 8px; }
+.bench-code-status.err { color: var(--color-destructive); font-weight: 600; }
 
 /* Link quay ve trang chinh (thuc-hanh/). */
 .bench-back { display: inline-block; color: var(--color-primary); font-weight: 600; text-decoration: none; font-size: 14px; margin-bottom: 10px; }

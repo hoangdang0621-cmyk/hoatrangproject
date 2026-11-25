@@ -1,16 +1,18 @@
 // app.js — Bootstrap gọn cho trang chỉ có bàn thực hành 3D.
-// Tạo CPU PIC16F877A, chạy sẵn chương trình nhấp nháy RB0 mặc định để bàn
-// sống (LED nối vào strip RB0 sẽ nhấp nháy theo chip), và cầu nối bench ↔ CPU.
-// Trang này không nạp code khác: mọi tương tác đều diễn ra trên bàn 3D.
-import { assemble, createCPU } from './pic16.js?v=20261125d';
+// Tạo CPU PIC16F877A và cầu nối bench ↔ CPU. Chip ĐỨNG YÊN khi mở trang:
+// chưa nạp chương trình nào; code mẫu nằm sẵn trong tab "Nạp viết code",
+// người dùng bấm "Nạp & chạy" thì chip mới chạy. ProgramRunner điều khiển
+// chạy/tạm dừng/chạy từng lệnh/breakpoint.
+import { createCPU, ProgramRunner } from './pic16.js?v=20261125q';
 import {
   resolvePeripherals, ledStates,
   applyButtonToCpu, applyPotToCpu,
 } from './wiring.js?v=20261125n';
-import { defaultBenchState, benchToNetlist } from './bench-model.js?v=20261125n';
+import { defaultBenchState, benchToNetlist } from './bench-model.js?v=20261125q';
 
 const cpu = createCPU();
 cpu.clockHz = 4000000;
+const runner = new ProgramRunner(cpu);
 
 // Netlist ban đầu = bàn mặc định (chip PIC + nguồn + dây nguồn về rail).
 let mapping = resolvePeripherals(benchToNetlist(defaultBenchState()));
@@ -23,7 +25,8 @@ function applyAllPots() {
 }
 applyAllPots();
 
-// Chương trình mặc định chạy sẵn trên chip: nhấp nháy LED RB0.
+// Chương trình mẫu cho tab "Nạp viết code": nhấp nháy LED RB0.
+// Chỉ là code mẫu mở sẵn trong editor — chip không tự chạy nó.
 const DEFAULT_PROGRAM = `; Nhap nhay LED RB0 - chuong trinh mac dinh chay san tren ban
     ORG 0
     BANKSEL TRISB
@@ -48,21 +51,10 @@ D2
     GOTO D1
     RETURN
     END`;
-const asmResult = assemble(DEFAULT_PROGRAM);
-if (!asmResult.errors.length) {
-  cpu.loadProgram(asmResult.program);
-  applyAllPots();
-  // Vòng lặp chạy 1x thời gian thực @4MHz (1 triệu lệnh/giây).
-  const timerId = setInterval(() => {
-    let budget = 50000; // 50ms x 1M lệnh/giây
-    while (budget > 0 && !cpu.sleeping) {
-      const before = cpu.cycles;
-      cpu.step();
-      budget -= Math.max(1, cpu.cycles - before);
-    }
-    if (cpu.sleeping) clearInterval(timerId);
-  }, 50);
-}
+
+// Vòng lặp chạy 1x thời gian thực @4MHz (1 triệu lệnh/giây). ProgramRunner
+// chỉ step khi đang ở trạng thái running, còn lại tick là no-op.
+setInterval(() => { runner.tick(50000); }, 50);
 
 // --- Cầu nối cho bàn thực hành 3D (bench.js) ---
 // Netlist bench là nguồn sự thật cho CPU: đổi dây/linh kiện trên bàn thì
@@ -80,4 +72,13 @@ window.HoaTrangBenchBridge = {
   getMapping: () => mapping,
   pressButton: (id, pressed) => applyButtonToCpu(cpu, mapping, id, pressed),
   setPot: (id, volts) => { potVoltsById[id] = volts; applyPotToCpu(cpu, mapping, id, volts); },
+  // --- Tab "Nạp viết code": soạn code hợp ngữ / nạp file .hex ---
+  defaultProgram: () => DEFAULT_PROGRAM,
+  loadAsm(source) { const r = runner.loadAsm(source); if (r.ok) applyAllPots(); return r; },
+  loadHex(text) { const r = runner.loadHex(text); if (r.ok) applyAllPots(); return r; },
+  runProgram: () => runner.run(),
+  pauseProgram: () => runner.pause(),
+  stepProgram: () => runner.stepOnce(),
+  setBreakpointLines: (lines) => runner.setBreakpointLines(lines),
+  getRunStatus: () => runner.getStatus(),
 };

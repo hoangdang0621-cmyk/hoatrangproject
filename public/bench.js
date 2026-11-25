@@ -8,13 +8,14 @@ import {
   legOffsets, legsFor, picLegs, canPlace, benchToNetlist,
   describeTerminal, defaultBenchState, nextComponentId, compLabel,
   defaultProps, sanitizeState, boardSize, colsOf, rowsOf, railColsOf, picCol,
-  picRows, bodyDepth, rowLabel,
+  picRows, picBodyDepth, bodyDepth, rowLabel,
   pruneStateForSize, validateWireEnd, retargetWireEnd, togglePlacement,
   normalizeSize, holeCount, sizeLabel, sameSize,
   psuVolts, validatePsuVolts, parsePsuPost, psuPostPos,
   clampCamTarget, zoomTowardPoint, panTarget,
-} from './bench-model.js?v=20261125n';
+} from './bench-model.js?v=20261125q';
 import { checkWiring, SIGNAL_COLORS } from './wiring.js?v=20261125n';
+import { assemble } from './pic16.js?v=20261125q';
 
 const $ = (id) => document.getElementById(id);
 const benchView = $('benchView');
@@ -203,6 +204,264 @@ function main() {
   }
   $('btnWireCancel')?.addEventListener('click', () => { setWiringMode(false); setPlacementMode(null); setStatus('Đã hủy.'); });
 
+  // --- Tab "Nạp viết code": editor hợp ngữ + nạp file .hex + breakpoint ---
+  const codeTabEl = $('benchTabCode');
+  const compTabEl = $('benchTabComponents');
+  const codeInput = $('benchCodeInput');
+  const codeGutter = $('benchCodeGutter');
+  const codeStatusEl = $('benchCodeStatus');
+  const hexFileInput = $('benchHexFile');
+  const CODE_LS_KEY = 'hoatrang-code-v1';
+  // Code nhấp nháy mẫu dự phòng nếu bridge chưa có (app.js luôn có).
+  const FALLBACK_BLINK = `; Nhap nhay LED RB0 - chuong trinh mac dinh chay san tren ban
+    ORG 0
+    BANKSEL TRISB
+    CLRF TRISB
+    BANKSEL PORTB
+LOOP
+    BSF PORTB, 0
+    CALL DELAY
+    BCF PORTB, 0
+    CALL DELAY
+    GOTO LOOP
+DELAY
+    MOVLW 0xFF
+    MOVWF 0x20
+D1
+    MOVLW 0xFF
+    MOVWF 0x21
+D2
+    DECFSZ 0x21, F
+    GOTO D2
+    DECFSZ 0x20, F
+    GOTO D1
+    RETURN
+    END`;
+  let sideTab = 'components';
+  let codeInitDone = false;
+  let codeBreakpoints = new Set();   // số dòng có breakpoint
+  let codeLineToAddr = new Map();    // dòng -> địa chỉ (lần dịch gần nhất)
+  let codeLoaded = false;            // đã nạp chương trình từ editor chưa
+  let codeStatusSig = '';
+  let codeSaveTimer = null;
+
+  function setCodeWide(on) { benchView.classList.toggle('code-wide', on); }
+  function setSideTab(tab) {
+    sideTab = tab;
+    document.querySelectorAll('.bench-mini-tab').forEach((b) => {
+      const on = b.dataset.sideTab === tab;
+      b.classList.toggle('active', on);
+      b.setAttribute('aria-selected', on ? 'true' : 'false');
+    });
+    if (compTabEl) compTabEl.hidden = tab !== 'components';
+    if (codeTabEl) codeTabEl.hidden = tab !== 'code';
+    // Chuyển tab thì panel về 20%; chỉ bấm vào phần code mới to lên 40%.
+    setCodeWide(false);
+    if (tab === 'code') initCodeTab();
+  }
+  document.querySelectorAll('.bench-mini-tab').forEach((b) =>
+    b.addEventListener('click', () => setSideTab(b.dataset.sideTab || 'components')));
+  // Panel tự to/nhỏ: bấm hoặc focus vào phần code -> 40%, bấm/focus ra
+  // ngoài -> 20%. Tab Linh Kiện đang mở thì luôn 20%.
+  document.addEventListener('pointerdown', (e) => {
+    if (sideTab !== 'code' || !codeTabEl) return;
+    setCodeWide(codeTabEl.contains(e.target));
+  });
+  document.addEventListener('focusin', (e) => {
+    if (sideTab !== 'code' || !codeTabEl) return;
+    setCodeWide(codeTabEl.contains(e.target));
+  });
+
+  function loadSavedCode() {
+    try {
+      const raw = localStorage.getItem(CODE_LS_KEY);
+      if (!raw) return null;
+      const d = JSON.parse(raw);
+      if (typeof d.code !== 'string') return null;
+      return { code: d.code, breakpoints: Array.isArray(d.breakpoints) ? d.breakpoints : [] };
+    } catch { return null; }
+  }
+  function saveCode() {
+    try {
+      localStorage.setItem(CODE_LS_KEY, JSON.stringify({ code: codeInput.value, breakpoints: [...codeBreakpoints] }));
+    } catch { /* bỏ qua */ }
+  }
+  function saveCodeSoon() {
+    clearTimeout(codeSaveTimer);
+    codeSaveTimer = setTimeout(saveCode, 300);
+  }
+  // Dịch code hiện tại (chỉ để lấy bảng dòng->địa chỉ cho gutter, không nạp).
+  function codeAssemble() {
+    const r = assemble(codeInput.value);
+    codeLineToAddr = r.lineToAddr || new Map();
+    return r;
+  }
+  function renderGutter(curLine = null) {
+    if (!codeGutter || !codeInput) return;
+    const n = codeInput.value.split('\n').length;
+    let html = '';
+    for (let i = 1; i <= n; i++) {
+      const cls = [codeBreakpoints.has(i) ? 'bp' : '', curLine === i ? 'cur' : ''].filter(Boolean).join(' ');
+      html += `<div data-line="${i}"${cls ? ` class="${cls}"` : ''}>${i}</div>`;
+    }
+    codeGutter.innerHTML = html;
+    codeGutter.scrollTop = codeInput.scrollTop;
+  }
+  function setCodeStatus(text, isErr = false) {
+    if (!codeStatusEl) return;
+    codeStatusEl.textContent = text;
+    codeStatusEl.classList.toggle('err', !!isErr);
+  }
+  function codeErrorText(errors) {
+    const shown = errors.slice(0, 3).map((e) => `Dòng ${e.line}: ${e.message}`);
+    return 'Lỗi dịch: ' + shown.join(' | ') + (errors.length > 3 ? ` (+${errors.length - 3} lỗi nữa)` : '');
+  }
+  function pruneBreakpoints() {
+    codeBreakpoints = new Set([...codeBreakpoints].filter((l) => codeLineToAddr.has(l)));
+  }
+  function pushBreakpointsToCpu() {
+    const b = bridge();
+    if (b && typeof b.setBreakpointLines === 'function') b.setBreakpointLines([...codeBreakpoints]);
+  }
+  // Cập nhật dòng trạng thái + dòng hiện tại trong editor theo trạng thái
+  // CPU (poll 150ms). Chỉ vẽ lại khi chữ ký trạng thái đổi, để không nuốt
+  // thông báo lỗi dịch vừa hiện.
+  function refreshCodeStatus(force = false) {
+    if (!codeInitDone || !codeStatusEl) return;
+    const b = bridge();
+    if (!b || typeof b.getRunStatus !== 'function') return;
+    const st = b.getRunStatus();
+    const sig = [st.state, st.pauseReason, st.pc, st.line, st.hexMode].join('|');
+    if (!force && sig === codeStatusSig) return;
+    codeStatusSig = sig;
+    let curLine = null;
+    if (!st.hasProgram) {
+      setCodeStatus('Chưa nạp chương trình.');
+    } else if (st.state === 'running') {
+      setCodeStatus(st.hexMode ? 'Đang chạy chương trình .hex…' : 'Đang chạy…');
+    } else if (st.state === 'paused' && st.pauseReason === 'breakpoint') {
+      curLine = st.line;
+      setCodeStatus(`Dừng ở breakpoint dòng ${st.line ?? '?'} (địa chỉ 0x${st.pc.toString(16).toUpperCase()}). Bấm Chạy tiếp để chạy tiếp.`);
+    } else if (st.state === 'paused' && st.pauseReason === 'step') {
+      curLine = st.line;
+      setCodeStatus(st.line ? `Dừng sau 1 lệnh — dòng tiếp theo là dòng ${st.line}.` : 'Dừng sau 1 lệnh.');
+    } else if (st.state === 'paused' && st.pauseReason === 'sleep') {
+      curLine = st.line;
+      setCodeStatus('CPU đang SLEEP — đã dừng.');
+    } else if (st.state === 'paused') {
+      curLine = st.line;
+      setCodeStatus(st.line ? `Đã dừng ở dòng ${st.line}.` : 'Đã dừng.');
+    } else {
+      setCodeStatus('Đã nạp chương trình — bấm Chạy tiếp để chạy.');
+    }
+    renderGutter(curLine);
+    if (curLine && codeInput) {
+      // Cuộn tới dòng hiện tại nếu nó nằm ngoài vùng nhìn thấy.
+      const lineH = codeInput.scrollHeight / Math.max(1, codeInput.value.split('\n').length);
+      const top = codeInput.scrollTop, bottom = top + codeInput.clientHeight;
+      const y = (curLine - 1) * lineH;
+      if (y < top || y > bottom - lineH) codeInput.scrollTop = Math.max(0, y - codeInput.clientHeight / 3);
+      codeGutter.scrollTop = codeInput.scrollTop;
+    }
+  }
+  function initCodeTab() {
+    if (codeInitDone || !codeInput) return;
+    codeInitDone = true;
+    const saved = loadSavedCode();
+    const b0 = bridge();
+    codeInput.value = saved ? saved.code : (b0 && typeof b0.defaultProgram === 'function' ? b0.defaultProgram() : FALLBACK_BLINK);
+    if (saved) codeBreakpoints = new Set(saved.breakpoints.filter((l) => Number.isInteger(l) && l > 0));
+    codeAssemble();
+    pruneBreakpoints();
+    renderGutter();
+    codeInput.addEventListener('input', () => {
+      renderGutter();
+      saveCodeSoon();
+      if (codeLoaded) setCodeStatus('Code đã sửa — bấm Nạp & chạy để nạp lại.');
+    });
+    codeInput.addEventListener('scroll', () => { if (codeGutter) codeGutter.scrollTop = codeInput.scrollTop; });
+    codeInput.addEventListener('keydown', (e) => {
+      // Tab trong editor thì chèn 4 dấu cách, không chuyển focus.
+      if (e.key === 'Tab') {
+        e.preventDefault();
+        codeInput.setRangeText('    ', codeInput.selectionStart, codeInput.selectionEnd, 'end');
+        codeInput.dispatchEvent(new Event('input'));
+      }
+    });
+    codeGutter.addEventListener('click', (e) => {
+      const row = e.target.closest('[data-line]');
+      if (!row) return;
+      const line = Number(row.dataset.line);
+      codeAssemble();
+      if (!codeLineToAddr.has(line)) return; // dòng trống/chú thích/nhãn: không đặt được
+      if (codeBreakpoints.has(line)) codeBreakpoints.delete(line);
+      else codeBreakpoints.add(line);
+      saveCode();
+      renderGutter();
+      pushBreakpointsToCpu();
+    });
+    $('btnCodeLoadRun')?.addEventListener('click', () => {
+      const b = bridge();
+      if (!b) return;
+      const r = b.loadAsm(codeInput.value);
+      if (!r.ok) { setCodeStatus(codeErrorText(r.errors), true); return; }
+      codeLineToAddr = r.lineToAddr || new Map();
+      pruneBreakpoints();
+      pushBreakpointsToCpu();
+      codeLoaded = true;
+      const run = b.runProgram();
+      if (run.ok) setCodeStatus('Đang chạy…');
+      else setCodeStatus(run.error, true);
+      refreshCodeStatus(true);
+    });
+    $('btnCodeResume')?.addEventListener('click', () => {
+      const b = bridge();
+      if (!b) return;
+      const r = b.runProgram();
+      if (r.ok) setCodeStatus('Đang chạy…');
+      else setCodeStatus(r.error, true);
+      refreshCodeStatus(true);
+    });
+    $('btnCodeStep')?.addEventListener('click', () => {
+      const b = bridge();
+      if (!b) return;
+      const r = b.stepProgram();
+      if (!r.ok) { setCodeStatus(r.error, true); return; }
+      refreshCodeStatus(true);
+    });
+    $('btnCodePause')?.addEventListener('click', () => {
+      const b = bridge();
+      if (!b) return;
+      b.pauseProgram();
+      refreshCodeStatus(true);
+    });
+    $('btnCodeClearBp')?.addEventListener('click', () => {
+      codeBreakpoints.clear();
+      saveCode();
+      renderGutter();
+      pushBreakpointsToCpu();
+    });
+    $('btnCodeHex')?.addEventListener('click', () => hexFileInput?.click());
+    hexFileInput?.addEventListener('change', async () => {
+      const f = hexFileInput.files?.[0];
+      hexFileInput.value = '';
+      if (!f) return;
+      const b = bridge();
+      if (!b) return;
+      const text = await f.text();
+      const r = b.loadHex(text);
+      if (!r.ok) { setCodeStatus(codeErrorText(r.errors), true); return; }
+      codeLoaded = false;
+      const run = b.runProgram();
+      setCodeStatus(run.ok
+        ? `Đã nạp file ${f.name}: ${r.words} word — đang chạy. Breakpoint không áp dụng cho chương trình .hex.`
+        : run.error, !run.ok);
+      refreshCodeStatus(true);
+    });
+    setInterval(refreshCodeStatus, 150);
+    refreshCodeStatus(true);
+  }
+
   // --- Chọn / Inspector (panel trượt từ phải) ---
   function select(sel) {
     const prevWire = selected && selected.kind === 'wire' ? selected.id : null;
@@ -243,8 +502,6 @@ function main() {
           <label class="bench-insp-row"><input type="checkbox" id="inspBoardRails"${cur.railCols > 0 ? ' checked' : ''}> Có rail nguồn</label>
           <p class="bench-insp-err" id="inspBoardErr" role="alert"></p>
           <button type="button" class="btn btn-accent btn-small" data-act="apply-board">Áp dụng</button>
-          <p class="sub">Đổi kích thước thì chip tự căn lại giữa board; linh kiện/dây ngoài board mới bị gỡ (có ghi chú ở dòng trạng thái).</p>
-          <p class="sub">Địa chỉ lỗ: board ≤26 hàng thì chữ hàng a–z + số cột (vd c12); board &gt;26 hàng thì chữ hàng + số khối + số cột (vd c112 = hàng c1 cột 12, b25 = hàng b2 cột 5). Mỗi đoạn 5 hàng nối nhau (1–5, 6–10, 11–15…). Số hàng chỉ nhận bội số của 5, từ 5 đến 100.</p>
         </div>`;
       inspectorEl.querySelectorAll('[data-size]').forEach((b) => b.addEventListener('click', () => {
         applyBoardSize(Number(b.dataset.size));
@@ -789,7 +1046,7 @@ function main() {
       const [rT, rB] = picRows(state.size);
       const chipZ = ((rT + rB) / 2 - (rows - 1) / 2) * PITCH;
       const cx = (picCol(state.size) + 9.5 - (cols + 1) / 2) * PITCH;
-      const body = new THREE.Mesh(new THREE.BoxGeometry(52.5, 4.5, 14), stdMat(0x0F172A, { roughness: 0.4 }));
+      const body = new THREE.Mesh(new THREE.BoxGeometry(52.5, 4.5, picBodyDepth(state.size)), stdMat(0x0F172A, { roughness: 0.4 }));
       body.position.set(cx, BOARD_TOP + 6.2, chipZ);
       body.castShadow = true;
       g.add(body);

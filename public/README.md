@@ -8,8 +8,10 @@ phía sau đã nối dây về rail. Linh kiện trên bàn nối vào chip th�
 máy tính. Trang chính của trang web là index.html (3 mục Lý thuyết,
 Bài tập, Thực hành); bấm Thực hành để vào bàn thực hành này (thuc-hanh/).
 
-Chip chạy sẵn chương trình nhấp nháy LED RB0: nối một LED (kèm điện trở
-nối tiếp) vào strip của chân RB0 thì LED nhấp nháy theo nhịp chip.
+Chip đứng yên khi mở trang (chưa nạp chương trình nào). Tab **Nạp viết
+code** mở sẵn code mẫu nhấp nháy LED RB0: nối một LED (kèm điện trở nối
+tiếp) vào strip của chân RB0, rồi bấm **Nạp & chạy** thì LED nhấp nháy
+theo nhịp chip.
 
 ## Dùng nhanh
 
@@ -29,6 +31,15 @@ nối tiếp) vào strip của chân RB0 thì LED nhấp nháy theo nhịp chip.
   cho từng đầu trong Inspector (vd `c12`, `T+5`, cọc nguồn `PSU1.+` /
   `PSU1.-`; board >26 hàng thì địa chỉ dạng chữ+số khối, vd `c112` = hàng
   c1 cột 12, `b25` = hàng b2 cột 5).
+- **Nạp viết code:** tab **Nạp viết code** cạnh tab **Linh Kiện** —
+  soạn hợp ngữ trong editor (bấm vào số dòng bên trái để đặt/bỏ
+  breakpoint, chỉ dòng dịch ra lệnh mới đặt được), bấm **Nạp & chạy**
+  để dịch + nạp + chạy; **Chạy tiếp** chạy tiếp tới breakpoint sau,
+  **Chạy từng lệnh** chạy đúng 1 lệnh, **Dừng** tạm dừng giữ nguyên
+  trạng thái CPU. Bấm **Nạp file .hex** để nạp file Intel HEX (chạy
+  luôn, breakpoint không áp dụng cho chương trình .hex). Bấm vào phần
+  code thì panel trái tự rộng lên 40%, bấm ra ngoài thì tự về 20%.
+  Code và breakpoint tự lưu trên máy, mở lại trang vẫn còn.
 - **Chọn size bo mạch:** nhấn vào board (thân board hoặc lỗ trống) để
   mở popup **Bo mạch** bên phải: bấm 1 trong 3 mẫu sẵn để áp dụng ngay,
   hoặc tự điền rộng (số cột 5–99) × dài (số hàng 5–100, bội số của 5) + chọn có rail
@@ -55,11 +66,13 @@ board 10 hàng thì vẫn a–e và f–j, rãnh ở giữa); 2 rail +/− chạ
 chiều dài. Chip PIC16F877A luôn căn giữa board (cột 22–41 trên board
 830, cột 6–25 trên board 400, cột 1–17 trên board Mini — trên board
 Mini thì 6 chân ngoài cùng MCLR/RD0/RD1/RD2/RD3/RB7 treo ngoài board).
-Board 10 hàng thì chip ở hàng b/h; board khác thì chân trên ở hàng b,
-chân dưới ở hàng max(6, số hàng−2) (vd 15 hàng → b/m, 5 hàng → b/f với
-hàng 6 treo ngoài board; 100 hàng → b1/t4). Board tự điền rộng
-5–99 cột × dài 5–100 hàng (chỉ bội số của 5) cũng căn giữa chip theo cùng cách; rail nguồn
-tùy chọn, bật thì rail dài bằng số cột. Dây nguồn VDD/VSS/MCLR đã nối
+Chip là một khối duy nhất (thân + chân đi cùng nhau), căn giữa board:
+2 hàng chân cách nhau cố định 6 hàng, đối xứng qua tâm chip (vd board
+10 hàng → b/h, 15 hàng → e/k, 30 hàng → l/r, 100 hàng → u2/a3; board
+5 hàng → b/f với hàng 6 treo ngoài board). Thân chip ôm đúng 2 hàng
+chân. Board tự điền rộng 5–99 cột × dài 5–100 hàng (chỉ bội số của 5)
+cũng căn giữa chip theo cùng cách; rail nguồn tùy chọn, bật thì rail
+dài bằng số cột. Dây nguồn VDD/VSS/MCLR đã nối
 sẵn về rail (board Mini không có rail nên không có dây nguồn mặc định).
 
 Bàn mặc định có chip + nguồn + dây nguồn. Nút **Dọn hết bàn** giữ lại
