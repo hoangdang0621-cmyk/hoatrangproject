@@ -312,6 +312,29 @@ export const PIC_PIN_IDS_RIGHT = ['RD2', 'RD3', 'RC4', 'RC5', 'RC6', 'RC7', 'RD4
 // pin 21 ở (hàng chân dưới, picCol+19), pin 40 ở (hàng chân dưới, picCol).
 // Trên board Mini 170 thì 6 chân ngoài cùng có hole = null (treo ngoài
 // board, xem ghi chú ở BOARD_SIZES).
+// Chân chip theo LỖ NEO (anchor) của chip — không theo size board.
+// Chip là 1 khối: 2 hàng chân cách nhau cố định 6 hàng, hàng trên = hàng
+// của lỗ neo, hàng dưới = hàng neo + 6, cột neo..neo+19. Đổi size board
+// (mở thêm hàng/cột ở vùng trống) KHÔNG được dời chip: chip giữ nguyên
+// lỗ neo, mạch đã cắm (vd Lab 1) vẫn nguyên. picCol/picRows chỉ dùng để
+// tính lỗ neo MẶC ĐỊNH cho board mới (picAnchor), không dùng để đặt chân.
+export function picLegsForAnchor(anchor, size = DEFAULT_SIZE) {
+  const a = typeof anchor === 'string' ? parseHole(anchor, size) : anchor;
+  if (!a) return [];
+  const rT = a.r, rB = a.r + 6, c0 = a.c;
+  const out = [];
+  PIC_PIN_IDS_LEFT.forEach((id, i) => {
+    out.push({ term: 'PIC.' + id, hole: holeId(rT, c0 + i, size), pin: i + 1, r: rT, c: c0 + i });
+  });
+  PIC_PIN_IDS_RIGHT.forEach((id, i) => {
+    out.push({ term: 'PIC.' + id, hole: holeId(rB, c0 + 19 - i, size), pin: 21 + i, r: rB, c: c0 + 19 - i });
+  });
+  return out;
+}
+// Chân chip trên board mới (chưa có chip): căn giữa board theo size.
+// Giữ nguyên công thức cũ (picCol có thể = 0 trên board hẹp như Mini 170,
+// chân 1/40 treo ngoài board) để test vị trí căn giữa không đổi.
+// Chân chip ĐÃ CẮM thì đi theo lỗ neo (picLegsForAnchor), không dùng hàm này.
 export function picLegs(size = DEFAULT_SIZE) {
   const pc = picCol(size);
   const [rT, rB] = picRows(size);
@@ -348,7 +371,9 @@ export function legOffsets(type, rot = 0) {
 // size lấy từ state.size khi gọi qua các hàm nhận state, mặc định 830.
 export function legsFor(comp, size = DEFAULT_SIZE) {
   if (comp.type === 'pic') {
-    return picLegs(size).map((l) => ({ term: l.term, hole: l.hole }));
+    // Chân chip đi theo lỗ neo của chip (không theo size board).
+    const a = parseHole(comp.anchor, size);
+    return (a ? picLegsForAnchor(a, size) : picLegs(size)).map((l) => ({ term: l.term, hole: l.hole }));
   }
   if (comp.type === 'psu') return [];
   const anchor = parseHole(comp.anchor, size);
@@ -387,8 +412,13 @@ export function canPlace(state, type, anchor, rot = 0, ignoreId = null) {
     if (occ.has(leg.hole)) return { ok: false, reason: 'Lỗ ' + leg.hole + ' đã có chân cắm.' };
   }
   if (type !== 'pic') {
-    const pc = picCol(size);
-    const [rT, rB] = picRows(size);
+    // Vùng thân chip theo lỗ neo THẬT của chip trên bàn (không phải vị trí
+    // căn giữa theo size), để đổi size board không làm lệch vùng cấm.
+    const pic = state.components.find((c) => c.type === 'pic');
+    const pa = pic ? parseHole(pic.anchor, size) : null;
+    const pc = pa ? pa.c : picCol(size);
+    const rT = pa ? pa.r : picRows(size)[0];
+    const rB = rT + 6;
     for (const leg of legs) {
       const p = parseHole(leg.hole, size);
       if (p.r >= rT && p.r <= rB && p.c >= pc && p.c < pc + 20) {
@@ -439,7 +469,8 @@ export function buildBenchNets(state, pressedIds = []) {
   const resistorStrips = new Set();
   for (const comp of state.components) {
     if (comp.type === 'pic') {
-      for (const leg of picLegs(size)) {
+      // Chân chip theo lỗ neo của chip trên bàn (legsFor dùng anchor).
+      for (const leg of legsFor(comp, size)) {
         const key = leg.hole ? stripKey(leg.hole, size) : null;
         if (!key) continue;
         ensure(key);
@@ -711,7 +742,15 @@ export function sanitizeState(raw) {
   const components = [];
   for (const c of raw.components) {
     if (!c || typeof c.id !== 'string' || typeof c.type !== 'string') continue;
-    if (c.type === 'pic') { components.push({ id: 'PIC1', type: 'pic', anchor: picAnchor(size), rot: 0, fixed: true, props: {} }); continue; }
+    if (c.type === 'pic') {
+      // Chip GIỮ NGUYÊN lỗ neo đã lưu (đổi size board không dời chip).
+      // Chỉ căn giữa lại khi lỗ neo cũ không còn vừa trên board này.
+      const migrated = migrate(c.anchor);
+      const a = parseHole(migrated, size);
+      const fits = a && a.r >= 0 && a.r + 6 < rowsOf(size) && a.c >= 1 && a.c + 19 <= colsOf(size);
+      components.push({ id: 'PIC1', type: 'pic', anchor: fits ? migrated : picAnchor(size), rot: 0, fixed: true, props: {} });
+      continue;
+    }
     if (c.type === 'psu') {
       if (typeof c.tx === 'number' && typeof c.tz === 'number') {
         components.push({ id: c.id, type: 'psu', tx: c.tx, tz: c.tz, fixed: true, props: { volts: psuVolts(c) } });
@@ -759,9 +798,17 @@ export function pruneStateForSize(state, newSize) {
   const size = normalizeSize(newSize);
   const oldSize = normalizeSize(state.size);
   const removed = { components: [], wires: [] };
-  const legs = picLegs(size);
+  // Chip GIỮ NGUYÊN lỗ neo khi đổi size (board chỉ mở thêm ở vùng trống,
+  // vd lab ở hàng a–j thì mở thêm từ j trở đi, vùng a–j không động vào).
+  // Chỉ căn giữa lại (picAnchor) khi lỗ neo cũ không còn vừa trên size mới
+  // (board thu nhỏ quá, chip tràn ra ngoài).
+  const oldPic = state.components.find((c) => c.type === 'pic');
+  const oldAnchor = oldPic ? parseHole(oldPic.anchor, oldSize) : null;
+  const picFits = (a, s) => !!a && a.r >= 0 && a.r + 6 < rowsOf(s) && a.c >= 1 && a.c + 19 <= colsOf(s);
+  const keptAnchor = picFits(oldAnchor, size) ? oldPic.anchor : picAnchor(size);
+  const legs = picLegsForAnchor(parseHole(keptAnchor, size), size);
   const legByPin = new Map(legs.map((l) => [l.pin, l]));
-  const oldLegs = picLegs(oldSize);
+  const oldLegs = oldAnchor ? picLegsForAnchor(oldAnchor, oldSize) : picLegs(oldSize);
   const pinOfHole = new Map(oldLegs.filter((l) => l.hole).map((l) => [l.hole, l.pin]));
   // Đầu rail 'T+40' -> kẹp cột về railCols của size mới (null nếu hết rail).
   const remapRail = (id) => {
@@ -774,7 +821,7 @@ export function pruneStateForSize(state, newSize) {
     return rowName + Math.min(p.c, rc);
   };
   const keptComponents = [
-    { id: 'PIC1', type: 'pic', anchor: picAnchor(size), rot: 0, fixed: true, props: {} },
+    { id: 'PIC1', type: 'pic', anchor: keptAnchor, rot: 0, fixed: true, props: {} },
   ];
   const probe = { size, components: keptComponents, wires: [] };
   for (const comp of state.components) {

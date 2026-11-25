@@ -3,7 +3,7 @@
 import { readFileSync } from 'node:fs';
 import { assemble, createCPU, parseIntelHex, exportHex, disassemble, ProgramRunner } from './public/pic16.js';
 import { defaultNetlist, resolvePeripherals, checkWiring, ledStates, buzzerStates, applyButtonToCpu, applyPotToCpu, PIC_PINS } from './public/wiring.js';
-import { PITCH, HOLE_RADIUS, HOLE_HEIGHT, HOLE_TOP_ABOVE_BOARD, holeCenterY, depthPrecisionAt, MAX_CAMERA_DISTANCE, SEGMENT_LINE_WIDTH_MM, segmentBoundaries, allHoles, stripKey, parseHole, holePos, holeId, rowLabel, rowIndexFromLabel, migrateOldHoleId, picLegs, legsFor, canPlace, buildBenchNets, benchToNetlist, defaultBenchState, sanitizeState, boardSize, picCol, picRows, picBodyDepth, bodyDepth, pruneStateForSize, validateWireEnd, retargetWireEnd, togglePlacement, normalizeSize, holeCount, sizeLabel, sameSize, compLabel, psuVolts, validatePsuVolts, parsePsuPost, psuPostPos, PSU_SCALE, PSU_POST_DX, PSU_POST_Y, PSU_POST_DZ, normalizeWireEnd, clampCamTarget, zoomTowardPoint, panTarget } from './public/bench-model.js';
+import { PITCH, HOLE_RADIUS, HOLE_HEIGHT, HOLE_TOP_ABOVE_BOARD, holeCenterY, depthPrecisionAt, MAX_CAMERA_DISTANCE, SEGMENT_LINE_WIDTH_MM, segmentBoundaries, allHoles, stripKey, parseHole, holePos, holeId, rowLabel, rowIndexFromLabel, migrateOldHoleId, picLegs, picLegsForAnchor, picAnchor, legsFor, canPlace, buildBenchNets, benchToNetlist, defaultBenchState, sanitizeState, boardSize, picCol, picRows, picBodyDepth, bodyDepth, pruneStateForSize, validateWireEnd, retargetWireEnd, togglePlacement, normalizeSize, holeCount, sizeLabel, sameSize, compLabel, psuVolts, validatePsuVolts, parsePsuPost, psuPostPos, PSU_SCALE, PSU_POST_DX, PSU_POST_Y, PSU_POST_DZ, normalizeWireEnd, clampCamTarget, zoomTowardPoint, panTarget } from './public/bench-model.js';
 import { LABS, getLab, buildLabState } from './public/labs.js';
 
 // Các chương trình Assembly dùng để kiểm thử — inline tại đây (file
@@ -1114,17 +1114,70 @@ function rewire(netlist, a, b, a2, b2) {
   const st830 = defaultBenchState(830);
   st830.components.push({ id: 'LED0', type: 'led', anchor: 'a10', rot: 0, props: { color: '#DC2626' } });
   const r42x15 = pruneStateForSize(st830, { cols: 42, rows: 15, rails: true });
-  check('(e-f) 830 -> 42x15: LED a10 giữ, dây nguồn W1 nối lại e12->T+22, W6 về T+40',
+  check('(e-f) 830 -> 42x15: LED a10 giữ, chip GIỮ neo b22 (không căn giữa lại e12), dây nguồn W1 giữ b22->T+22, W6 về T+40',
     r42x15.state.components.some((c) => c.id === 'LED0')
+    && r42x15.state.components.find((c) => c.type === 'pic').anchor === 'b22'
     && (() => {
       const w1 = r42x15.state.wires.find((w) => w.id === 'W1');
       const w6 = r42x15.state.wires.find((w) => w.id === 'W6');
-      return w1 && w1.a === 'e12' && w1.b === 'T+22' && w6 && w6.b === 'T+40';
+      return w1 && w1.a === 'b22' && w1.b === 'T+22' && w6 && w6.b === 'T+40';
     })(), JSON.stringify(r42x15.state.wires.filter((w) => ['W1', 'W6'].includes(w.id))));
   const rSame = pruneStateForSize(st15, { cols: 42, rows: 15, rails: true });
   check('(e-f) đổi size 42x15 về chính nó: không gỡ gì, size giữ nguyên',
     rSame.removed.components.length === 0 && rSame.removed.wires.length === 0
     && JSON.stringify(rSame.state.size) === JSON.stringify({ cols: 42, rows: 15, rails: true }), JSON.stringify(rSame.state.size));
+}
+
+// (s) Đổi size board: chip + linh kiện đã cắm GIỮ NGUYÊN lỗ neo (board chỉ
+// mở thêm ở vùng trống). Lab 1 đang chạy ở hàng a–j, mở board thêm hàng
+// (j->z...) thì vùng a–j không động vào, mạch vẫn chạy.
+{
+  const { state: labState } = buildLabState(LABS[0]);
+  const r60 = pruneStateForSize(labState, { cols: 63, rows: 60, rails: true });
+  const pic60 = r60.state.components.find((c) => c.type === 'pic');
+  check('(s-a) mở board 10 -> 60 hàng: chip GIỮ neo b22 (không nhảy về tâm board mới), R0/LED0 giữ nguyên lỗ, không gỡ linh kiện',
+    pic60 && pic60.anchor === 'b22'
+    && r60.state.components.find((c) => c.id === 'R0').anchor === 'i45'
+    && r60.state.components.find((c) => c.id === 'LED0').anchor === 'i52'
+    && r60.removed.components.length === 0, JSON.stringify(r60.state.components.map((c) => c.id + ':' + (c.anchor || ''))));
+  check('(s-b) mở board 10 -> 60 hàng: 3 dây lab giữ nguyên đầu, không dây nào bị gỡ',
+    r60.removed.wires.length === 0
+    && ['LAB1-W1', 'LAB1-W2', 'LAB1-W3'].every((id) => r60.state.wires.some((w) => w.id === id))
+    && r60.state.wires.find((w) => w.id === 'LAB1-W1').a === 'i29'
+    && r60.state.wires.find((w) => w.id === 'LAB1-W1').b === 'j45'
+    && r60.state.wires.find((w) => w.id === 'LAB1-W2').a === 'j49'
+    && r60.state.wires.find((w) => w.id === 'LAB1-W2').b === 'j52'
+    && r60.state.wires.find((w) => w.id === 'LAB1-W3').a === 'j53'
+    && r60.state.wires.find((w) => w.id === 'LAB1-W3').b === 'B-50', JSON.stringify(r60.state.wires.filter((w) => w.id.startsWith('LAB1'))));
+  check('(s-c) mở board 10 -> 60 hàng: netlist lab vẫn đúng (LED0 = RB0, về GND, có điện trở, 0 cảnh báo) và RB0=1 thì LED SÁNG',
+    (() => {
+      const nl = benchToNetlist(r60.state);
+      const mapping = resolvePeripherals(nl);
+      const led = mapping.leds.find((l) => l.id === 'LED0');
+      if (!led || !led.pin || led.pin.id !== 'RB0' || led.gnd !== true || led.hasResistor !== true) return false;
+      if (checkWiring(nl, null).length !== 0) return false;
+      const cpu = createCPU();
+      cpu.setWiring(mapping);
+      cpu.writeFile(0x03, 0x20);
+      cpu.writeFile(0x06, 0x00);
+      cpu.writeFile(0x03, 0x00);
+      cpu.writeFile(0x06, 0x01);
+      return ledStates(cpu, mapping).find((s) => s.id === 'LED0').on === true;
+    })(), '');
+  check('(s-d) mở board rộng thêm cột (63 -> 100 cột): chip vẫn giữ neo b22, lab vẫn nối đúng RB0',
+    (() => {
+      const r100 = pruneStateForSize(labState, { cols: 100, rows: 10, rails: true });
+      const pic = r100.state.components.find((c) => c.type === 'pic');
+      const mapping = resolvePeripherals(benchToNetlist(r100.state));
+      const led = mapping.leds.find((l) => l.id === 'LED0');
+      return pic && pic.anchor === 'b22' && led && led.pin && led.pin.id === 'RB0' && led.gnd === true && led.hasResistor === true;
+    })(), '');
+  check('(s-e) thu board nhỏ lại quá (63 -> 20 cột): chip không vừa ở b22 nên căn giữa lại, lab bị gỡ (không còn RB0)',
+    (() => {
+      const r20 = pruneStateForSize(labState, { cols: 20, rows: 10, rails: false });
+      const pic = r20.state.components.find((c) => c.type === 'pic');
+      return pic && pic.anchor !== 'b22' && pic.anchor === picAnchor({ cols: 20, rows: 10, rails: false });
+    })(), '');
 }
 
 // (e-g) normalizeSize kẹp cols 5–100 / rows 5–100 (bội số của 5)

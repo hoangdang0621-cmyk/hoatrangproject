@@ -4,10 +4,10 @@
 // Three.js tải qua CDN (importmap, three@0.160.0); nếu tải lỗi thì hiện
 // thông báo trong tab bàn. Nối CPU qua window.HoaTrangBenchBridge (app.js).
 import {
-  PITCH, holeId, holePos, allHoles,
+  PITCH, holeId, holePos, allHoles, parseHole,
   HOLE_RADIUS, HOLE_HEIGHT, holeCenterY,
   SEGMENT_LINE_WIDTH_MM, segmentBoundaries,
-  legOffsets, legsFor, picLegs, canPlace, benchToNetlist,
+  legOffsets, legsFor, picLegs, picLegsForAnchor, canPlace, benchToNetlist,
   describeTerminal, defaultBenchState, nextComponentId, compLabel,
   defaultProps, sanitizeState, boardSize, colsOf, rowsOf, railColsOf, picCol,
   picRows, picBodyDepth, bodyDepth, rowLabel,
@@ -15,10 +15,10 @@ import {
   normalizeSize, holeCount, sizeLabel, sameSize,
   psuVolts, validatePsuVolts, parsePsuPost, psuPostPos, PSU_SCALE, PSU_POST_DX, PSU_POST_Y, PSU_POST_DZ,
   clampCamTarget, zoomTowardPoint, panTarget,
-} from './bench-model.js?v=20261125x';
+} from './bench-model.js?v=20261125y';
 import { checkWiring, SIGNAL_COLORS } from './wiring.js?v=20261125r';
 import { assemble } from './pic16.js?v=20261125q';
-import { LABS, getLab, buildLabState } from './labs.js?v=20261125x';
+import { LABS, getLab, buildLabState } from './labs.js?v=20261125y';
 
 const $ = (id) => document.getElementById(id);
 const benchView = $('benchView');
@@ -649,15 +649,17 @@ D2
         body = `<label class="bench-insp-row"><input type="checkbox" id="inspBuzzerSound"${soundOn ? ' checked' : ''}> Phát tiếng khi còi kêu</label>
           <p class="sub">Còi kêu khi chân + ra mức 1 (chân PIC mức cao hoặc nối thẳng nguồn 0–10V) và chân − về GND.</p>`;
       } else if (comp.type === 'pic') {
-        const conns = picLegs(state.size).map((l) => {
+        const conns = legsFor(comp, state.size).map((l) => {
           const d = describeTerminal(state, l.term, pressedIds());
           const others = d.members.filter((m) => m !== l.term);
           if (!others.length && !d.vcc && !d.gnd) return null;
           const txt = [...(d.vcc ? ['+5V'] : []), ...(d.gnd ? ['GND'] : []), ...others.map((m) => m.startsWith('PIC.') ? m.slice(4) : m)].join(', ');
           return `<div class="bench-conn"><span>${l.term.slice(4)}</span><span>${esc(txt)}</span></div>`;
         }).filter(Boolean);
-        const pc = picCol(state.size);
-        const [rT, rB] = picRows(state.size);
+        const pa = parseHole(comp.anchor, state.size);
+        const pc = pa ? pa.c : picCol(state.size);
+        const rT = pa ? pa.r : picRows(state.size)[0];
+        const rB = rT + 6;
         body = `<p class="sub">Chip cắm cố định ở cột ${Math.max(1, pc)}–${pc + 19}, hàng ${rowLabel(rT)}/${rowLabel(rB)}. ${conns.length} chân đang nối dây.</p>
           <div class="bench-conns">${conns.join('') || '<p class="sub">Chưa chân nào nối dây ngoài nguồn.</p>'}</div>`;
       } else if (comp.type === 'psu') {
@@ -1104,14 +1106,18 @@ D2
     const g = new THREE.Group();
     g.userData.compId = comp.id;
     if (comp.type === 'pic') {
-      // Thân chip + 40 chân cắm vào lỗ (căn giữa board theo size).
+      // Thân chip + 40 chân cắm vào lỗ, theo lỗ neo của chip (không căn
+      // giữa lại theo size — đổi size board không dời chip).
       // Chân treo ngoài board (Mini 170) vẫn vẽ nhưng nhô lên khỏi mặt board.
       // Thân chip nằm giữa 2 hàng chân (z = điểm giữa 2 hàng chân).
       const cols = colsOf(state.size);
       const rows = rowsOf(state.size);
-      const [rT, rB] = picRows(state.size);
+      const pa = parseHole(comp.anchor, state.size);
+      const rT = pa ? pa.r : picRows(state.size)[0];
+      const rB = rT + 6;
+      const c0 = pa ? pa.c : picCol(state.size);
       const chipZ = ((rT + rB) / 2 - (rows - 1) / 2) * PITCH;
-      const cx = (picCol(state.size) + 9.5 - (cols + 1) / 2) * PITCH;
+      const cx = (c0 + 9.5 - (cols + 1) / 2) * PITCH;
       const body = new THREE.Mesh(new THREE.BoxGeometry(52.5, 4.5, picBodyDepth(state.size)), stdMat(0x0F172A, { roughness: 0.4 }));
       body.position.set(cx, BOARD_TOP + 6.2, chipZ);
       body.castShadow = true;
@@ -1126,7 +1132,8 @@ D2
       dot.position.set(cx - 24.13, BOARD_TOP + 8.5, (rT - (rows - 1) / 2) * PITCH);
       g.add(dot);
       const pinMat = stdMat(0xCBD5E1, { metalness: 0.7, roughness: 0.35 });
-      for (const leg of picLegs(state.size)) {
+      const chipLegs = picLegsForAnchor(comp.anchor, state.size);
+      for (const leg of (chipLegs.length ? chipLegs : picLegs(state.size))) {
         const px = (leg.c - (cols + 1) / 2) * PITCH;
         const pz = (leg.r - (rows - 1) / 2) * PITCH;
         const pin = new THREE.Mesh(new THREE.BoxGeometry(1.0, 4.5, 0.7), pinMat);
