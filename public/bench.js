@@ -17,7 +17,7 @@ import {
   clampCamTarget, zoomTowardPoint, panTarget,
 } from './bench-model.js?v=20261125z';
 import { checkWiring, SIGNAL_COLORS } from './wiring.js?v=20261125r';
-import { assemble } from './pic16.js?v=20261125q';
+import { assemble } from './pic16.js?v=20261125aa';
 import { LABS, getLab, buildLabState } from './labs.js?v=20261125z';
 
 const $ = (id) => document.getElementById(id);

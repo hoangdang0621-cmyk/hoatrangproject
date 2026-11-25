@@ -3,7 +3,7 @@
 // chưa nạp chương trình nào; code mẫu nằm sẵn trong tab "Nạp viết code",
 // người dùng bấm "Nạp & chạy" thì chip mới chạy. ProgramRunner điều khiển
 // chạy/tạm dừng/chạy từng lệnh/breakpoint.
-import { createCPU, ProgramRunner } from './pic16.js?v=20261125q';
+import { createCPU, ProgramRunner, cyclesForElapsedMs } from './pic16.js?v=20261125aa';
 import {
   resolvePeripherals, ledStates, buzzerStates,
   applyButtonToCpu, applyPotToCpu,
@@ -54,7 +54,19 @@ D2
 
 // Vòng lặp chạy 1x thời gian thực @4MHz (1 triệu lệnh/giây). ProgramRunner
 // chỉ step khi đang ở trạng thái running, còn lại tick là no-op.
-setInterval(() => { runner.tick(50000); }, 50);
+// Đo thời gian thực đã trôi qua rồi chạy bù đủ số chu kỳ, thay vì mặc định
+// mỗi lần hẹn giờ là đúng 50ms: trong trình duyệt, khi cảnh 3D nặng thì
+// hẹn giờ chạy chậm hơn 50ms mà mỗi lần vẫn chỉ chạy 50ms mô phỏng, nên
+// mô phỏng tụt sau giờ thực (code ON 3s hiện ra ~8s). Chặn 500000 chu kỳ
+// (500ms) để tránh chạy bù vô hạn khi tab bị ẩn đi lâu rồi quay lại.
+let lastTick = performance.now();
+setInterval(() => {
+  const now = performance.now();
+  const elapsedMs = now - lastTick;
+  lastTick = now;
+  const cycles = cyclesForElapsedMs(elapsedMs, cpu.clockHz);
+  if (cycles > 0) runner.tick(cycles);
+}, 50);
 
 // --- Cầu nối cho bàn thực hành 3D (bench.js) ---
 // Netlist bench là nguồn sự thật cho CPU: đổi dây/linh kiện trên bàn thì

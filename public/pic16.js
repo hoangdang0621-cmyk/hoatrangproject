@@ -1022,6 +1022,14 @@ export class ProgramRunner {
 
 export function createCPU() { return new PIC16F877A(); }
 
+// Đổi thời gian thực đã trôi qua (ms) ra số chu kỳ lệnh mô phỏng tương ứng.
+// PIC chạy 4 chu kỳ dao động cho 1 chu kỳ lệnh, nên ở clockHz thì
+// 1ms = clockHz/4000 chu kỳ lệnh (ở 4MHz là 1000 chu kỳ/ms).
+// Chặn trên để tránh chạy bù vô hạn khi tab bị ẩn đi lâu rồi quay lại.
+export function cyclesForElapsedMs(elapsedMs, clockHz = 4000000, maxCycles = 500000) {
+  return Math.min(Math.max(0, Math.round((elapsedMs * clockHz) / 4000)), maxCycles);
+}
+
 // Tiện cho debug trong console trình duyệt (không ảnh hưởng Node test)
 if (typeof globalThis !== 'undefined') {
   globalThis.PIC16 = { assemble, disassemble, parseIntelHex, exportHex, createCPU, PIC16F877A, ProgramRunner, LCD, REGISTERS };

@@ -1,7 +1,7 @@
 // test-pic16.mjs — Kiểm thử xác định cho lõi pic16.js (KHÔNG đưa vào public/).
 // Chạy: node test-pic16.mjs   (exit 0 = tất cả pass)
 import { readFileSync } from 'node:fs';
-import { assemble, createCPU, parseIntelHex, exportHex, disassemble, ProgramRunner } from './public/pic16.js';
+import { assemble, createCPU, parseIntelHex, exportHex, disassemble, ProgramRunner, cyclesForElapsedMs } from './public/pic16.js';
 import { defaultNetlist, resolvePeripherals, checkWiring, ledStates, buzzerStates, applyButtonToCpu, applyPotToCpu, PIC_PINS } from './public/wiring.js';
 import { PITCH, SEGMENT_GAP_MM, rowZ, HOLE_RADIUS, HOLE_HEIGHT, HOLE_TOP_ABOVE_BOARD, holeCenterY, depthPrecisionAt, MAX_CAMERA_DISTANCE, SEGMENT_LINE_WIDTH_MM, segmentBoundaries, allHoles, stripKey, parseHole, holePos, holeId, rowLabel, rowIndexFromLabel, migrateOldHoleId, picLegs, picLegsForAnchor, picAnchor, legsFor, canPlace, buildBenchNets, benchToNetlist, defaultBenchState, sanitizeState, boardSize, picCol, picRows, picBodyDepth, picBodyDepthForRows, bodyDepth, pruneStateForSize, validateWireEnd, retargetWireEnd, togglePlacement, normalizeSize, holeCount, sizeLabel, sameSize, compLabel, psuVolts, validatePsuVolts, parsePsuPost, psuPostPos, PSU_SCALE, PSU_POST_DX, PSU_POST_Y, PSU_POST_DZ, normalizeWireEnd, clampCamTarget, zoomTowardPoint, panTarget } from './public/bench-model.js';
 import { LABS, getLab, buildLabState } from './public/labs.js';
@@ -2447,6 +2447,22 @@ const SLEEP_PROG = `    ORG 0
   };
   check('(t-f) nghịch đảo hàng bằng rowZ gần nhất đúng cho mọi hàng + rail trên board 830 và board 60 hàng',
     okFor(830) && okFor({ cols: 63, rows: 60, rails: true }), '');
+}
+
+// Nhóm (u): cyclesForElapsedMs — đổi thời gian thực (ms) ra chu kỳ lệnh mô phỏng
+// (4MHz: 1ms = 1000 chu kỳ). Runner dùng hàm này để chạy bù khi hẹn giờ trình
+// duyệt chậm hơn 50ms, thay vì mặc định mỗi lần là 50ms (lỗi làm ON 3s hiện ~8s).
+{
+  check('(u-a) 50ms @4MHz = 50000 chu kỳ; 150ms (hẹn giờ chậm) = 150000 chu kỳ',
+    cyclesForElapsedMs(50) === 50000 && cyclesForElapsedMs(150) === 150000, '');
+  check('(u-b) 1ms = 1000 chu kỳ; 1000ms = 1000000 chu kỳ (chưa chặn)',
+    cyclesForElapsedMs(1) === 1000 && cyclesForElapsedMs(1000, 4000000, 2000000) === 1000000, '');
+  check('(u-c) chặn trên mặc định 500000 chu kỳ khi tab bị ẩn lâu (2000ms -> 500000, không chạy bù vô hạn)',
+    cyclesForElapsedMs(2000) === 500000, '');
+  check('(u-d) elapsedMs âm hoặc 0 -> 0 chu kỳ (không chạy lùi)',
+    cyclesForElapsedMs(0) === 0 && cyclesForElapsedMs(-10) === 0, '');
+  check('(u-e) clockHz khác: 8MHz thì 50ms = 100000 chu kỳ (gấp đôi 4MHz)',
+    cyclesForElapsedMs(50, 8000000) === 100000, '');
 }
 
 console.log(`\nKết quả: ${pass} pass, ${fail} fail`);
