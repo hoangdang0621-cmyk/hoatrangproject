@@ -1,19 +1,21 @@
-// circuit-solver.js — Bộ giải mạch DC (MNA) cho vôn kế + ampe kế.
+// circuit-solver.js — Bộ giải mạch DC (MNA) cho đồng hồ đo (multimeter).
 // Không DOM, không Three.js: chạy được cả trong trình duyệt (ES module)
 // lẫn Node để test tự động.
 // Mô hình: mỗi strip trên breadboard là 1 node (nối bằng dây/nút nhấn);
-// điện trở, LED, ampe kế là NHÁNH giữa 2 node; PSU và chân PIC output
-// là nguồn áp. Giải bằng Modified Nodal Analysis + khử Gauss.
-// - Vôn kế: trở kháng vô cùng, không có nhánh (không ảnh hưởng mạch).
-// - Ampe kế: nguồn áp 0V giữa 2 chân, dòng qua nó = biến dòng của nguồn.
+// điện trở, LED, đồng hồ đo (chế độ A) là NHÁNH giữa 2 node; PSU và
+// chân PIC output là nguồn áp. Giải bằng Modified Nodal Analysis + khử Gauss.
+// - Đồng hồ đo chế độ V (đo áp): trở kháng vô cùng, không có nhánh
+//   (không ảnh hưởng mạch); đọc V(chân P) − V(chân N).
+// - Đồng hồ đo chế độ A (đo dòng): nguồn áp 0V giữa 2 chân P/N, dòng
+//   qua nó = biến dòng của nguồn (chiều P -> N).
 // - LED đang sáng: nguồn áp 2V nối tiếp 10Ω (nút phụ giữa điện trở và
 //   nguồn); LED tắt: hở mạch. Trạng thái sáng/tắt lấy từ ledStates có sẵn.
 // - Net không nối tới nguồn áp nào và không có đường về GND thì floating
 //   (điện áp null, không gán 0V bừa); nhánh trong mạch floating thì dòng 0.
 import {
   DEFAULT_SIZE, legsFor, stripKey, parseHole, parsePsuPost, psuVolts,
-  benchToNetlist, normalizeWireEnd,
-} from './bench-model.js?v=20261125ad';
+  benchToNetlist, normalizeWireEnd, meterMode,
+} from './bench-model.js?v=20261125al';
 import { resolvePeripherals, ledStates, PIC_PINS } from './wiring.js?v=20261125r';
 
 export const LED_FORWARD_VOLTS = 2.0;  // sụt áp thuận LED khi sáng
@@ -22,9 +24,10 @@ export const PIC_OUTPUT_VOLTS = 5;     // chân PIC output mức cao
 
 // ---------------------------------------------------------------------------
 // Net cho solver: union-find trên strip — CHỈ dây và nút nhấn (đang nhấn)
-// mới nối strip. Điện trở/LED/ampe kế KHÔNG nối strip (chúng là nhánh
-// giữa 2 node, để solver tính dòng qua). Khác buildBenchNets (ở đó điện
-// trở và ampe kế nối 2 strip như dây để netlist CPU thấy mạch kín).
+// mới nối strip. Điện trở/LED/đồng hồ đo (chế độ A) KHÔNG nối strip
+// (chúng là nhánh giữa 2 node, để solver tính dòng qua). Khác
+// buildBenchNets (ở đó điện trở và đồng hồ đo chế độ A nối 2 strip như
+// dây để netlist CPU thấy mạch kín).
 // ---------------------------------------------------------------------------
 function makeUnionFind() {
   const parent = new Map();
@@ -142,12 +145,13 @@ export function solveLinear(A, b) {
 //   nodeVoltage: Map,         // root node -> volts (number); null = floating;
 //                            // node RAIL- (GND) = 0
 //   branchCurrent: Map,       // id linh kiện 2 chân -> dòng (A); Infinity =
-//                            // chập nguồn (dòng không xác định, vd ampe kế
-//                            // đấu tắt trực tiếp qua PSU)
+//                            // chập nguồn (dòng không xác định, vd đồng hồ
+//                            // đo chế độ A đấu tắt trực tiếp qua PSU)
 //   nets,                     // kết quả buildSolverNets (để tra node của chân)
 // }
-// Dòng qua điện trở = (V_A − V_B)/R; dòng qua LED/ampe kế = biến dòng của
-// nguồn áp tương ứng trong MNA (chiều từ chân +/A sang chân −/B).
+// Dòng qua điện trở = (V_A − V_B)/R; dòng qua LED/đồng hồ đo chế độ A =
+// biến dòng của nguồn áp tương ứng trong MNA (chiều từ chân +/P sang
+// chân −/N).
 // ---------------------------------------------------------------------------
 export function solveCircuit(state, cpu, pressedIds = []) {
   const size = state.size ?? DEFAULT_SIZE;
@@ -164,8 +168,8 @@ export function solveCircuit(state, cpu, pressedIds = []) {
   const vSources = [];     // {nodeP, nodeN, volts, key, kind}
   const shorted = new Set(); // id linh kiện bị chập (dòng = Infinity)
   // Nguồn áp trùng nhau trên cùng 1 cặp node thì chỉ giữ cái đầu tiên
-  // (ưu tiên PSU, rồi chân PIC, ampe kế, LED). Cái bị loại có dòng không
-  // xác định (2 nguồn áp lý tưởng song song) -> Infinity.
+  // (ưu tiên PSU, rồi chân PIC, đồng hồ đo chế độ A, LED). Cái bị loại
+  // có dòng không xác định (2 nguồn áp lý tưởng song song) -> Infinity.
   const sourceByPair = new Map();
   const addVSource = (nodeP, nodeN, volts, key, kind) => {
     if (!nodeP || !nodeN || nodeP === nodeN) {
@@ -187,11 +191,12 @@ export function solveCircuit(state, cpu, pressedIds = []) {
   };
 
   // Nguồn PSU TRƯỚC (ưu tiên khi trùng cặp node), rồi chân PIC output,
-  // sau đó mới tới các nhánh linh kiện. Thứ tự này quan trọng: ampe kế là
-  // nguồn 0V, nếu đăng ký trước PSU thì nó chiếm cặp node (RAIL+/RAIL-)
-  // và làm PSU bị loại (mạch mất nguồn, vôn kế đọc 0V, ampe kế đọc 0
-  // thay vì OL). PSU đăng ký trước thì ampe kế đấu tắt qua PSU bị đánh
-  // dấu chập (dòng Infinity -> hiển thị OL), PSU vẫn giữ 5V.
+  // sau đó mới tới các nhánh linh kiện. Thứ tự này quan trọng: đồng hồ
+  // đo chế độ A là nguồn 0V, nếu đăng ký trước PSU thì nó chiếm cặp node
+  // (RAIL+/RAIL-) và làm PSU bị loại (mạch mất nguồn, đồng hồ chế độ V
+  // đọc 0V, đồng hồ chế độ A đọc 0 thay vì OL). PSU đăng ký trước thì
+  // đồng hồ chế độ A đấu tắt qua PSU bị đánh dấu chập (dòng Infinity ->
+  // hiển thị OL), PSU vẫn giữ 5V.
   if (psu) addVSource(nets.railPlus, nets.railMinus, psuV, psu.id, 'psu');
   for (const pin of PIC_PINS) {
     if (pin.port === null) continue;
@@ -217,12 +222,15 @@ export function solveCircuit(state, cpu, pressedIds = []) {
       const aux = 'AUX:LED:' + comp.id;
       conductances.push({ nodeA: nA, nodeB: aux, g: 1 / LED_SERIES_OHMS, key: comp.id, kind: 'led' });
       addVSource(aux, nK, LED_FORWARD_VOLTS, comp.id, 'led');
-    } else if (comp.type === 'ammeter') {
-      const nA = nets.nodeOfTerm(comp.id, 'A');
-      const nB = nets.nodeOfTerm(comp.id, 'B');
-      if (!nA || !nB) continue;
-      if (nA === nB) { shorted.add(comp.id); continue; }
-      addVSource(nA, nB, 0, comp.id, 'ammeter');
+    } else if (comp.type === 'multimeter' && meterMode(comp) === 'A') {
+      // Chế độ A: nguồn áp 0V giữa 2 chân P/N (dòng đo P -> N). Chế độ V
+      // không có nhánh (trở kháng vô cùng). kind 'ammeter' giữ nguyên để
+      // logic MNA (shorted/branchCurrent) không đổi.
+      const nP = nets.nodeOfTerm(comp.id, 'P');
+      const nN = nets.nodeOfTerm(comp.id, 'N');
+      if (!nP || !nN) continue;
+      if (nP === nN) { shorted.add(comp.id); continue; }
+      addVSource(nP, nN, 0, comp.id, 'ammeter');
     }
   }
 
@@ -315,10 +323,10 @@ export function solveCircuit(state, cpu, pressedIds = []) {
 // ---------------------------------------------------------------------------
 // Định dạng số đo để hiển thị (màn hình 3D + Inspector). Tách riêng thành
 // hàm thuần để test được ở Node.
-// - Vôn kế: null (chân floating) -> "—"; không hữu hạn -> "OL"; còn lại
-//   "5.00 V" (2 số lẻ).
-// - Ampe kế: không hữu hạn (chập nguồn) -> "OL"; |dòng| >= 1A -> "1.20 A";
-//   còn lại đổi ra mA, 1 số lẻ ("13.0 mA", "0.0 mA", "-500.0 mA").
+// - Đồng hồ chế độ V: null (chân floating) -> "—"; không hữu hạn -> "OL";
+//   còn lại "5.00 V" (2 số lẻ).
+// - Đồng hồ chế độ A: không hữu hạn (chập nguồn) -> "OL"; |dòng| >= 1A ->
+//   "1.20 A"; còn lại đổi ra mA, 1 số lẻ ("13.0 mA", "0.0 mA", "-500.0 mA").
 // ---------------------------------------------------------------------------
 export function formatVolts(volts) {
   if (volts === null || volts === undefined) return '—';
@@ -331,23 +339,25 @@ export function formatAmps(amps) {
   if (Math.abs(amps) >= 1) return amps.toFixed(2) + ' A';
   return (amps * 1000).toFixed(1) + ' mA';
 }
-// Chiều dòng qua ampe kế: dương = chạy từ chân A sang B, âm = ngược lại,
-// 0 = không có dòng, không hữu hạn = OL (chập nguồn).
+// Chiều dòng qua đồng hồ đo chế độ A: dương = chạy từ chân P sang N,
+// âm = ngược lại, 0 = không có dòng, không hữu hạn = OL (chập nguồn).
 export function formatCurrentDirection(amps) {
   if (amps === null || amps === undefined) return '—';
   if (!Number.isFinite(amps)) return 'OL';
-  if (amps > 0) return 'A → B';
-  if (amps < 0) return 'B → A';
+  if (amps > 0) return 'P → N';
+  if (amps < 0) return 'N → P';
   return 'Không có dòng';
 }
 
 // ---------------------------------------------------------------------------
-// Số đo của mọi đồng hồ trên bàn.
-// Trả về { voltmeters: [{id, volts}], ammeters: [{id, amps}] }.
-// - Vôn kế: volts = V(chân P) − V(chân N); null nếu 1 trong 2 chân floating
-//   (không nối tới nguồn áp nào, không có đường về GND). 2 chân cùng 1 net
-//   -> 0V (kể cả net đó floating, vì 2 đầu đo là cùng 1 điểm).
-// - Ampe kế: amps = dòng từ chân A sang chân B (đơn vị A); 0 nếu hở mạch;
+// Số đo của mọi đồng hồ đo trên bàn. Giữ nguyên hình dạng cũ để code gọi
+// (app.js bridge, bench.js poll/Inspector) không phải đổi:
+// { voltmeters: [{id, mode:'V', volts, vP, vN}], ammeters: [{id, mode:'A', amps}] }.
+// Đồng hồ ở chế độ V vào danh sách voltmeters, chế độ A vào ammeters.
+// - Chế độ V: volts = V(chân P) − V(chân N); null nếu 1 trong 2 chân
+//   floating (không nối tới nguồn áp nào, không có đường về GND). 2 chân
+//   cùng 1 net -> 0V (kể cả net đó floating, vì 2 đầu đo là cùng 1 điểm).
+// - Chế độ A: amps = dòng từ chân P sang chân N (đơn vị A); 0 nếu hở mạch;
 //   Infinity nếu chập nguồn (dòng không xác định, vd đấu tắt qua PSU).
 // pressedIds: id các nút đang nhấn giữ (nút nhấn = công tắc đóng).
 // ---------------------------------------------------------------------------
@@ -356,7 +366,8 @@ export function meterReadings(state, cpu, pressedIds = []) {
   const voltmeters = [];
   const ammeters = [];
   for (const comp of state.components) {
-    if (comp.type === 'voltmeter') {
+    if (comp.type !== 'multimeter') continue;
+    if (meterMode(comp) === 'V') {
       const nP = nets.nodeOfTerm(comp.id, 'P');
       const nN = nets.nodeOfTerm(comp.id, 'N');
       let volts, vP = null, vN = null;
@@ -374,9 +385,9 @@ export function meterReadings(state, cpu, pressedIds = []) {
         volts = (vP === null || vN === null) ? null : vP - vN;
       }
       // vP/vN: điện áp từng chân (null nếu floating) — Inspector hiện riêng.
-      voltmeters.push({ id: comp.id, volts, vP, vN });
-    } else if (comp.type === 'ammeter') {
-      ammeters.push({ id: comp.id, amps: branchCurrent.get(comp.id) ?? 0 });
+      voltmeters.push({ id: comp.id, mode: 'V', volts, vP, vN });
+    } else {
+      ammeters.push({ id: comp.id, mode: 'A', amps: branchCurrent.get(comp.id) ?? 0 });
     }
   }
   return { voltmeters, ammeters };

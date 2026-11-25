@@ -3,7 +3,7 @@
 import { readFileSync } from 'node:fs';
 import { assemble, createCPU, parseIntelHex, exportHex, disassemble, ProgramRunner, cyclesForElapsedMs } from './public/pic16.js';
 import { defaultNetlist, resolvePeripherals, checkWiring, ledStates, buzzerStates, applyButtonToCpu, applyPotToCpu, PIC_PINS } from './public/wiring.js';
-import { PITCH, SEGMENT_GAP_MM, rowZ, HOLE_RADIUS, HOLE_HEIGHT, HOLE_TOP_ABOVE_BOARD, holeCenterY, depthPrecisionAt, MAX_CAMERA_DISTANCE, SEGMENT_LINE_WIDTH_MM, segmentBoundaries, allHoles, stripKey, parseHole, holePos, holeId, rowLabel, rowIndexFromLabel, migrateOldHoleId, picLegs, picLegsForAnchor, picAnchor, legsFor, canPlace, buildBenchNets, benchToNetlist, defaultBenchState, sanitizeState, boardSize, picCol, picRows, picBodyDepth, picBodyDepthForRows, bodyDepth, pruneStateForSize, validateWireEnd, retargetWireEnd, togglePlacement, normalizeSize, holeCount, sizeLabel, sameSize, compLabel, nextComponentId, psuVolts, validatePsuVolts, parsePsuPost, psuPostPos, PSU_SCALE, PSU_POST_DX, PSU_POST_Y, PSU_POST_DZ, normalizeWireEnd, clampCamTarget, zoomTowardPoint, panTarget } from './public/bench-model.js';
+import { PITCH, SEGMENT_GAP_MM, rowZ, HOLE_RADIUS, HOLE_HEIGHT, HOLE_TOP_ABOVE_BOARD, holeCenterY, depthPrecisionAt, MAX_CAMERA_DISTANCE, SEGMENT_LINE_WIDTH_MM, segmentBoundaries, allHoles, stripKey, parseHole, holePos, holeId, rowLabel, rowIndexFromLabel, migrateOldHoleId, picLegs, picLegsForAnchor, picAnchor, legsFor, canPlace, buildBenchNets, benchToNetlist, defaultBenchState, sanitizeState, boardSize, picCol, picRows, picBodyDepth, picBodyDepthForRows, bodyDepth, pruneStateForSize, validateWireEnd, retargetWireEnd, togglePlacement, normalizeSize, holeCount, sizeLabel, sameSize, compLabel, nextComponentId, defaultProps, psuVolts, validatePsuVolts, parsePsuPost, psuPostPos, PSU_SCALE, PSU_POST_DX, PSU_POST_Y, PSU_POST_DZ, normalizeWireEnd, clampCamTarget, zoomTowardPoint, panTarget, meterMode } from './public/bench-model.js';
 import { LABS, getLab, buildLabState } from './public/labs.js';
 import { buildSolverNets, solveLinear, solveCircuit, meterReadings, formatVolts, formatAmps, formatCurrentDirection, LED_FORWARD_VOLTS, LED_SERIES_OHMS, PIC_OUTPUT_VOLTS } from './public/circuit-solver.js';
 
@@ -2466,7 +2466,7 @@ const SLEEP_PROG = `    ORG 0
     cyclesForElapsedMs(50, 8000000) === 100000, '');
 }
 
-// Nhóm (v): vôn kế + ampe kế — solver MNA (circuit-solver.js).
+// Nhóm (v): đồng hồ đo (multimeter, chế độ V/A) — solver MNA (circuit-solver.js).
 // Điện áp/dòng kỳ vọng tính theo mô hình: LED sáng = sụt 2V nối tiếp 10Ω,
 // chân PIC output cao = 5V / thấp = 0V, PSU = điện áp nguồn.
 // Lab 1 (RB0=1): dòng = (5−2)/(220+10) ≈ 13.04mA, áp trên R ≈ 2.87V,
@@ -2478,136 +2478,140 @@ const SLEEP_PROG = `    ORG 0
     cpu.writeFile(0x03, 0x20); cpu.writeFile(0x06, 0x00);
     cpu.writeFile(0x03, 0x00); cpu.writeFile(0x06, high ? 0x01 : 0x00);
   };
-  // Lab 1 + ampe kế nối tiếp (bỏ dây LAB1-W2, AM neo g48, dây j49->j48).
-  // Đặt AM ở cột 48–52 (ngoài vùng chip 22–41) để chân AM không rơi vào
-  // strip có chân PIC (đặt ở i29 thì chân i33 cùng strip với RD6).
-  const lab1WithAmmeter = () => {
+  // Lab 1 + đồng hồ đo chế độ A nối tiếp (bỏ dây LAB1-W2, MM neo g48,
+  // dây j49->j48). Đặt MM ở cột 48–52 (ngoài vùng chip 22–41) để chân
+  // MM không rơi vào strip có chân PIC (đặt ở i29 thì chân i33 cùng
+  // strip với RD6).
+  const lab1WithMeterA = () => {
     const { state } = buildLabState(LABS[0]);
     state.wires = state.wires.filter((w) => w.id !== 'LAB1-W2');
-    state.components.push({ id: 'AM0', type: 'ammeter', anchor: 'g48', rot: 0, props: {} });
+    state.components.push({ id: 'MM0', type: 'multimeter', anchor: 'g48', rot: 0, props: { mode: 'A' } });
     state.wires.push({ id: 'T-AM', a: 'j49', b: 'j48', color: '#DC2626' });
     return state;
   };
   const approx = (v, target, tol) => typeof v === 'number' && Number.isFinite(v) && Math.abs(v - target) <= tol;
 
-  // (v-a) Vôn kế: chân, đặt được, id/nhãn; ampe kế tương tự.
-  check('(v-a) vôn kế chân P=a10, N=a14; ampe kế chân A=a10, B=a14; đặt được, id VM0/AM0, nhãn "Vôn kế 0"/"Ampe kế 0"',
-    JSON.stringify(legsFor({ type: 'voltmeter', anchor: 'a10', rot: 0 }, 830)) === JSON.stringify([{ term: 'P', hole: 'a10' }, { term: 'N', hole: 'a14' }])
-    && JSON.stringify(legsFor({ type: 'ammeter', anchor: 'a10', rot: 0 }, 830)) === JSON.stringify([{ term: 'A', hole: 'a10' }, { term: 'B', hole: 'a14' }])
-    && canPlace(defaultBenchState(830), 'voltmeter', 'a10').ok && canPlace(defaultBenchState(830), 'ammeter', 'a10').ok
-    && nextComponentId(defaultBenchState(830), 'voltmeter') === 'VM0' && nextComponentId(defaultBenchState(830), 'ammeter') === 'AM0'
-    && compLabel({ id: 'VM0', type: 'voltmeter' }) === 'Vôn kế 0' && compLabel({ id: 'AM0', type: 'ammeter' }) === 'Ampe kế 0', '');
-  // (v-a2) Ampe kế nối 2 strip như dây trong netlist bench (LED sáng qua
-  // nó được); vôn kế không nối strip nào (không ảnh hưởng mạch).
-  check('(v-a2) ampe kế nối 2 strip như dây (2 LED ở 2 strip thành cùng net qua AM); vôn kế không nối strip (2 LED vẫn tách net)',
+  // (v-a) Đồng hồ đo: chân P/N, đặt được, id/nhãn, mode mặc định V.
+  check('(v-a) đồng hồ đo chân P=a10, N=a14; đặt được, id MM0, nhãn "Đồng hồ đo 0", mode mặc định V',
+    JSON.stringify(legsFor({ type: 'multimeter', anchor: 'a10', rot: 0 }, 830)) === JSON.stringify([{ term: 'P', hole: 'a10' }, { term: 'N', hole: 'a14' }])
+    && canPlace(defaultBenchState(830), 'multimeter', 'a10').ok
+    && nextComponentId(defaultBenchState(830), 'multimeter') === 'MM0'
+    && compLabel({ id: 'MM0', type: 'multimeter' }) === 'Đồng hồ đo 0'
+    && meterMode({ type: 'multimeter', props: {} }) === 'V'
+    && meterMode({ type: 'multimeter', props: { mode: 'A' } }) === 'A'
+    && meterMode({ type: 'multimeter', props: { mode: 'X' } }) === 'V', '');
+  // (v-a2) Đồng hồ đo chế độ A nối 2 strip như dây trong netlist bench
+  // (LED sáng qua nó được); chế độ V không nối strip nào (không ảnh
+  // hưởng mạch).
+  check('(v-a2) đồng hồ chế độ A nối 2 strip như dây (2 LED ở 2 strip thành cùng net qua MM); chế độ V không nối strip (2 LED vẫn tách net)',
     (() => {
-      const withAM = defaultBenchState(830);
-      withAM.components.push({ id: 'AM0', type: 'ammeter', anchor: 'a10', rot: 0, props: {} });
-      withAM.components.push({ id: 'LED0', type: 'led', anchor: 'c10', rot: 0, props: { color: '#DC2626' } });
-      withAM.components.push({ id: 'LED1', type: 'led', anchor: 'c14', rot: 0, props: { color: '#DC2626' } });
-      const nAM = buildBenchNets(withAM);
-      const withVM = defaultBenchState(830);
-      withVM.components.push({ id: 'VM0', type: 'voltmeter', anchor: 'a10', rot: 0, props: {} });
-      withVM.components.push({ id: 'LED0', type: 'led', anchor: 'c10', rot: 0, props: { color: '#DC2626' } });
-      withVM.components.push({ id: 'LED1', type: 'led', anchor: 'c14', rot: 0, props: { color: '#DC2626' } });
-      const nVM = buildBenchNets(withVM);
-      return nAM.termRoot.get('LED0.A') === nAM.termRoot.get('LED1.A')
-        && nVM.termRoot.get('LED0.A') !== nVM.termRoot.get('LED1.A')
-        && !nVM.termRoot.has('VM0.P');
+      const withA = defaultBenchState(830);
+      withA.components.push({ id: 'MM0', type: 'multimeter', anchor: 'a10', rot: 0, props: { mode: 'A' } });
+      withA.components.push({ id: 'LED0', type: 'led', anchor: 'c10', rot: 0, props: { color: '#DC2626' } });
+      withA.components.push({ id: 'LED1', type: 'led', anchor: 'c14', rot: 0, props: { color: '#DC2626' } });
+      const nA = buildBenchNets(withA);
+      const withV = defaultBenchState(830);
+      withV.components.push({ id: 'MM0', type: 'multimeter', anchor: 'a10', rot: 0, props: { mode: 'V' } });
+      withV.components.push({ id: 'LED0', type: 'led', anchor: 'c10', rot: 0, props: { color: '#DC2626' } });
+      withV.components.push({ id: 'LED1', type: 'led', anchor: 'c14', rot: 0, props: { color: '#DC2626' } });
+      const nV = buildBenchNets(withV);
+      return nA.termRoot.get('LED0.A') === nA.termRoot.get('LED1.A')
+        && nV.termRoot.get('LED0.A') !== nV.termRoot.get('LED1.A')
+        && !nV.termRoot.has('MM0.P');
     })(), '');
-  // (v-b) Vôn kế qua PSU +/− đọc đúng 5V.
-  check('(v-b) vôn kế qua PSU +/− (dây b10->T+10, b14->T-10) đọc đúng 5V',
+  // (v-b) Đồng hồ đo chế độ V qua PSU +/− đọc đúng 5V.
+  check('(v-b) đồng hồ đo chế độ V qua PSU +/− (dây b10->T+10, b14->T-10) đọc đúng 5V',
     (() => {
       const st = defaultBenchState(830);
-      st.components.push({ id: 'VM0', type: 'voltmeter', anchor: 'a10', rot: 0, props: {} });
+      st.components.push({ id: 'MM0', type: 'multimeter', anchor: 'a10', rot: 0, props: { mode: 'V' } });
       st.wires.push({ id: 'T-V1', a: 'b10', b: 'T+10', color: '#DC2626' });
       st.wires.push({ id: 'T-V2', a: 'b14', b: 'T-10', color: '#0F172A' });
       const r = meterReadings(st, createCPU());
       return r.voltmeters.length === 1 && r.voltmeters[0].volts === 5;
     })(), '');
-  // (v-c) Vôn kế trên Lab 1: qua R ≈ 3V (±0.2), qua LED ≈ 2V (±0.2).
-  check('(v-c) vôn kế Lab 1 qua điện trở (neo g45) ≈ 3V (±0.2V)',
+  // (v-c) Đồng hồ đo chế độ V trên Lab 1: qua R ≈ 3V (±0.2), qua LED ≈ 2V (±0.2).
+  check('(v-c) đồng hồ đo chế độ V Lab 1 qua điện trở (neo g45) ≈ 3V (±0.2V)',
     (() => {
       const { state } = buildLabState(LABS[0]);
-      state.components.push({ id: 'VM0', type: 'voltmeter', anchor: 'g45', rot: 0, props: {} });
+      state.components.push({ id: 'MM0', type: 'multimeter', anchor: 'g45', rot: 0, props: { mode: 'V' } });
       const cpu = createCPU(); setRB0(cpu, true);
       const v = meterReadings(state, cpu).voltmeters[0].volts;
       return approx(v, 3, 0.2);
     })(), '');
-  check('(v-c) vôn kế Lab 1 qua LED (neo g52 + dây j56->j53) ≈ 2V (±0.2V)',
+  check('(v-c) đồng hồ đo chế độ V Lab 1 qua LED (neo g52 + dây j56->j53) ≈ 2V (±0.2V)',
     (() => {
       const { state } = buildLabState(LABS[0]);
-      state.components.push({ id: 'VM0', type: 'voltmeter', anchor: 'g52', rot: 0, props: {} });
+      state.components.push({ id: 'MM0', type: 'multimeter', anchor: 'g52', rot: 0, props: { mode: 'V' } });
       state.wires.push({ id: 'T-V3', a: 'j56', b: 'j53', color: '#DC2626' });
       const cpu = createCPU(); setRB0(cpu, true);
       const v = meterReadings(state, cpu).voltmeters[0].volts;
       return approx(v, 2, 0.2);
     })(), '');
-  // (v-d) Vôn kế 1 chân floating -> null; 2 chân cùng 1 net -> 0V.
-  check('(v-d) vôn kế 1 chân floating (chỉ nối P về T+) -> null',
+  // (v-d) Đồng hồ đo chế độ V 1 chân floating -> null; 2 chân cùng 1 net -> 0V.
+  check('(v-d) đồng hồ đo chế độ V 1 chân floating (chỉ nối P về T+) -> null',
     (() => {
       const st = defaultBenchState(830);
-      st.components.push({ id: 'VM0', type: 'voltmeter', anchor: 'a10', rot: 0, props: {} });
+      st.components.push({ id: 'MM0', type: 'multimeter', anchor: 'a10', rot: 0, props: { mode: 'V' } });
       st.wires.push({ id: 'T-V4', a: 'b10', b: 'T+10', color: '#DC2626' });
       return meterReadings(st, createCPU()).voltmeters[0].volts === null;
     })(), '');
-  check('(v-d) vôn kế 2 chân cùng 1 net (cả 2 về RAIL+) -> 0V',
+  check('(v-d) đồng hồ đo chế độ V 2 chân cùng 1 net (cả 2 về RAIL+) -> 0V',
     (() => {
       const st = defaultBenchState(830);
-      st.components.push({ id: 'VM0', type: 'voltmeter', anchor: 'a10', rot: 0, props: {} });
+      st.components.push({ id: 'MM0', type: 'multimeter', anchor: 'a10', rot: 0, props: { mode: 'V' } });
       st.wires.push({ id: 'T-V5', a: 'b10', b: 'T+10', color: '#DC2626' });
       st.wires.push({ id: 'T-V6', a: 'b14', b: 'T+14', color: '#DC2626' });
       return meterReadings(st, createCPU()).voltmeters[0].volts === 0;
     })(), '');
-  // (v-e) Ampe kế nối tiếp R 220Ω + LED (Lab 1) ≈ 13.6mA (±1mA) khi RB0=1.
-  check('(v-e) ampe kế nối tiếp Lab 1, RB0=1: ≈ 13.6mA (±1mA)',
+  // (v-e) Đồng hồ đo chế độ A nối tiếp R 220Ω + LED (Lab 1) ≈ 13.6mA (±1mA) khi RB0=1.
+  check('(v-e) đồng hồ đo chế độ A nối tiếp Lab 1, RB0=1: ≈ 13.6mA (±1mA)',
     (() => {
       const cpu = createCPU(); setRB0(cpu, true);
-      const a = meterReadings(lab1WithAmmeter(), cpu).ammeters[0].amps;
+      const a = meterReadings(lab1WithMeterA(), cpu).ammeters[0].amps;
       return approx(a, 0.0136, 0.001);
     })(), '');
-  // (v-f) Ampe kế theo chân PIC: RB0=0 thì dòng 0 (LED tắt = hở mạch).
-  check('(v-f) ampe kế nối tiếp Lab 1, RB0=0: dòng 0 (LED tắt, hở mạch)',
+  // (v-f) Đồng hồ đo chế độ A theo chân PIC: RB0=0 thì dòng 0 (LED tắt = hở mạch).
+  check('(v-f) đồng hồ đo chế độ A nối tiếp Lab 1, RB0=0: dòng 0 (LED tắt, hở mạch)',
     (() => {
       const cpu = createCPU(); setRB0(cpu, false);
-      return meterReadings(lab1WithAmmeter(), cpu).ammeters[0].amps === 0;
+      return meterReadings(lab1WithMeterA(), cpu).ammeters[0].amps === 0;
     })(), '');
-  check('(v-f) RB0=0: vôn kế qua LED Lab 1 đọc 0V (anode qua R về chân 0V, cathode GND)',
+  check('(v-f) RB0=0: đồng hồ đo chế độ V qua LED Lab 1 đọc 0V (anode qua R về chân 0V, cathode GND)',
     (() => {
       const { state } = buildLabState(LABS[0]);
-      state.components.push({ id: 'VM0', type: 'voltmeter', anchor: 'g52', rot: 0, props: {} });
+      state.components.push({ id: 'MM0', type: 'multimeter', anchor: 'g52', rot: 0, props: { mode: 'V' } });
       state.wires.push({ id: 'T-V7', a: 'j56', b: 'j53', color: '#DC2626' });
       const cpu = createCPU(); setRB0(cpu, false);
       return meterReadings(state, cpu).voltmeters[0].volts === 0;
     })(), '');
-  // (v-g) Ampe kế nối tiếp chỉ R 1kΩ với PSU 5V: I = 5/1000 = 5mA.
-  check('(v-g) ampe kế + R 1kΩ + PSU 5V (T+ -> R -> AM -> T-): đúng 5mA',
+  // (v-g) Đồng hồ đo chế độ A nối tiếp chỉ R 1kΩ với PSU 5V: I = 5/1000 = 5mA.
+  check('(v-g) đồng hồ đo chế độ A + R 1kΩ + PSU 5V (T+ -> R -> AM -> T-): đúng 5mA',
     (() => {
       const st = defaultBenchState(830);
       st.components.push({ id: 'R1', type: 'resistor', anchor: 'a20', rot: 0, props: { value: 1000 } });
-      st.components.push({ id: 'AM0', type: 'ammeter', anchor: 'a30', rot: 0, props: {} });
+      st.components.push({ id: 'MM0', type: 'multimeter', anchor: 'a30', rot: 0, props: { mode: 'A' } });
       st.wires.push({ id: 'T-A1', a: 'b20', b: 'T+20', color: '#DC2626' });
       st.wires.push({ id: 'T-A2', a: 'b24', b: 'b30', color: '#DC2626' });
       st.wires.push({ id: 'T-A3', a: 'b34', b: 'T-34', color: '#0F172A' });
       const a = meterReadings(st, createCPU()).ammeters[0].amps;
       return approx(a, 0.005, 0.0002);
     })(), '');
-  // (v-h) Ampe kế hở mạch = 0; vôn kế đổi điện áp PSU (12V) đọc đúng 12V.
-  check('(v-h) ampe kế hở mạch (không nối gì) = 0',
+  // (v-h) Đồng hồ đo chế độ A hở mạch = 0; đồng hồ đo chế độ V đổi điện áp PSU (12V) đọc đúng 12V.
+  check('(v-h) đồng hồ đo chế độ A hở mạch (không nối gì) = 0',
     (() => {
       const st = defaultBenchState(830);
-      st.components.push({ id: 'AM0', type: 'ammeter', anchor: 'a30', rot: 0, props: {} });
+      st.components.push({ id: 'MM0', type: 'multimeter', anchor: 'a30', rot: 0, props: { mode: 'A' } });
       return meterReadings(st, createCPU()).ammeters[0].amps === 0;
     })(), '');
-  check('(v-h) PSU 12V: vôn kế qua PSU đọc 12V; ampe kế + R 1kΩ đọc 12mA',
+  check('(v-h) PSU 12V: đồng hồ đo chế độ V qua PSU đọc 12V; đồng hồ đo chế độ A + R 1kΩ đọc 12mA',
     (() => {
       const st = defaultBenchState(830);
       st.components.find((c) => c.type === 'psu').props.volts = 12;
-      st.components.push({ id: 'VM0', type: 'voltmeter', anchor: 'a10', rot: 0, props: {} });
+      st.components.push({ id: 'MM0', type: 'multimeter', anchor: 'a10', rot: 0, props: { mode: 'V' } });
       st.wires.push({ id: 'T-V8', a: 'b10', b: 'T+10', color: '#DC2626' });
       st.wires.push({ id: 'T-V9', a: 'b14', b: 'T-10', color: '#0F172A' });
       st.components.push({ id: 'R1', type: 'resistor', anchor: 'a20', rot: 0, props: { value: 1000 } });
-      st.components.push({ id: 'AM0', type: 'ammeter', anchor: 'a30', rot: 0, props: {} });
+      st.components.push({ id: 'MM1', type: 'multimeter', anchor: 'a30', rot: 0, props: { mode: 'A' } });
       st.wires.push({ id: 'T-A4', a: 'b20', b: 'T+20', color: '#DC2626' });
       st.wires.push({ id: 'T-A5', a: 'b24', b: 'b30', color: '#DC2626' });
       st.wires.push({ id: 'T-A6', a: 'b34', b: 'T-34', color: '#0F172A' });
@@ -2623,17 +2627,17 @@ const SLEEP_PROG = `    ORG 0
         && solveLinear([[1, 1], [1, 1]], [2, 2]) === null
         && JSON.stringify(solveLinear([], [])) === '[]';
     })(), '');
-  check('(v-i) điện trở + ampe kế rời (không nối nguồn nào): solve ok, node của chúng floating, dòng 0',
+  check('(v-i) điện trở + đồng hồ đo chế độ A rời (không nối nguồn nào): solve ok, node của chúng floating, dòng 0',
     (() => {
       const st = defaultBenchState(830);
       st.components.push({ id: 'R1', type: 'resistor', anchor: 'a20', rot: 0, props: { value: 1000 } });
-      st.components.push({ id: 'AM0', type: 'ammeter', anchor: 'a30', rot: 0, props: {} });
+      st.components.push({ id: 'MM0', type: 'multimeter', anchor: 'a30', rot: 0, props: { mode: 'A' } });
       const { ok, nodeVoltage, branchCurrent, nets } = solveCircuit(st, createCPU());
       return ok === true
         && nodeVoltage.get(nets.nodeOfTerm('R1', 'L1')) === null
-        && nodeVoltage.get(nets.nodeOfTerm('AM0', 'A')) === null
+        && nodeVoltage.get(nets.nodeOfTerm('MM0', 'P')) === null
         && branchCurrent.get('R1') === 0
-        && branchCurrent.get('AM0') === 0;
+        && branchCurrent.get('MM0') === 0;
     })(), '');
   // (v-j) Hằng số mô hình LED/PIC đúng như nhiệm vụ.
   check('(v-j) LED_FORWARD_VOLTS = 2.0, LED_SERIES_OHMS = 10, PIC_OUTPUT_VOLTS = 5',
@@ -2641,7 +2645,7 @@ const SLEEP_PROG = `    ORG 0
 }
 
 // Nhóm (w): định dạng số đo cho màn hình 3D + Inspector (giai đoạn 2),
-// và điện áp từng chân vôn kế (vP/vN) trong meterReadings.
+// và điện áp từng chân đồng hồ đo chế độ V (vP/vN) trong meterReadings.
 {
   check('(w-a) formatVolts: null -> "—", 5 -> "5.00 V", 0 -> "0.00 V", -2.5 -> "-2.50 V", Infinity -> "OL"',
     formatVolts(null) === '—' && formatVolts(5) === '5.00 V' && formatVolts(0) === '0.00 V'
@@ -2650,23 +2654,23 @@ const SLEEP_PROG = `    ORG 0
     formatAmps(0.01304) === '13.0 mA' && formatAmps(0) === '0.0 mA' && formatAmps(1.2) === '1.20 A'
     && formatAmps(1) === '1.00 A' && formatAmps(-0.5) === '-500.0 mA'
     && formatAmps(Infinity) === 'OL' && formatAmps(null) === '—', '');
-  check('(w-c) formatCurrentDirection: 0.013 -> "A → B", -0.013 -> "B → A", 0 -> "Không có dòng", Infinity -> "OL", null -> "—"',
-    formatCurrentDirection(0.013) === 'A → B' && formatCurrentDirection(-0.013) === 'B → A'
+  check('(w-c) formatCurrentDirection: 0.013 -> "P → N", -0.013 -> "N → P", 0 -> "Không có dòng", Infinity -> "OL", null -> "—"',
+    formatCurrentDirection(0.013) === 'P → N' && formatCurrentDirection(-0.013) === 'N → P'
     && formatCurrentDirection(0) === 'Không có dòng' && formatCurrentDirection(Infinity) === 'OL'
     && formatCurrentDirection(null) === '—', '');
-  check('(w-d) meterReadings vôn kế qua PSU: vP = 5, vN = 0, volts = 5',
+  check('(w-d) meterReadings đồng hồ đo chế độ V qua PSU: vP = 5, vN = 0, volts = 5',
     (() => {
       const st = defaultBenchState(830);
-      st.components.push({ id: 'VM0', type: 'voltmeter', anchor: 'a10', rot: 0, props: {} });
+      st.components.push({ id: 'MM0', type: 'multimeter', anchor: 'a10', rot: 0, props: { mode: 'V' } });
       st.wires.push({ id: 'T-W1', a: 'b10', b: 'T+10', color: '#DC2626' });
       st.wires.push({ id: 'T-W2', a: 'b14', b: 'T-10', color: '#0F172A' });
       const r = meterReadings(st, createCPU()).voltmeters[0];
       return r.volts === 5 && r.vP === 5 && r.vN === 0;
     })(), '');
-  check('(w-e) meterReadings vôn kế Lab 1 qua R (RB0=1): vP ≈ 5V, vN ≈ 2.13V, volts ≈ 2.87V',
+  check('(w-e) meterReadings đồng hồ đo chế độ V Lab 1 qua R (RB0=1): vP ≈ 5V, vN ≈ 2.13V, volts ≈ 2.87V',
     (() => {
       const { state } = buildLabState(LABS[0]);
-      state.components.push({ id: 'VM0', type: 'voltmeter', anchor: 'g45', rot: 0, props: {} });
+      state.components.push({ id: 'MM0', type: 'multimeter', anchor: 'g45', rot: 0, props: { mode: 'V' } });
       const cpu = createCPU();
       cpu.writeFile(0x03, 0x20); cpu.writeFile(0x06, 0x00);
       cpu.writeFile(0x03, 0x00); cpu.writeFile(0x06, 0x01);
@@ -2674,19 +2678,19 @@ const SLEEP_PROG = `    ORG 0
       const approx = (v, t, tol) => typeof v === 'number' && Math.abs(v - t) <= tol;
       return approx(r.vP, 5, 0.05) && approx(r.vN, 2.13, 0.2) && approx(r.volts, 2.87, 0.2);
     })(), '');
-  check('(w-f) meterReadings vôn kế 1 chân floating: vP = 5, vN = null, volts = null',
+  check('(w-f) meterReadings đồng hồ đo chế độ V 1 chân floating: vP = 5, vN = null, volts = null',
     (() => {
       const st = defaultBenchState(830);
-      st.components.push({ id: 'VM0', type: 'voltmeter', anchor: 'a10', rot: 0, props: {} });
+      st.components.push({ id: 'MM0', type: 'multimeter', anchor: 'a10', rot: 0, props: { mode: 'V' } });
       st.wires.push({ id: 'T-W3', a: 'b10', b: 'T+10', color: '#DC2626' });
       const r = meterReadings(st, createCPU()).voltmeters[0];
       return r.vP === 5 && r.vN === null && r.volts === null;
     })(), '');
-  check('(w-g) ampe kế đấu tắt trực tiếp qua PSU: dòng Infinity (hiển thị OL), vôn kế qua PSU cùng lúc vẫn đọc 5V (PSU không bị loại)',
+  check('(w-g) đồng hồ đo chế độ A đấu tắt trực tiếp qua PSU: dòng Infinity (hiển thị OL), đồng hồ đo chế độ V qua PSU cùng lúc vẫn đọc 5V (PSU không bị loại)',
     (() => {
       const st = defaultBenchState(830);
-      st.components.push({ id: 'AM0', type: 'ammeter', anchor: 'a10', rot: 0, props: {} });
-      st.components.push({ id: 'VM0', type: 'voltmeter', anchor: 'a20', rot: 0, props: {} });
+      st.components.push({ id: 'MM0', type: 'multimeter', anchor: 'a10', rot: 0, props: { mode: 'A' } });
+      st.components.push({ id: 'MM1', type: 'multimeter', anchor: 'a20', rot: 0, props: { mode: 'V' } });
       st.wires.push({ id: 'T-W4', a: 'b10', b: 'T+10', color: '#DC2626' });
       st.wires.push({ id: 'T-W5', a: 'b14', b: 'T-10', color: '#0F172A' });
       st.wires.push({ id: 'T-W6', a: 'b20', b: 'T+20', color: '#DC2626' });
@@ -3036,33 +3040,38 @@ WAIT_EE
 }
 
 // ===========================================================================
-// (y) LAB 2 "ĐIỀU KHIỂN LED + LCD" (round 25/11): LED xanh lá nối RB1 qua
-// điện trở 220Ω, cathode về GND; LCD 16x2 chế độ 8-bit (RS=RE0, E=RE1,
-// D0–D7=RD0–RD7). LCD neo a54 (ngoài cột chip 22–41 để khỏi chung strip
-// với chân PIC); dây LCD cắm vào lỗ kề cùng đoạn strip như Lab 1.
-// Lưu ý: RD4–RD7 là chân 27–30 (h35/h34/h33/h32), KHÔNG phải chân 23–26
+// (y) LAB 2 "ĐIỀU KHIỂN LED + LCD" (round 25/11, đổi sang board 100×20):
+// LED xanh lá nối RB1 qua điện trở 220Ω, cathode về GND; LCD 16x2 chế độ
+// 8-bit (RS=RE0, E=RE1, D0–D7=RD0–RD7). Board 100 cột × 20 hàng: PIC ở
+// giữa (neo g41), LCD góc trên phải (neo a77), R+LED góc dưới giữa
+// (R neo s45, LED neo s52) — thân LCD không đè lên linh kiện khác,
+// điện trở nhìn thấy được. Dây LCD cắm vào lỗ kề cùng đoạn strip như Lab 1.
+// Lưu ý: RD4–RD7 là chân 27–30 (m54/m53/m52/m51), KHÔNG phải chân 23–26
 // (đó là RC4–RC7) — đã kiểm chứng bằng picLegsForAnchor.
 // ===========================================================================
 // (y-a) Lab 2 đủ dữ liệu: 1 điện trở 220Ω + 1 LED xanh lá + 1 LCD + 13 dây
+// Board lớn 100 cột × 20 hàng (custom {cols:100, rows:20, rails:true}):
+// PIC ở giữa (neo g41), LCD góc trên phải (neo a77), R+LED góc dưới giữa.
 {
   const lab = LABS[1];
-  check('(y-a) Lab 2: Điều khiển LED + LCD, board 830, desc liệt kê đủ bảng đấu nối',
-    lab && lab.id === 'led-lcd' && lab.title === 'Điều khiển LED + LCD' && lab.size === 830
+  check('(y-a) Lab 2: Điều khiển LED + LCD, board 100×20, desc liệt kê đủ bảng đấu nối',
+    lab && lab.id === 'led-lcd' && lab.title === 'Điều khiển LED + LCD'
+    && lab.size && lab.size.cols === 100 && lab.size.rows === 20 && lab.size.rails === true
     && lab.desc.includes('RS→RE0') && lab.desc.includes('D7→RD7') && lab.desc.includes('RB1'),
     lab ? lab.id : 'thieu LABS[1]');
-  check('(y-a) Lab 2 có đúng 1 điện trở 220Ω (R1 @i45) + 1 LED xanh lá (LED1 @i52) + 1 LCD (LCD1 @a54)',
+  check('(y-a) Lab 2 có đúng 1 điện trở 220Ω (R1 @s45) + 1 LED xanh lá (LED1 @s52) + 1 LCD (LCD1 @a77)',
     lab.components.length === 3
-    && lab.components[0].id === 'R1' && lab.components[0].type === 'resistor' && lab.components[0].anchor === 'i45' && lab.components[0].props.value === 220
-    && lab.components[1].id === 'LED1' && lab.components[1].type === 'led' && lab.components[1].anchor === 'i52' && lab.components[1].props.color === '#16A34A'
-    && lab.components[2].id === 'LCD1' && lab.components[2].type === 'lcd' && lab.components[2].anchor === 'a54',
+    && lab.components[0].id === 'R1' && lab.components[0].type === 'resistor' && lab.components[0].anchor === 's45' && lab.components[0].props.value === 220
+    && lab.components[1].id === 'LED1' && lab.components[1].type === 'led' && lab.components[1].anchor === 's52' && lab.components[1].props.color === '#16A34A'
+    && lab.components[2].id === 'LCD1' && lab.components[2].type === 'lcd' && lab.components[2].anchor === 'a77',
     JSON.stringify(lab.components));
   check('(y-a) Lab 2 có đúng 13 dây: 3 dây LED (RB1->R, R->anode, cathode->GND) + 10 dây LCD (RS/E/D0–D7)',
     lab.wires.length === 13
-    && lab.wires[0].a === 'i28' && lab.wires[0].b === 'j45'
-    && lab.wires[1].a === 'j49' && lab.wires[1].b === 'j52'
-    && lab.wires[2].a === 'j53' && lab.wires[2].b === 'B-50'
-    && lab.wires[3].a === 'b54' && lab.wires[3].b === 'a29'
-    && lab.wires[12].a === 'b63' && lab.wires[12].b === 'i32',
+    && lab.wires[0].a === 'n47' && lab.wires[0].b === 't45'
+    && lab.wires[1].a === 't49' && lab.wires[1].b === 't52'
+    && lab.wires[2].a === 't53' && lab.wires[2].b === 'B-53'
+    && lab.wires[3].a === 'b77' && lab.wires[3].b === 'f48'
+    && lab.wires[12].a === 'b86' && lab.wires[12].b === 'k51',
     JSON.stringify(lab.wires.map((w) => w.a + '->' + w.b)));
 }
 // (y-b) buildLabState cho ra state hợp lệ + không đầu dây nào trùng lỗ chân linh kiện
@@ -3074,18 +3083,18 @@ WAIT_EE
     r.ok ? JSON.stringify({ comps: r.state.components.map((c) => c.id), wires: r.state.wires.map((w) => w.id) }) : r.reason);
   check('(y-b) không đầu dây lab nào cắm trùng lỗ chân linh kiện (chip/R1/LED1/LCD1)',
     r.ok && (() => {
-      const legHoles = new Set(r.state.components.flatMap((c) => legsFor(c, 830).map((l) => l.hole).filter(Boolean)));
-      return LABS[1].wires.every((w) => [w.a, w.b].every((e) => !parseHole(e, 830) || !legHoles.has(e)));
+      const legHoles = new Set(r.state.components.flatMap((c) => legsFor(c, LABS[1].size).map((l) => l.hole).filter(Boolean)));
+      return LABS[1].wires.every((w) => [w.a, w.b].every((e) => !parseHole(e, LABS[1].size) || !legHoles.has(e)));
     })(), '');
   check('(y-b) mỗi dây LCD: đầu A cùng strip với chân LCD, đầu B cùng strip với chân PIC tương ứng',
     r.ok && (() => {
       const pins = { RS: 'RE0', E: 'RE1', D0: 'RD0', D1: 'RD1', D2: 'RD2', D3: 'RD3', D4: 'RD4', D5: 'RD5', D6: 'RD6', D7: 'RD7' };
-      const lcdLegs = Object.fromEntries(legsFor({ type: 'lcd', anchor: 'a54', rot: 0 }, 830).map((l) => [l.term, l.hole]));
-      const picLeg = Object.fromEntries(picLegsForAnchor({ r: 1, c: 22 }, 830).map((l) => [l.term.slice(4), l.hole]));
+      const lcdLegs = Object.fromEntries(legsFor({ type: 'lcd', anchor: 'a77', rot: 0 }, LABS[1].size).map((l) => [l.term, l.hole]));
+      const picLeg = Object.fromEntries(picLegsForAnchor({ r: 6, c: 41 }, LABS[1].size).map((l) => [l.term.slice(4), l.hole]));
       return LABS[1].wires.slice(3).every((w, i) => {
         const term = ['RS', 'E', 'D0', 'D1', 'D2', 'D3', 'D4', 'D5', 'D6', 'D7'][i];
-        return stripKey(w.a, 830) === stripKey(lcdLegs[term], 830)
-          && stripKey(w.b, 830) === stripKey(picLeg[pins[term]], 830);
+        return stripKey(w.a, LABS[1].size) === stripKey(lcdLegs[term], LABS[1].size)
+          && stripKey(w.b, LABS[1].size) === stripKey(picLeg[pins[term]], LABS[1].size);
       });
     })(), '');
 }
@@ -3225,6 +3234,162 @@ D1: DECFSZ CNT,F
   }
   check('(y-e) chương trình mẫu: LED1 nhấp nháy theo RB1 (thấy cả SÁNG lẫn TẮT)',
     seenOn && seenOff, `on=${seenOn} off=${seenOff}`);
+}
+
+// (y-f) Board lớn 100×20: linh kiện cách xa nhau, thân LCD không đè lên
+// linh kiện khác, không linh kiện nào thò ra ngoài mép board.
+// Hộp bao (x,z) theo đúng kích thước 3D trong bench.js: LCD BoxGeometry
+// (80,8,36) tâm local (11.43,9,18); PIC rộng 20 cột, sâu picBodyDepth
+// (lề 1.5mm mỗi bên); R thân trụ ngang dài 7mm tâm local x=5.08;
+// LED thân trụ đứng bán kính 2.6 tâm local x=1.27.
+{
+  const SIZE = LABS[1].size;
+  const bs = boardSize(SIZE);
+  check('(y-f) Lab 2 dùng board custom 100 cột × 20 hàng, có rail (2400 lỗ)',
+    bs.id === 'custom' && bs.cols === 100 && bs.rows === 20 && bs.railCols === 100,
+    JSON.stringify(bs));
+  const hp = (hole) => holePos(hole, SIZE);
+  const lcdA = hp('a77');
+  const lcdBox = { x0: lcdA.x - 28.57, x1: lcdA.x + 51.43, z0: lcdA.z, z1: lcdA.z + 36 };
+  const picT = hp('g41'), picB = hp('m41');
+  const picBox = { x0: picT.x - 1.27, x1: picT.x + 19 * PITCH + 1.27, z0: picT.z - 1.5, z1: picB.z + 1.5 };
+  const rA = hp('s45');
+  const rBox = { x0: rA.x + 1.58, x1: rA.x + 8.58, z0: rA.z - 1.15, z1: rA.z + 1.15 };
+  const ledA = hp('s52');
+  const ledBox = { x0: ledA.x + 1.27 - 2.6, x1: ledA.x + 1.27 + 2.6, z0: ledA.z - 2.6, z1: ledA.z + 2.6 };
+  const overlap = (a, b) => a.x0 < b.x1 && b.x0 < a.x1 && a.z0 < b.z1 && b.z0 < a.z1;
+  check('(y-f) thân LCD KHÔNG đè lên chip PIC / điện trở / LED (điện trở nhìn thấy được)',
+    !overlap(lcdBox, picBox) && !overlap(lcdBox, rBox) && !overlap(lcdBox, ledBox),
+    JSON.stringify({ lcdBox, picBox, rBox, ledBox }));
+  check('(y-f) chip PIC KHÔNG đè lên điện trở / LED',
+    !overlap(picBox, rBox) && !overlap(picBox, ledBox), '');
+  const gapCols = (xA1, xB0) => Math.floor((xB0 - xA1) / PITCH);
+  check('(y-f) khe hở PIC -> LCD >= 5 cột, LED -> LCD >= 5 cột (dễ nhìn)',
+    gapCols(picBox.x1, lcdBox.x0) >= 5 && gapCols(ledBox.x1, lcdBox.x0) >= 5,
+    `PIC->LCD ${gapCols(picBox.x1, lcdBox.x0)} cột, LED->LCD ${gapCols(ledBox.x1, lcdBox.x0)} cột`);
+  const bx0 = hp('a1').x, bx1 = hp('a100').x, bz = bodyDepth(SIZE) / 2;
+  const inside = (b) => b.x0 >= bx0 && b.x1 <= bx1 && b.z0 >= -bz && b.z1 <= bz;
+  check('(y-f) không linh kiện nào thò ra ngoài mép board (LCD/PIC/R/LED)',
+    inside(lcdBox) && inside(picBox) && inside(rBox) && inside(ledBox),
+    `board x ${bx0.toFixed(1)}..${bx1.toFixed(1)} z ±${bz.toFixed(1)}; LCD ${JSON.stringify(lcdBox)}`);
+}
+
+// Nhóm (z): gộp vôn kế + ampe kế thành 1 linh kiện "Đồng hồ đo"
+// (multimeter) — đổi chế độ V/A trong popup Inspector, migration
+// state cũ (voltmeter/ammeter) sang multimeter giữ nguyên id.
+{
+  const approx = (v, target, tol) => typeof v === 'number' && Number.isFinite(v) && Math.abs(v - target) <= tol;
+  // Mạch dùng chung: PSU 5V -> R 1kΩ -> đồng hồ đo -> T- (nối tiếp).
+  const seriesState = (mode) => {
+    const st = defaultBenchState(830);
+    st.components.push({ id: 'R1', type: 'resistor', anchor: 'a20', rot: 0, props: { value: 1000 } });
+    st.components.push({ id: 'MM0', type: 'multimeter', anchor: 'a30', rot: 0, props: { mode } });
+    st.wires.push({ id: 'T-Z1', a: 'b20', b: 'T+20', color: '#DC2626' });
+    st.wires.push({ id: 'T-Z2', a: 'b24', b: 'b30', color: '#DC2626' });
+    st.wires.push({ id: 'T-Z3', a: 'b34', b: 'T-34', color: '#0F172A' });
+    return st;
+  };
+  // (z-a) Cùng 1 mạch nối tiếp R 1kΩ: mode V đọc 5V (hở mạch nên không
+  // sụt áp qua R: vP=5, vN=0), mode A đọc 5mA; mỗi mode chỉ xuất hiện
+  // trong đúng 1 danh sách, kèm trường mode.
+  check('(z-a) cùng mạch nối tiếp R 1kΩ: mode V đọc 5V (vP=5, vN=0), mode A đọc 5mA; entry có trường mode',
+    (() => {
+      const rV = meterReadings(seriesState('V'), createCPU());
+      const rA = meterReadings(seriesState('A'), createCPU());
+      return rV.voltmeters.length === 1 && rV.voltmeters[0].volts === 5 && rV.voltmeters[0].vP === 5 && rV.voltmeters[0].vN === 0
+        && rV.voltmeters[0].mode === 'V' && rV.ammeters.length === 0
+        && rA.ammeters.length === 1 && approx(rA.ammeters[0].amps, 0.005, 0.0002) && rA.ammeters[0].mode === 'A'
+        && rA.voltmeters.length === 0;
+    })(), '');
+  // (z-b) Đổi mode V->A trên cùng 1 state (như bấm nút trong popup):
+  // 2 LED ở 2 strip tách net (V) rồi chung net (A); đổi lại A->V thì
+  // tách ra. Không cần đặt lại linh kiện.
+  check('(z-b) đổi mode V->A trên cùng 1 state: 2 LED tách net (V) rồi chung net (A); đổi lại A->V thì tách ra',
+    (() => {
+      const st = defaultBenchState(830);
+      st.components.push({ id: 'MM0', type: 'multimeter', anchor: 'a10', rot: 0, props: { mode: 'V' } });
+      st.components.push({ id: 'LED0', type: 'led', anchor: 'c10', rot: 0, props: { color: '#DC2626' } });
+      st.components.push({ id: 'LED1', type: 'led', anchor: 'c14', rot: 0, props: { color: '#DC2626' } });
+      const mm = st.components.find((c) => c.id === 'MM0');
+      const sepV = buildBenchNets(st).termRoot.get('LED0.A') !== buildBenchNets(st).termRoot.get('LED1.A');
+      mm.props.mode = 'A';
+      const joinA = buildBenchNets(st).termRoot.get('LED0.A') === buildBenchNets(st).termRoot.get('LED1.A');
+      const ampsA = meterReadings(st, createCPU()).ammeters.length === 1;
+      mm.props.mode = 'V';
+      const sepV2 = buildBenchNets(st).termRoot.get('LED0.A') !== buildBenchNets(st).termRoot.get('LED1.A');
+      return sepV && joinA && ampsA && sepV2;
+    })(), '');
+  // (z-c) sanitizeState: voltmeter VM0 -> multimeter mode V (giữ id VM0),
+  // ammeter AM0 -> multimeter mode A (giữ id AM0); không còn type cũ.
+  check('(z-c) sanitizeState: VM0 cũ -> multimeter mode V (giữ id), AM0 cũ -> multimeter mode A (giữ id), không còn type cũ',
+    (() => {
+      const raw = defaultBenchState(830);
+      raw.components.push({ id: 'VM0', type: 'voltmeter', anchor: 'a10', rot: 0, props: {} });
+      raw.components.push({ id: 'AM0', type: 'ammeter', anchor: 'a30', rot: 0, props: {} });
+      const s = sanitizeState(raw);
+      const vm = s.components.find((c) => c.id === 'VM0');
+      const am = s.components.find((c) => c.id === 'AM0');
+      return vm && vm.type === 'multimeter' && vm.props.mode === 'V' && vm.anchor === 'a10'
+        && am && am.type === 'multimeter' && am.props.mode === 'A' && am.anchor === 'a30'
+        && JSON.stringify(legsFor(vm, 830)) === JSON.stringify([{ term: 'P', hole: 'a10' }, { term: 'N', hole: 'a14' }])
+        && JSON.stringify(legsFor(am, 830)) === JSON.stringify([{ term: 'P', hole: 'a30' }, { term: 'N', hole: 'a34' }])
+        && !s.components.some((c) => c.type === 'voltmeter' || c.type === 'ammeter');
+    })(), '');
+  // (z-d) Sau migration, đồng hồ cũ vẫn đo đúng: VM0 cũ (mode V) qua PSU
+  // đọc 5V; AM0 cũ (mode A) nối tiếp R 1kΩ đọc 5mA.
+  check('(z-d) sau migration: VM0 cũ (mode V) qua PSU đọc 5V; AM0 cũ (mode A) nối tiếp R 1kΩ đọc 5mA',
+    (() => {
+      const raw = defaultBenchState(830);
+      raw.components.push({ id: 'VM0', type: 'voltmeter', anchor: 'a10', rot: 0, props: {} });
+      raw.components.push({ id: 'R1', type: 'resistor', anchor: 'a20', rot: 0, props: { value: 1000 } });
+      raw.components.push({ id: 'AM0', type: 'ammeter', anchor: 'a30', rot: 0, props: {} });
+      raw.wires.push({ id: 'T-Z4', a: 'b10', b: 'T+10', color: '#DC2626' });
+      raw.wires.push({ id: 'T-Z5', a: 'b14', b: 'T-10', color: '#0F172A' });
+      raw.wires.push({ id: 'T-Z6', a: 'b20', b: 'T+20', color: '#DC2626' });
+      raw.wires.push({ id: 'T-Z7', a: 'b24', b: 'b30', color: '#DC2626' });
+      raw.wires.push({ id: 'T-Z8', a: 'b34', b: 'T-34', color: '#0F172A' });
+      const s = sanitizeState(raw);
+      const r = meterReadings(s, createCPU());
+      return r.voltmeters.length === 1 && r.voltmeters[0].id === 'VM0' && r.voltmeters[0].volts === 5
+        && r.ammeters.length === 1 && r.ammeters[0].id === 'AM0' && approx(r.ammeters[0].amps, 0.005, 0.0002);
+    })(), '');
+  // (z-e) pruneStateForSize cũng migrate đồng hồ cũ (đổi size board).
+  check('(z-e) pruneStateForSize: VM0/AM0 cũ -> multimeter đúng mode (V/A), giữ id',
+    (() => {
+      const st = defaultBenchState(830);
+      st.components.push({ id: 'VM0', type: 'voltmeter', anchor: 'a10', rot: 0, props: {} });
+      st.components.push({ id: 'AM0', type: 'ammeter', anchor: 'a30', rot: 0, props: {} });
+      const { state } = pruneStateForSize(st, 830);
+      const vm = state.components.find((c) => c.id === 'VM0');
+      const am = state.components.find((c) => c.id === 'AM0');
+      return vm && vm.type === 'multimeter' && vm.props.mode === 'V'
+        && am && am.type === 'multimeter' && am.props.mode === 'A';
+    })(), '');
+  // (z-f) defaultProps(multimeter) = {mode:'V'}; đặt 2 đồng hồ mới -> MM0 rồi MM1.
+  check('(z-f) defaultProps(multimeter) = {mode:"V"}; đặt 2 đồng hồ mới -> MM0 rồi MM1',
+    (() => {
+      const st = defaultBenchState(830);
+      const id1 = nextComponentId(st, 'multimeter');
+      st.components.push({ id: id1, type: 'multimeter', anchor: 'a10', rot: 0, props: defaultProps('multimeter') });
+      const id2 = nextComponentId(st, 'multimeter');
+      return JSON.stringify(defaultProps('multimeter')) === JSON.stringify({ mode: 'V' })
+        && id1 === 'MM0' && id2 === 'MM1';
+    })(), '');
+  // (z-g) Đồng hồ đo chế độ A đấu tắt qua PSU vẫn OL (không làm mất nguồn);
+  // đổi sang mode V thì đọc 5V như vôn kế.
+  check('(z-g) đồng hồ đấu tắt qua PSU: mode A -> OL; đổi sang mode V -> đọc 5V',
+    (() => {
+      const st = defaultBenchState(830);
+      st.components.push({ id: 'MM0', type: 'multimeter', anchor: 'a10', rot: 0, props: { mode: 'A' } });
+      st.wires.push({ id: 'T-Z9', a: 'b10', b: 'T+10', color: '#DC2626' });
+      st.wires.push({ id: 'T-Z10', a: 'b14', b: 'T-10', color: '#0F172A' });
+      const rA = meterReadings(st, createCPU());
+      const mm = st.components.find((c) => c.id === 'MM0');
+      mm.props.mode = 'V';
+      const rV = meterReadings(st, createCPU());
+      return rA.ammeters.length === 1 && rA.ammeters[0].amps === Infinity
+        && rV.voltmeters.length === 1 && rV.voltmeters[0].volts === 5;
+    })(), '');
 }
 
 console.log(`\nKết quả: ${pass} pass, ${fail} fail`);

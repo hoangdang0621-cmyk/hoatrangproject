@@ -326,13 +326,19 @@ export const LEG_LAYOUTS = {
     { term: 'D6', dc: 8, dr: 0 }, { term: 'D7', dc: 9, dr: 0 },
   ],
   buzzer: [{ term: 'P', dc: 0, dr: 0 }, { term: 'N', dc: 1, dr: 0 }],
-  // Vôn kế: 2 chân P (+) và N (−), cách nhau 4 cột như điện trở.
-  // Trở kháng vô cùng: không nối 2 strip, không ảnh hưởng mạch.
-  voltmeter: [{ term: 'P', dc: 0, dr: 0 }, { term: 'N', dc: 4, dr: 0 }],
-  // Ampe kế: 2 chân A (vào) và B (ra), cách nhau 4 cột như điện trở.
-  // 0Ω: nối 2 strip như 1 dây (xem buildBenchNets), dòng đo từ A sang B.
-  ammeter: [{ term: 'A', dc: 0, dr: 0 }, { term: 'B', dc: 4, dr: 0 }],
+  // Đồng hồ đo (multimeter): 2 chân P (+) và N (−), cách nhau 4 cột như
+  // điện trở. Mode 'V' (đo áp): trở kháng vô cùng, không nối 2 strip.
+  // Mode 'A' (đo dòng): 0Ω, nối 2 strip như dây (xem buildBenchNets),
+  // dòng đo từ P sang N. Mode nằm trong props.mode ('V' mặc định).
+  multimeter: [{ term: 'P', dc: 0, dr: 0 }, { term: 'N', dc: 4, dr: 0 }],
 };
+
+// Chế độ của đồng hồ đo: 'A' (đo dòng) hoặc 'V' (đo áp, mặc định khi
+// props.mode thiếu/sai). Dùng chung cho buildBenchNets, solver, bench.js
+// để 3 chỗ không lệch nhau khi đổi mode trong popup Inspector.
+export function meterMode(comp) {
+  return comp && comp.props && comp.props.mode === 'A' ? 'A' : 'V';
+}
 
 // Chân chip PIC16F877A DIP-40 (rộng 600 mil = 6 bước lỗ): chân 1..20 ở hàng
 // chân trên, chân 21..40 ở hàng chân dưới (picRows: đối xứng qua tâm chip,
@@ -515,18 +521,19 @@ export function buildBenchNets(state, pressedIds = []) {
     }
     if (comp.type === 'psu') continue;
     const legs = legsFor(comp, size);
-    // Điện trở nối 2 strip của nó (như 1 dây). Ampe kế cũng vậy (0Ω,
-    // dòng chạy qua như dây) nhưng KHÔNG tính là điện trở hạn dòng cho
-    // LED (không vào resistorStrips) — LED chỉ có ampe kế vẫn bị cảnh
-    // báo thiếu điện trở. Vôn kế lý tưởng (trở kháng vô cùng): không nối
-    // 2 strip, không thêm terminal vào netlist.
-    if (comp.type === 'resistor' || comp.type === 'ammeter') {
+    // Điện trở nối 2 strip của nó (như 1 dây). Đồng hồ đo ở chế độ A
+    // cũng vậy (0Ω, dòng chạy qua như dây) nhưng KHÔNG tính là điện trở
+    // hạn dòng cho LED (không vào resistorStrips) — LED chỉ có đồng hồ
+    // đo dòng vẫn bị cảnh báo thiếu điện trở. Đồng hồ ở chế độ V
+    // (trở kháng vô cùng): không nối 2 strip, không thêm terminal vào
+    // netlist.
+    if (comp.type === 'resistor' || (comp.type === 'multimeter' && meterMode(comp) === 'A')) {
       const keys = legs.map((l) => (l.hole ? stripKey(l.hole, size) : null)).filter(Boolean);
       keys.forEach((k) => { ensure(k); if (comp.type === 'resistor') resistorStrips.add(k); });
       for (let i = 1; i < keys.length; i++) union(keys[0], keys[i]);
       continue;
     }
-    if (comp.type === 'voltmeter') continue;
+    if (comp.type === 'multimeter') continue;
     for (const leg of legs) {
       const key = leg.hole ? stripKey(leg.hole, size) : null;
       if (!key) continue;
@@ -659,7 +666,7 @@ export function normalizeWireEnd(state, e) {
   return e;
 }
 
-const KIND_LABEL = { led: 'LED', button: 'Nút', pot: 'Chiết áp', lcd: 'LCD', buzzer: 'Còi', voltmeter: 'Vôn kế', ammeter: 'Ampe kế' };
+const KIND_LABEL = { led: 'LED', button: 'Nút', pot: 'Chiết áp', lcd: 'LCD', buzzer: 'Còi', multimeter: 'Đồng hồ đo' };
 export function compLabel(comp) {
   const n = comp.id.replace(/^[A-Z]+/, '');
   if (comp.type === 'pic') return 'PIC16F877A';
@@ -672,11 +679,11 @@ export function benchToNetlist(state, pressedIds = []) {
   const { groups, termRoot, resistorRoots, find } = buildBenchNets(state, pressedIds);
   const components = [];
   for (const comp of state.components) {
-    // Vôn kế/ampe kế không phải ngoại vi cho CPU nên không đưa vào
-    // netlist (tránh componentTerminals trong wiring.js thiếu định nghĩa
-    // cho 2 loại này). Ampe kế vẫn nối mạch qua buildBenchNets (nối 2
-    // strip như dây); vôn kế không nối gì.
-    if (comp.type === 'pic' || comp.type === 'psu' || comp.type === 'resistor' || comp.type === 'voltmeter' || comp.type === 'ammeter') continue;
+    // Đồng hồ đo không phải ngoại vi cho CPU nên không đưa vào netlist
+    // (tránh componentTerminals trong wiring.js thiếu định nghĩa cho
+    // loại này). Đồng hồ ở chế độ A vẫn nối mạch qua buildBenchNets
+    // (nối 2 strip như dây); chế độ V không nối gì.
+    if (comp.type === 'pic' || comp.type === 'psu' || comp.type === 'resistor' || comp.type === 'multimeter') continue;
     const c = {
       id: comp.id, kind: comp.type, label: compLabel(comp),
       x: 0, y: 0, fixed: !!comp.fixed,
@@ -719,7 +726,7 @@ export function benchToNetlist(state, pressedIds = []) {
 // ---------------------------------------------------------------------------
 // Id linh kiện mới (khớp mẫu wiring.js: LED0, BTN0, POT0, LCD0, BUZ0, R0).
 // ---------------------------------------------------------------------------
-const ID_PREFIX = { led: 'LED', resistor: 'R', button: 'BTN', pot: 'POT', lcd: 'LCD', buzzer: 'BUZ', psu: 'PSU', voltmeter: 'VM', ammeter: 'AM' };
+const ID_PREFIX = { led: 'LED', resistor: 'R', button: 'BTN', pot: 'POT', lcd: 'LCD', buzzer: 'BUZ', psu: 'PSU', multimeter: 'MM' };
 export function nextComponentId(state, type) {
   const pre = ID_PREFIX[type] || 'C';
   let n = -1;
@@ -735,6 +742,7 @@ export function defaultProps(type) {
   if (type === 'resistor') return { value: 220 };
   if (type === 'pot') return { pct: 0 };
   if (type === 'psu') return { volts: PSU_VOLTS_DEFAULT };
+  if (type === 'multimeter') return { mode: 'V' };
   return {};
 }
 
@@ -802,11 +810,20 @@ export function sanitizeState(raw) {
       }
       continue;
     }
+    // Đồng hồ cũ (vôn kế/ampe kế) -> multimeter, GIỮ NGUYÊN id để dây
+    // và mạch đã lưu không vỡ; mode theo loại cũ (V cho vôn kế, A cho
+    // ampe kế). Phải chuyển TRƯỚC khi kiểm tra LEG_LAYOUTS (2 loại cũ
+    // không còn trong bảng nữa, không chuyển thì linh kiện bị rớt mất).
+    let type = c.type;
+    let props = c.props ? { ...c.props } : {};
+    if (type === 'voltmeter') { type = 'multimeter'; props.mode = 'V'; }
+    else if (type === 'ammeter') { type = 'multimeter'; props.mode = 'A'; }
+    if (type === 'multimeter' && props.mode !== 'A') props.mode = 'V';
     const anchor = migrate(c.anchor);
-    if (!LEG_LAYOUTS[c.type] || !parseHole(anchor, size)) continue;
-    const chk = canPlace({ size, components }, c.type, anchor, c.rot || 0);
+    if (!LEG_LAYOUTS[type] || !parseHole(anchor, size)) continue;
+    const chk = canPlace({ size, components }, type, anchor, c.rot || 0);
     if (!chk.ok) continue;
-    components.push({ id: c.id, type: c.type, anchor, rot: c.rot || 0, props: c.props || defaultProps(c.type) });
+    components.push({ id: c.id, type, anchor, rot: c.rot || 0, props: Object.keys(props).length ? props : defaultProps(type) });
   }
   if (!components.some((c) => c.type === 'pic')) {
     components.unshift({ id: 'PIC1', type: 'pic', anchor: picAnchor(size), rot: 0, fixed: true, props: {} });
@@ -877,10 +894,18 @@ export function pruneStateForSize(state, newSize) {
       }
       continue;
     }
-    if (!LEG_LAYOUTS[comp.type] || !parseHole(comp.anchor, size)) { removed.components.push(comp.id); continue; }
-    const chk = canPlace(probe, comp.type, comp.anchor, comp.rot || 0);
+    // Đồng hồ cũ (vôn kế/ampe kế) -> multimeter, giữ nguyên id (như
+    // sanitizeState). State trong bộ nhớ thường đã qua sanitizeState nên
+    // đây chỉ là phòng thủ khi prune được gọi trên state chưa migrate.
+    let type = comp.type;
+    let props = comp.props ? { ...comp.props } : {};
+    if (type === 'voltmeter') { type = 'multimeter'; props.mode = 'V'; }
+    else if (type === 'ammeter') { type = 'multimeter'; props.mode = 'A'; }
+    if (type === 'multimeter' && props.mode !== 'A') props.mode = 'V';
+    if (!LEG_LAYOUTS[type] || !parseHole(comp.anchor, size)) { removed.components.push(comp.id); continue; }
+    const chk = canPlace(probe, type, comp.anchor, comp.rot || 0);
     if (!chk.ok) { removed.components.push(comp.id); continue; }
-    keptComponents.push({ id: comp.id, type: comp.type, anchor: comp.anchor, rot: comp.rot || 0, props: comp.props || defaultProps(comp.type) });
+    keptComponents.push({ id: comp.id, type, anchor: comp.anchor, rot: comp.rot || 0, props: Object.keys(props).length ? props : defaultProps(type) });
   }
   const keptWires = [];
   const seen = new Set();

@@ -14,12 +14,12 @@ import {
   pruneStateForSize, validateWireEnd, retargetWireEnd, togglePlacement,
   normalizeSize, holeCount, sizeLabel, sameSize,
   psuVolts, validatePsuVolts, parsePsuPost, psuPostPos, PSU_SCALE, PSU_POST_DX, PSU_POST_Y, PSU_POST_DZ,
-  clampCamTarget, zoomTowardPoint, panTarget,
-} from './bench-model.js?v=20261125ad';
+  clampCamTarget, zoomTowardPoint, panTarget, meterMode,
+} from './bench-model.js?v=20261125al';
 import { checkWiring, SIGNAL_COLORS } from './wiring.js?v=20261125r';
 import { assemble } from './pic16.js?v=20261125ah';
-import { formatVolts, formatAmps, formatCurrentDirection } from './circuit-solver.js?v=20261125ag';
-import { LABS, getLab, buildLabState } from './labs.js?v=20261125aj';
+import { formatVolts, formatAmps, formatCurrentDirection } from './circuit-solver.js?v=20261125al';
+import { LABS, getLab, buildLabState } from './labs.js?v=20261125am';
 
 const $ = (id) => document.getElementById(id);
 const benchView = $('benchView');
@@ -144,7 +144,7 @@ function main() {
   function compIdFromWarning(w) {
     for (const id of [...(w.compIds || []), ...(w.terminalIds || [])]) {
       if (id.startsWith('PIC.')) return 'PIC1';
-      const m = id.match(/^(LED\d+|BTN\d+|POT\d+|LCD\d+|BUZ\d+|VM\d+|AM\d+)/);
+      const m = id.match(/^(LED\d+|BTN\d+|POT\d+|LCD\d+|BUZ\d+|VM\d+|AM\d+|MM\d+)/);
       if (m && state.components.some((c) => c.id === m[1])) return m[1];
     }
     return null;
@@ -154,8 +154,7 @@ function main() {
   const PALETTE = [
     { type: 'led', name: 'LED', hint: 'Kéo vào lỗ breadboard', svg: '<svg viewBox="0 0 48 64"><line x1="18" y1="34" x2="18" y2="62" stroke="#94A3B8" stroke-width="3"/><line x1="30" y1="34" x2="30" y2="62" stroke="#94A3B8" stroke-width="3"/><circle cx="24" cy="22" r="14" fill="#DC2626" stroke="#991B1B" stroke-width="2"/><circle cx="20" cy="18" r="4" fill="#FCA5A5"/></svg>' },
     { type: 'resistor', name: 'Điện trở 220Ω', hint: 'Kéo vào lỗ breadboard', svg: '<svg viewBox="0 0 76 30"><line x1="0" y1="15" x2="14" y2="15" stroke="#94A3B8" stroke-width="3"/><line x1="62" y1="15" x2="76" y2="15" stroke="#94A3B8" stroke-width="3"/><rect x="14" y="7" width="48" height="16" rx="8" fill="#D9A066" stroke="#92400E" stroke-width="1.5"/><rect x="26" y="7" width="4" height="16" fill="#DC2626"/><rect x="34" y="7" width="4" height="16" fill="#DC2626"/><rect x="42" y="7" width="4" height="16" fill="#92400E"/></svg>' },
-    { type: 'voltmeter', name: 'Vôn kế', hint: 'Kéo vào lỗ breadboard — đo hiệu điện áp 2 chân', svg: '<svg viewBox="0 0 76 44"><rect x="6" y="4" width="64" height="28" rx="4" fill="#1E3A5F" stroke="#0F172A" stroke-width="2"/><rect x="12" y="10" width="52" height="16" rx="2" fill="#0F172A"/><text x="38" y="22" text-anchor="middle" font-family="Fira Code, monospace" font-size="10" fill="#7DD3FC">5.00 V</text><line x1="22" y1="32" x2="22" y2="42" stroke="#94A3B8" stroke-width="3"/><line x1="54" y1="32" x2="54" y2="42" stroke="#94A3B8" stroke-width="3"/></svg>' },
-    { type: 'ammeter', name: 'Ampe kế', hint: 'Kéo vào lỗ breadboard — đo dòng chạy qua (nối tiếp)', svg: '<svg viewBox="0 0 76 44"><rect x="6" y="4" width="64" height="28" rx="4" fill="#1E3A5F" stroke="#0F172A" stroke-width="2"/><rect x="12" y="10" width="52" height="16" rx="2" fill="#0F172A"/><text x="38" y="22" text-anchor="middle" font-family="Fira Code, monospace" font-size="9" fill="#FBBF24">13.0 mA</text><line x1="22" y1="32" x2="22" y2="42" stroke="#94A3B8" stroke-width="3"/><line x1="54" y1="32" x2="54" y2="42" stroke="#94A3B8" stroke-width="3"/></svg>' },
+    { type: 'multimeter', name: 'Đồng hồ đo', hint: 'Kéo vào lỗ breadboard — chọn đo áp (V) hay đo dòng (A) trong popup', svg: '<svg viewBox="0 0 76 44"><rect x="6" y="4" width="64" height="28" rx="4" fill="#1E3A5F" stroke="#0F172A" stroke-width="2"/><rect x="12" y="10" width="52" height="16" rx="2" fill="#0F172A"/><text x="38" y="22" text-anchor="middle" font-family="Fira Code, monospace" font-size="10" fill="#7DD3FC">5.00 V</text><line x1="22" y1="32" x2="22" y2="42" stroke="#94A3B8" stroke-width="3"/><line x1="54" y1="32" x2="54" y2="42" stroke="#94A3B8" stroke-width="3"/></svg>' },
     { type: 'button', name: 'Nút nhấn', hint: 'Kéo vào lỗ breadboard', svg: '<svg viewBox="0 0 56 56"><rect x="6" y="6" width="44" height="44" rx="6" fill="#FFFFFF" stroke="#1E3A5F" stroke-width="2"/><circle cx="28" cy="28" r="11" fill="#F1F3F5" stroke="#1E3A5F" stroke-width="2"/></svg>' },
     { type: 'pot', name: 'Chiết áp', hint: 'Kéo vào lỗ breadboard', svg: '<svg viewBox="0 0 64 64"><rect x="4" y="4" width="56" height="56" rx="8" fill="#FFFFFF" stroke="#1E3A5F" stroke-width="2"/><circle cx="32" cy="32" r="16" fill="#F1F3F5" stroke="#1E3A5F" stroke-width="2"/><line x1="32" y1="32" x2="32" y2="19" stroke="#DC2626" stroke-width="3"/></svg>' },
     { type: 'lcd', name: 'LCD 16x2', hint: 'Kéo vào lỗ breadboard', svg: '<svg viewBox="0 0 210 84"><rect x="2" y="6" width="206" height="72" rx="6" fill="#123524" stroke="#0F172A" stroke-width="2"/><rect x="16" y="20" width="16" height="16" rx="1" fill="#2E7D4F"/><rect x="38" y="20" width="16" height="16" rx="1" fill="#2E7D4F"/><rect x="60" y="20" width="16" height="16" rx="1" fill="#2E7D4F"/><rect x="16" y="46" width="16" height="16" rx="1" fill="#2E7D4F"/><rect x="38" y="46" width="16" height="16" rx="1" fill="#2E7D4F"/><text x="200" y="14" text-anchor="end" font-family="Fira Code, monospace" font-size="8" fill="#7CFFB2">16x2</text></svg>' },
@@ -644,27 +643,37 @@ D2
         const soundOn = comp.props?.sound !== false;
         body = `<label class="bench-insp-row"><input type="checkbox" id="inspBuzzerSound"${soundOn ? ' checked' : ''}> Phát tiếng khi còi kêu</label>
           <p class="sub">Còi kêu khi chân + ra mức 1 (chân PIC mức cao hoặc nối thẳng nguồn 0–10V) và chân − về GND.</p>`;
-      } else if (comp.type === 'voltmeter') {
+      } else if (comp.type === 'multimeter') {
+        // Đồng hồ đo: chọn chế độ trong popup, đổi lúc nào cũng được.
+        // Chế độ V: số đo áp (chữ cyan) + áp từng chân P/N. Chế độ A:
+        // số đo dòng (chữ vàng) + chiều dòng P -> N.
         const b = bridge();
-        const r = b && typeof b.getMeterReadings === 'function'
-          ? (b.getMeterReadings().voltmeters || []).find((v) => v.id === comp.id) : null;
-        body = `<label class="bench-insp-label">Số đo</label>
-          <div class="bench-meter-val vm" id="inspMeterVal">${r ? formatVolts(r.volts) : '—'}</div>
+        const mode = meterMode(comp);
+        const readings = b && typeof b.getMeterReadings === 'function' ? b.getMeterReadings() : null;
+        const r = readings ? (mode === 'V'
+          ? (readings.voltmeters || []).find((v) => v.id === comp.id)
+          : (readings.ammeters || []).find((a) => a.id === comp.id)) : null;
+        const valHtml = mode === 'V'
+          ? `<div class="bench-meter-val vm" id="inspMeterVal">${r ? formatVolts(r.volts) : '—'}</div>
           <div class="bench-conns">
             <div class="bench-conn"><span>Chân P</span><span id="inspMeterVP">${r ? formatVolts(r.vP) : '—'}</span></div>
             <div class="bench-conn"><span>Chân N</span><span id="inspMeterVN">${r ? formatVolts(r.vN) : '—'}</span></div>
-          </div>
-          <p class="sub">Vôn kế đo hiệu điện áp giữa 2 chân (P − N). Trở kháng vô cùng nên không ảnh hưởng mạch. Chân nào chưa nối tới nguồn thì hiện "—". Số đo cập nhật live khi mạch hoặc chân PIC đổi trạng thái.</p>`;
-      } else if (comp.type === 'ammeter') {
-        const b = bridge();
-        const r = b && typeof b.getMeterReadings === 'function'
-          ? (b.getMeterReadings().ammeters || []).find((a) => a.id === comp.id) : null;
-        body = `<label class="bench-insp-label">Số đo</label>
-          <div class="bench-meter-val am" id="inspMeterVal">${r ? formatAmps(r.amps) : '—'}</div>
+          </div>`
+          : `<div class="bench-meter-val am" id="inspMeterVal">${r ? formatAmps(r.amps) : '—'}</div>
           <div class="bench-conns">
             <div class="bench-conn"><span>Chiều dòng</span><span id="inspMeterDir">${r ? formatCurrentDirection(r.amps) : '—'}</span></div>
+          </div>`;
+        body = `<label class="bench-insp-label">Chế độ đo</label>
+          <div class="bench-meter-mode">
+            <button type="button" class="btn btn-small${mode === 'V' ? ' btn-accent' : ''}" data-act="meter-mode" data-mode="V">Đo áp (V)</button>
+            <button type="button" class="btn btn-small${mode === 'A' ? ' btn-accent' : ''}" data-act="meter-mode" data-mode="A">Đo dòng (A)</button>
           </div>
-          <p class="sub">Ampe kế đo dòng chạy qua nó (nối tiếp, 0Ω nên không ảnh hưởng mạch). Dòng dương chạy từ chân A sang B. Chập nguồn thì hiện "OL". Số đo cập nhật live khi mạch hoặc chân PIC đổi trạng thái.</p>`;
+          <label class="bench-insp-label">Số đo</label>
+          ${valHtml}
+          <p class="sub">${mode === 'V'
+            ? 'Đo hiệu điện áp giữa 2 chân (P − N). Trở kháng vô cùng nên không ảnh hưởng mạch. Chân nào chưa nối tới nguồn thì hiện "—".'
+            : 'Đo dòng chạy qua nó (nối tiếp, 0Ω nên không ảnh hưởng mạch). Dòng dương chạy từ chân P sang N. Chập nguồn thì hiện "OL".'}
+            Đổi chế độ là mạch đổi theo ngay (chế độ A nối 2 chân như dây, chế độ V ngắt ra). Số đo cập nhật live khi mạch hoặc chân PIC đổi trạng thái.</p>`;
       } else if (comp.type === 'pic') {
         const conns = legsFor(comp, state.size).map((l) => {
           const d = describeTerminal(state, l.term, pressedIds());
@@ -687,10 +696,10 @@ D2
           <button type="button" class="btn btn-accent btn-small" data-act="apply-psu">Áp dụng</button>
           <p class="sub">Nguồn chung, điều chỉnh được 0–24V (mặc định 5V). Cọc + (đỏ) và − (đen) nối vào rail trên/dưới của breadboard. Điện áp chỉ là giá trị danh định, không mô phỏng analog.</p>`;
       }
-      // Mục nối: vôn kế/ampe kế không đưa chân vào netlist CPU (describeTerminal
-      // không thấy chân của chúng) nên bỏ qua — thông tin nối đã nằm trong
+      // Mục nối: đồng hồ đo không đưa chân vào netlist CPU (describeTerminal
+      // không thấy chân của nó) nên bỏ qua — thông tin nối đã nằm trong
       // mục số đo ở trên (áp từng chân / chiều dòng).
-      const isMeter = comp.type === 'voltmeter' || comp.type === 'ammeter';
+      const isMeter = comp.type === 'multimeter';
       const conns = comp.type !== 'pic' && comp.type !== 'psu' && !isMeter
         ? `<div class="bench-conns">${legsFor(comp, state.size).map((l) => {
           const term = comp.id + '.' + l.term;
@@ -747,6 +756,18 @@ D2
         comp.props = { ...(comp.props || {}), sound: buzzerSound.checked };
         save();
         setStatus(buzzerSound.checked ? 'Đã bật tiếng còi.' : 'Đã tắt tiếng còi (còi vẫn sáng khi kêu).');
+      });
+      // Đồng hồ đo: bấm nút chế độ thì đổi mode + vẽ lại bàn (chế độ A
+      // nối 2 chân như dây, chế độ V ngắt ra — mạch/CPU đổi theo) rồi
+      // mở lại Inspector ở chế độ mới. Không cần đặt lại linh kiện.
+      inspectorEl.querySelectorAll('[data-act="meter-mode"]').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          const mode = btn.dataset.mode === 'A' ? 'A' : 'V';
+          if (meterMode(comp) === mode) return;
+          comp.props = { ...(comp.props || {}), mode };
+          save(); rebuildAll(); renderInspector(); syncToCpu();
+          setStatus('Đã đổi ' + compLabel(comp) + ' sang chế độ đo ' + (mode === 'V' ? 'áp (V)' : 'dòng (A)') + '.');
+        });
       });
       const psuApply = () => {
         const inp = inspectorEl.querySelector('#inspPsuVolts');
@@ -1224,7 +1245,7 @@ D2
     // legMesh). Chân chui vào trong thân là bình thường, không chọc xuyên
     // qua đỉnh linh kiện nào (thân thấp nhất là điện trở, đỉnh y=7.65, mà
     // chân điện trở ở x=0/x=10.16 nằm ngoài thân).
-    const legH = comp.type === 'voltmeter' || comp.type === 'ammeter' ? 9 : 7;
+    const legH = comp.type === 'multimeter' ? 9 : 7;
     for (const o of offs) g.add(legMesh(o.dc * PITCH, rowZ(anchorR + o.dr, compRows) - rowZ(anchorR, compRows), legH));
     if (comp.type === 'led') {
       const color = comp.props?.color || '#DC2626';
@@ -1304,13 +1325,14 @@ D2
       hole.position.set(1.27, 13.1, 0);
       g.add(hole);
       buzzerMats.set(comp.id, mat);
-    } else if (comp.type === 'voltmeter' || comp.type === 'ammeter') {
+    } else if (comp.type === 'multimeter') {
       // Đồng hồ số: hộp navy 20×6×12, đáy y=8, đỉnh y=14. Chân kim loại
       // dài 9mm (xem vòng legOffsets phía trên) chui 1mm vào đáy hộp nên
       // nhìn ngang không hở. Màn hình nằm ngửa trên nóc, 2 chấm màu ở mặt
-      // trước đánh dấu cực (đỏ = chân P/A, tối = chân N/B). Chân kim loại
-      // đã thêm ở vòng legOffsets phía trên (2 chân cách nhau 4 cột,
-      // dùng rowZ).
+      // trước đánh dấu cực (đỏ = chân P, tối = chân N). Màu chữ màn hình
+      // theo chế độ đo: cyan khi đo áp (V), vàng hổ phách khi đo dòng (A).
+      // Chân kim loại đã thêm ở vòng legOffsets phía trên (2 chân cách
+      // nhau 4 cột, dùng rowZ).
       const body = new THREE.Mesh(new THREE.BoxGeometry(20, 6, 12), stdMat(0x1E3A5F, { roughness: 0.5 }));
       body.position.set(5.08, 11, 0);
       body.castShadow = true;
@@ -1324,7 +1346,7 @@ D2
       screen.rotation.x = -Math.PI / 2;
       screen.position.set(5.08, 14.15, 0);
       g.add(screen);
-      const t = { canvas: cv, ctx: cv.getContext('2d'), tex, last: '', kind: comp.type };
+      const t = { canvas: cv, ctx: cv.getContext('2d'), tex, last: '', mode: meterMode(comp) };
       meterTexs.set(comp.id, t);
       drawMeterTexture(t, '—');
       const dotR = new THREE.Mesh(new THREE.CylinderGeometry(1.1, 1.1, 0.5, 12), stdMat(0xDC2626));
@@ -1360,13 +1382,14 @@ D2
   }
   // Vẽ số đo lên màn hình đồng hồ (CanvasTexture). Chỉ gọi khi chuỗi số
   // đổi (vòng poll so sánh với t.last), không vẽ lại mỗi frame.
-  // Vôn kế chữ xanh cyan, ampe kế chữ vàng hổ phách (phân biệt 2 loại
-  // trên bàn). Chữ co lại nếu dài quá màn hình (vd "-12.34 V").
+  // Chữ xanh cyan khi đo áp (V), vàng hổ phách khi đo dòng (A) — đổi
+  // chế độ trong popup thì màu màn hình đổi theo. Chữ co lại nếu dài
+  // quá màn hình (vd "-12.34 V").
   function drawMeterTexture(t, text) {
     const ctx = t.ctx;
     ctx.fillStyle = '#0F172A';
     ctx.fillRect(0, 0, 256, 144);
-    ctx.fillStyle = t.kind === 'voltmeter' ? '#7DD3FC' : '#FBBF24';
+    ctx.fillStyle = t.mode === 'A' ? '#FBBF24' : '#7DD3FC';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     let size = 56;
@@ -2079,9 +2102,14 @@ D2
           try { readings = b.getMeterReadings(); } catch { readings = null; }
           if (readings) {
             const byId = new Map();
-            for (const v of readings.voltmeters || []) byId.set(v.id, { kind: 'voltmeter', text: formatVolts(v.volts), data: v });
-            for (const a of readings.ammeters || []) byId.set(a.id, { kind: 'ammeter', text: formatAmps(a.amps), data: a });
+            for (const v of readings.voltmeters || []) byId.set(v.id, { text: formatVolts(v.volts), data: v });
+            for (const a of readings.ammeters || []) byId.set(a.id, { text: formatAmps(a.amps), data: a });
             for (const [id, t] of meterTexs) {
+              // Màu màn hình theo chế độ hiện tại của linh kiện (đổi mode
+              // trong popup thì vẽ lại ngay cả khi chuỗi số trùng nhau).
+              const comp = state.components.find((c) => c.id === id);
+              const mode = comp ? meterMode(comp) : 'V';
+              if (t.mode !== mode) { t.mode = mode; t.last = ''; }
               const r = byId.get(id);
               const text = r ? r.text : '—';
               if (text === t.last) continue;
@@ -2095,15 +2123,17 @@ D2
     }, 150);
   }
   // Inspector đang mở trên 1 đồng hồ thì cập nhật số đo live (chỉ đổi
-  // text của các ô đã có, không render lại toàn bộ Inspector).
+  // text của các ô đã có, không render lại toàn bộ Inspector). Ô phụ
+  // hiện theo chế độ hiện tại: áp từng chân khi đo áp, chiều dòng khi
+  // đo dòng.
   function updateInspectorMeter(byId) {
     if (!selected || selected.kind !== 'comp') return;
     const comp = state.components.find((c) => c.id === selected.id);
-    if (!comp || (comp.type !== 'voltmeter' && comp.type !== 'ammeter')) return;
+    if (!comp || comp.type !== 'multimeter') return;
     const r = byId.get(comp.id);
     const valEl = inspectorEl.querySelector('#inspMeterVal');
     if (valEl) valEl.textContent = r ? r.text : '—';
-    if (comp.type === 'voltmeter') {
+    if (meterMode(comp) === 'V') {
       const vpEl = inspectorEl.querySelector('#inspMeterVP');
       const vnEl = inspectorEl.querySelector('#inspMeterVN');
       if (vpEl) vpEl.textContent = r ? formatVolts(r.data.vP) : '—';

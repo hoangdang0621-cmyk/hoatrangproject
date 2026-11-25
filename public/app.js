@@ -8,8 +8,8 @@ import {
   resolvePeripherals, ledStates, buzzerStates,
   applyButtonToCpu, applyPotToCpu,
 } from './wiring.js?v=20261125r';
-import { defaultBenchState, benchToNetlist } from './bench-model.js?v=20261125ad';
-import { meterReadings } from './circuit-solver.js?v=20261125ag';
+import { defaultBenchState, benchToNetlist } from './bench-model.js?v=20261125al';
+import { meterReadings } from './circuit-solver.js?v=20261125al';
 
 const cpu = createCPU();
 cpu.clockHz = 4000000;
