@@ -321,24 +321,14 @@ D2
     setStatus(`Đã mở lab ${lab.title} — mạch đã lên bàn. Sang tab "Nạp viết code" bấm Nạp & chạy để chạy chương trình.`);
   }
 
+  // Code KHÔNG lưu localStorage nữa: refresh trang thì code về lại chương
+  // trình mẫu mặc định (FALLBACK_BLINK). Chỉ giữ trong bộ nhớ phiên làm việc.
   function loadSavedCode() {
-    try {
-      const raw = localStorage.getItem(CODE_LS_KEY);
-      if (!raw) return null;
-      const d = JSON.parse(raw);
-      if (typeof d.code !== 'string') return null;
-      return { code: d.code, breakpoints: Array.isArray(d.breakpoints) ? d.breakpoints : [] };
-    } catch { return null; }
+    try { localStorage.removeItem(CODE_LS_KEY); } catch { /* bỏ qua */ }
+    return null;
   }
-  function saveCode() {
-    try {
-      localStorage.setItem(CODE_LS_KEY, JSON.stringify({ code: codeInput.value, breakpoints: [...codeBreakpoints] }));
-    } catch { /* bỏ qua */ }
-  }
-  function saveCodeSoon() {
-    clearTimeout(codeSaveTimer);
-    codeSaveTimer = setTimeout(saveCode, 300);
-  }
+  function saveCode() { /* không lưu nữa */ }
+  function saveCodeSoon() { /* không lưu nữa */ }
   // Dịch code hiện tại (chỉ để lấy bảng dòng->địa chỉ cho gutter, không nạp).
   function codeAssemble() {
     const r = assemble(codeInput.value);
