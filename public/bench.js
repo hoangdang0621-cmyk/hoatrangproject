@@ -6,6 +6,7 @@
 import {
   PITCH, holeId, holePos, allHoles,
   HOLE_RADIUS, HOLE_HEIGHT, holeCenterY,
+  SEGMENT_LINE_WIDTH_MM, segmentBoundaries,
   legOffsets, legsFor, picLegs, canPlace, benchToNetlist,
   describeTerminal, defaultBenchState, nextComponentId, compLabel,
   defaultProps, sanitizeState, boardSize, colsOf, rowsOf, railColsOf, picCol,
@@ -14,7 +15,7 @@ import {
   normalizeSize, holeCount, sizeLabel, sameSize,
   psuVolts, validatePsuVolts, parsePsuPost, psuPostPos,
   clampCamTarget, zoomTowardPoint, panTarget,
-} from './bench-model.js?v=20261125r';
+} from './bench-model.js?v=20261125t';
 import { checkWiring, SIGNAL_COLORS } from './wiring.js?v=20261125r';
 import { assemble } from './pic16.js?v=20261125q';
 
@@ -496,8 +497,8 @@ D2
             ${[170, 400, 830].map((n) => `<button type="button" class="btn btn-small bench-board-preset" data-size="${n}" aria-pressed="${isPreset(n)}">${sizeLabel(n)}</button>`).join('')}
           </div>
           <label class="bench-insp-label">Tự điền thông số</label>
-          <label class="bench-insp-label bench-insp-sub" for="inspBoardCols">Rộng (số cột, 5–99)</label>
-          <input class="input bench-insp-hole" id="inspBoardCols" type="number" min="5" max="99" step="1" value="${cur.cols}">
+          <label class="bench-insp-label bench-insp-sub" for="inspBoardCols">Rộng (số cột, 5–100)</label>
+          <input class="input bench-insp-hole" id="inspBoardCols" type="number" min="5" max="100" step="1" value="${cur.cols}">
           <label class="bench-insp-label bench-insp-sub" for="inspBoardRows">Dài (số hàng, 5–100, bội số của 5)</label>
           <input class="input bench-insp-hole" id="inspBoardRows" type="number" min="5" max="100" step="5" value="${cur.rows}">
           <label class="bench-insp-row"><input type="checkbox" id="inspBoardRails"${cur.railCols > 0 ? ' checked' : ''}> Có rail nguồn</label>
@@ -511,8 +512,8 @@ D2
         const errEl = inspectorEl.querySelector('#inspBoardErr');
         const cols = Math.round(Number(inspectorEl.querySelector('#inspBoardCols').value));
         const rows = Math.round(Number(inspectorEl.querySelector('#inspBoardRows').value));
-        if (!Number.isFinite(cols) || cols < 5 || cols > 99) {
-          if (errEl) errEl.textContent = 'Số cột (rộng) phải là số nguyên từ 5 đến 99.';
+        if (!Number.isFinite(cols) || cols < 5 || cols > 100) {
+          if (errEl) errEl.textContent = 'Số cột (rộng) phải là số nguyên từ 5 đến 100.';
           return;
         }
         if (!Number.isFinite(rows) || rows < 5 || rows > 100 || rows % 5 !== 0) {
@@ -616,7 +617,7 @@ D2
         }).filter(Boolean);
         const pc = picCol(state.size);
         const [rT, rB] = picRows(state.size);
-        body = `<p class="sub">Chip cắm cố định ở cột ${Math.max(1, pc)}–${pc + 19}, hàng ${rowLabel(rT, rowsOf(state.size))}/${rowLabel(rB, rowsOf(state.size))}. ${conns.length} chân đang nối dây.</p>
+        body = `<p class="sub">Chip cắm cố định ở cột ${Math.max(1, pc)}–${pc + 19}, hàng ${rowLabel(rT)}/${rowLabel(rB)}. ${conns.length} chân đang nối dây.</p>
           <div class="bench-conns">${conns.join('') || '<p class="sub">Chưa chân nào nối dây ngoài nguồn.</p>'}</div>`;
       } else if (comp.type === 'psu') {
         const volts = psuVolts(comp);
@@ -636,11 +637,19 @@ D2
             : 'chưa nối';
           return `<div class="bench-conn"><span>${l.term}</span><span>${esc(txt)}</span></div>`;
         }).join('')}</div>` : '';
+      // Mục "Chân": từng chân cắm vào lỗ nào (chỉ đọc). PSU không có chân
+      // dạng lỗ nên bỏ qua. Chân treo ngoài board (hole null) thì hiện
+      // "ngoài board". Tên chân bỏ tiền tố 'PIC.' (PIC.RA0 -> RA0).
+      const legs = comp.type === 'psu' ? [] : legsFor(comp, state.size);
+      const pins = legs.length ? `<label class="bench-insp-label">Chân</label><div class="bench-conns">${legs.map((l) => {
+        const term = l.term.startsWith('PIC.') ? l.term.slice(4) : l.term;
+        return `<div class="bench-conn"><span>${esc(term)}</span><span>${l.hole ? esc(holeName(l.hole)) : 'ngoài board'}</span></div>`;
+      }).join('')}</div>` : '';
       const canDelete = comp.type !== 'pic' && comp.type !== 'psu';
       inspectorEl.innerHTML = `
         <div class="bench-insp-head"><div><strong>${esc(compLabel(comp))}</strong><div class="bench-insp-pos">${esc(pos)}</div></div>
         <button type="button" class="bench-insp-close" data-act="close" aria-label="Đóng">×</button></div>
-        <div class="bench-insp-body">${body}${conns}</div>
+        <div class="bench-insp-body">${body}${conns}${pins}</div>
         ${canDelete ? '<div class="bench-insp-foot"><button type="button" class="btn btn-danger-outline btn-small" data-act="del-comp">Xoá linh kiện</button></div>' : ''}`;
       const resInput = inspectorEl.querySelector('#inspResVal');
       if (resInput) resInput.addEventListener('change', () => {
@@ -707,11 +716,11 @@ D2
     return '?';
   }
   // Thường hoá địa chỉ người dùng gõ: trim, chữ hàng về thường
-  // ('C12' -> 'c12'), chữ rail về hoa ('t+5' -> 'T+5'), cọc nguồn về
-  // dạng chuẩn ('psu1.+' -> 'PSU1.+').
+  // ('C12' -> 'c12', 'AA12' -> 'aa12'), chữ rail về hoa ('t+5' -> 'T+5'),
+  // cọc nguồn về dạng chuẩn ('psu1.+' -> 'PSU1.+').
   function normalizeHoleInput(v) {
     const s = String(v || '').trim();
-    let m = s.match(/^([a-zA-Z])(\d+)$/);
+    let m = s.match(/^([a-zA-Z]+)(\d+)$/);
     if (m) return m[1].toLowerCase() + m[2];
     m = s.match(/^([tTbB])([+-])(\d+)$/);
     if (m) return m[1].toUpperCase() + m[2] + m[3];
@@ -890,10 +899,14 @@ D2
       ctx.fillText(String(col), x, py(-(bodyD / 2 - 2)));
       ctx.fillText(String(col), x, py(bodyD / 2 - 2));
     }
+    // Nhãn hàng: chữ 13px, tâm cách mép board 2.6mm. Nhãn 2 chữ (aa, ab...)
+    // rộng ~4mm trên board 100 cột, vẫn cách cột lỗ đầu tiên ~0.7mm
+    // (cỡ 15px cũ, tâm cách mép 3mm thì nhãn chạm sát mép lỗ đầu tiên).
+    ctx.font = '600 13px "Fira Code", monospace';
     for (let r = 0; r < rows; r++) {
       const z = py((r - (rows - 1) / 2) * PITCH);
-      ctx.fillText(rowLabel(r, rows), px(-bodyW / 2 + 3), z);
-      ctx.fillText(rowLabel(r, rows), px(bodyW / 2 - 3), z);
+      ctx.fillText(rowLabel(r), px(-bodyW / 2 + 2.6), z);
+      ctx.fillText(rowLabel(r), px(bodyW / 2 - 2.6), z);
     }
     if (railColsOf(size) > 0) {
       // Dấu +/− của rail: T+ và B+ là +, T− và B− là −.
@@ -905,6 +918,15 @@ D2
       ctx.fillStyle = '#2563EB';
       ctx.fillText('−', px(-bodyW / 2 + 3), railZ(-1));
       ctx.fillText('−', px(-bodyW / 2 + 3), railZ(rows + 1));
+    }
+    // Vạch chia đoạn 5 hàng (vẽ trong texture, không phải khối 3D): vạch
+    // nằm phẳng trên mặt board còn lỗ là đĩa 3D cao hơn 0.35mm nên vạch
+    // không bao giờ che được lỗ.
+    ctx.fillStyle = '#CBD5E1';
+    const lineW = SEGMENT_LINE_WIDTH_MM * (c.height / bodyD);
+    for (const z of segmentBoundaries(size)) {
+      const y = py(z);
+      ctx.fillRect(0, y - lineW / 2, c.width, lineW);
     }
     const tex = new THREE.CanvasTexture(c);
     tex.anisotropy = 4;
@@ -932,15 +954,8 @@ D2
     top.position.y = BOARD_TOP + 0.05;
     top.receiveShadow = true;
     boardGroup.add(top);
-    // Rãnh ở mỗi ranh giới đoạn 5 hàng (sau hàng 5, 10, 15...): board 10
-    // hàng thì chỉ 1 rãnh giữa (sau hàng 5) như cũ.
-    for (let b = 5; b < rows; b += 5) {
-      const groove = new THREE.Mesh(
-        new THREE.BoxGeometry(bodyW, 0.6, 2.4),
-        new THREE.MeshStandardMaterial({ color: 0xCBD5E1 }));
-      groove.position.set(0, BOARD_TOP + 0.02, (b - 0.5 - (rows - 1) / 2) * PITCH);
-      boardGroup.add(groove);
-    }
+    // Vạch chia đoạn 5 hàng giờ vẽ trong texture mặt board (makeBoardTexture),
+    // không còn khối rãnh 3D (khối cũ rộng 2.4mm đè lên lỗ e/f).
     // Vạch màu rail +/− (chỉ khi board có rail)
     if (rc > 0) {
       for (const [r, color] of [[-2, 0xDC2626], [-1, 0x2563EB], [rows, 0xDC2626], [rows + 1, 0x2563EB]]) {
@@ -1768,6 +1783,7 @@ D2
         comp.anchor = d.anchor;
         comp.rot = d.rot;
         save(); rebuildAll(); syncToCpu();
+        if (selected && selected.kind === 'comp' && selected.id === d.id) renderInspector();
         setStatus('Đã di chuyển ' + compLabel(comp) + ' tới lỗ ' + d.anchor + '.');
       } else {
         rebuildAll(); // về lại vị trí cũ

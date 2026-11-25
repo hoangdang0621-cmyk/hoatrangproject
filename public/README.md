@@ -29,8 +29,8 @@ theo nhịp chip.
   dây trong bảng màu. Bấm chọn 1 dây thì dây highlight, kéo núm tròn ở 2
   đầu để cắm lại (sang lỗ khác hoặc cọc +/− của nguồn), hoặc nhập địa chỉ
   cho từng đầu trong Inspector (vd `c12`, `T+5`, cọc nguồn `PSU1.+` /
-  `PSU1.-`; board >26 hàng thì địa chỉ dạng chữ+số khối, vd `c112` = hàng
-  c1 cột 12, `b25` = hàng b2 cột 5).
+  `PSU1.-`; địa chỉ dạng nhãn hàng kiểu bảng tính + số cột, vd `aa12` =
+  hàng aa cột 12).
 - **Nạp viết code:** tab **Nạp viết code** cạnh tab **Linh Kiện** —
   soạn hợp ngữ trong editor (bấm vào số dòng bên trái để đặt/bỏ
   breakpoint, chỉ dòng dịch ra lệnh mới đặt được), bấm **Nạp & chạy**
@@ -42,7 +42,7 @@ theo nhịp chip.
   Code và breakpoint tự lưu trên máy, mở lại trang vẫn còn.
 - **Chọn size bo mạch:** nhấn vào board (thân board hoặc lỗ trống) để
   mở popup **Bo mạch** bên phải: bấm 1 trong 3 mẫu sẵn để áp dụng ngay,
-  hoặc tự điền rộng (số cột 5–99) × dài (số hàng 5–100, bội số của 5) + chọn có rail
+  hoặc tự điền rộng (số cột 5–100) × dài (số hàng 5–100, bội số của 5) + chọn có rail
   nguồn rồi bấm Áp dụng; đổi size thì chip căn lại giữa, linh kiện/dây
   ngoài board mới bị gỡ (có ghi chú ở dòng trạng thái).
 - **Nút nhấn:** là công tắc 2 đầu — nhấn giữ thì nối 2 chân T1–T2 với
@@ -59,18 +59,18 @@ theo nhịp chip.
 
 ## Breadboard
 
-Nhãn hàng: board ≤26 hàng thì chữ đơn a–z; board >26 hàng thì nhãn
-chữ+số khối (hàng 1–26 là a1–z1, 27–52 là a2–z2, 53–78 là a3–z3...).
+Nhãn hàng kiểu bảng tính: a–z, aa–az, ba–bz... (hàng 27 là aa, hàng 52
+là az, hàng 53 là ba, hàng 100 là cv).
 Mỗi đoạn 5 hàng nối nhau thành một strip (hàng 1–5, 6–10, 11–15...;
-board 10 hàng thì vẫn a–e và f–j, rãnh ở giữa); 2 rail +/− chạy suốt
+board 10 hàng thì vẫn a–e và f–j, vạch chia đoạn ở giữa); 2 rail +/− chạy suốt
 chiều dài. Chip PIC16F877A luôn căn giữa board (cột 22–41 trên board
 830, cột 6–25 trên board 400, cột 1–17 trên board Mini — trên board
 Mini thì 6 chân ngoài cùng MCLR/RD0/RD1/RD2/RD3/RB7 treo ngoài board).
 Chip là một khối duy nhất (thân + chân đi cùng nhau), căn giữa board:
 2 hàng chân cách nhau cố định 6 hàng, đối xứng qua tâm chip (vd board
-10 hàng → b/h, 15 hàng → e/k, 30 hàng → l/r, 100 hàng → u2/a3; board
+10 hàng → b/h, 15 hàng → e/k, 30 hàng → l/r, 100 hàng → au/ba; board
 5 hàng → b/f với hàng 6 treo ngoài board). Thân chip ôm đúng 2 hàng
-chân. Board tự điền rộng 5–99 cột × dài 5–100 hàng (chỉ bội số của 5)
+chân. Board tự điền rộng 5–100 cột × dài 5–100 hàng (chỉ bội số của 5)
 cũng căn giữa chip theo cùng cách; rail nguồn tùy chọn, bật thì rail
 dài bằng số cột. Dây nguồn VDD/VSS/MCLR đã nối
 sẵn về rail (board Mini không có rail nên không có dây nguồn mặc định).

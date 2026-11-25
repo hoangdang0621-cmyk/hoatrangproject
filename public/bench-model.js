@@ -1,7 +1,8 @@
 // bench-model.js — Mô hình lỗ/strip của bàn thực hành 3D (không DOM, không Three.js).
 // Breadboard đổi được kích thước: 3 mẫu sẵn (Mini 170 lỗ, Nửa 400 lỗ,
-// Đầy đủ 830 lỗ) hoặc tự điền rộng (số cột 5–99) × dài (số hàng 5–100,
-// bội số của 5) + chọn có rail nguồn hay không. Hàng là chữ cái a–z theo số hàng.
+// Đầy đủ 830 lỗ) hoặc tự điền rộng (số cột 5–100) × dài (số hàng 5–100,
+// bội số của 5) + chọn có rail nguồn hay không. Hàng đặt tên kiểu bảng
+// tính: a–z, aa–az, ba–bz, ... (hàng 27 là aa, hàng 100 là cv).
 // Nửa trên của mỗi cột (các hàng trên rãnh) nối nhau thành 1 strip,
 // nửa dưới nối nhau, rail chạy suốt chiều dài (mọi lỗ rail + là +5V,
 // mọi lỗ rail − là GND).
@@ -29,10 +30,23 @@ export function depthPrecisionAt(z, near = 1) { return (z * z) / (near * 1677721
 // Khoảng cách camera tới board xa nhất: bán kính orbit kẹp tối đa 900mm
 // (wheel zoom) cộng lệch target → lấy tròn 1000mm làm trường hợp xấu nhất.
 export const MAX_CAMERA_DISTANCE = 1000;
+// Vạch chia đoạn 5 hàng: rộng ~1mm, vẽ trong texture mặt board (không phải
+// khối 3D) để không bao giờ che lỗ — lỗ là đĩa 3D cao hơn mặt board 0.35mm
+// còn vạch nằm phẳng trên mặt board. Rãnh 3D cũ rộng 2.4mm, mặt trên cao
+// +0.32mm, đè lên gần nửa lỗ e/f (lỗ cách ranh giới 1.27mm, bán kính 0.95mm).
+export const SEGMENT_LINE_WIDTH_MM = 1;
+// Vị trí z (mm) của ranh giới giữa các đoạn 5 hàng (sau hàng 5, 10, 15...),
+// tính từ tâm board; board 10 hàng thì chỉ 1 ranh giới ở z = 0 (giữa e/f).
+export function segmentBoundaries(size) {
+  const rows = rowsOf(size);
+  const out = [];
+  for (let b = 5; b < rows; b += 5) out.push((b - 0.5 - (rows - 1) / 2) * PITCH);
+  return out;
+}
 // Size bo mạch: 3 mẫu sẵn (kiểu ohmimic) hoặc tự điền {cols, rows, rails}.
 // 830 = 63 cột x 10 hàng + 4 rail x 50; 400 = 30 x 10 + 4 x 25;
 // 170 = 17 x 10, không có rail (đúng board mini thật).
-// Tự điền: rộng 5–99 cột, dài 5–100 hàng (chỉ bội số của 5: 5, 10, 15...
+// Tự điền: rộng 5–100 cột, dài 5–100 hàng (chỉ bội số của 5: 5, 10, 15...
 // 100), rail bật/tắt; rail bật thì dài bằng số cột. Hàng là chữ cái a–z
 // Chip PIC DIP-40 rộng 20 cột nên trên board Mini 17 cột thì 6 chân ngoài
 // cùng (MCLR, RD0, RD1, RD2, RD3, RB7) treo ngoài board — giới hạn vật lý thật.
@@ -44,11 +58,11 @@ export const BOARD_SIZES = {
 export const BOARD_SIZE_IDS = [170, 400, 830];
 export const DEFAULT_SIZE = 830;
 export const CUSTOM_COLS_MIN = 5;
-export const CUSTOM_COLS_MAX = 99;
+export const CUSTOM_COLS_MAX = 100;
 export const CUSTOM_ROWS_MIN = 5;
 export const CUSTOM_ROWS_MAX = 100;
 // Chuẩn hoá size thành giá trị lưu trong state: số (mẫu sẵn) hoặc
-// {cols, rows, rails} (tự điền, cột kẹp 5–99, hàng làm tròn XUỐNG về bội
+// {cols, rows, rails} (tự điền, cột kẹp 5–100, hàng làm tròn XUỐNG về bội
 // số 5 gần nhất rồi kẹp 5–100: 12 -> 10, 2 -> 5, 150 -> 100; state cũ
 // {cols, rails} không có rows thì mặc định 10 hàng). Không hợp lệ -> 830.
 export function normalizeSize(size) {
@@ -109,7 +123,7 @@ export function picCol(size) { return Math.max(0, Math.floor((colsOf(size) - 20)
 // nhau), căn giữa board; 2 hàng chân cách nhau CỐ ĐỊNH 6 hàng, đối xứng
 // qua tâm chip. Tâm chip (0-indexed, có thể .5) = (rows−1)/2; hàng chân
 // trên = floor(tâm) − 3, hàng dưới = trên + 6. Kiểm tra: 10 hàng -> (2, 8)
-// b/h; 15 hàng -> (5, 11); 30 hàng -> (12, 18); 100 hàng -> (47, 53).
+// b/h; 15 hàng -> (5, 11) e/k; 30 hàng -> (12, 18) l/r; 100 hàng -> (47, 53) au/ba.
 // Board <=6 hàng thì hàng trên tính ra <1 (0-indexed <0) -> fallback
 // (2, 6), hàng 6 treo ngoài board nếu board <6 hàng (holeId null).
 // KHÔNG BAO GIỜ tính chân trực tiếp từ số hàng (không dùng rows−2).
@@ -129,18 +143,52 @@ export function picBodyDepth(size) {
 // Lỗ neo của chip PIC (chân 1): hàng chân trên, cột picCol (kẹp về 1).
 export function picAnchor(size) {
   const r = picRows(size)[0];
-  return holeId(r, Math.max(1, picCol(size)), size) ?? (rowLabel(r, rowsOf(size)) + '1');
+  return holeId(r, Math.max(1, picCol(size)), size) ?? (rowLabel(r) + '1');
 }
-export const ROWS = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j', 'k', 'l', 'm', 'n', 'o', 'p', 'q', 'r', 's', 't', 'u', 'v', 'w', 'x', 'y', 'z'];
-
-// Nhãn của hàng r (0-indexed) trên board có `rows` hàng.
-// Board <=26 hàng: chữ đơn a-z như cũ. Board >26 hàng: toàn bộ nhãn
-// chuyển sang chữ+số khối: hàng 1-26 là a1-z1, 27-52 là a2-z2,
-// 53-78 là a3-z3, 79-100 là a4-v4 (chữ lặp lại mỗi 26 hàng, số là khối).
-export function rowLabel(r, rows) {
-  if (rows <= 26) return ROWS[r];
-  return ROWS[r % 26] + (Math.floor(r / 26) + 1);
+// Nhãn của hàng r (0-indexed), kiểu bảng tính: a–z, aa–az, ba–bz, ...,
+// cv (hàng 100). Không còn số trong nhãn, không chuyển chế độ theo số
+// hàng: hàng 1→a, 26→z, 27→aa, 52→az, 53→ba, 100→cv. Nhãn chỉ phụ
+// thuộc r, không phụ thuộc tổng số hàng của board.
+export function rowLabel(r) {
+  let n = r + 1;
+  let label = '';
+  while (n > 0) {
+    n -= 1;
+    label = String.fromCharCode(97 + (n % 26)) + label;
+    n = Math.floor(n / 26);
+  }
+  return label;
 }
+// Đổi nhãn hàng (a, z, aa, ab, ..., cv) về chỉ số hàng 0-indexed;
+// trả -1 nếu nhãn sai định dạng (rỗng, có số, có chữ hoa).
+export function rowIndexFromLabel(label) {
+  if (typeof label !== 'string' || !/^[a-z]+$/.test(label)) return -1;
+  let n = 0;
+  for (const ch of label) n = n * 26 + (ch.charCodeAt(0) - 96);
+  return n - 1;
+}
+// Chuyển 1 id lỗ từ định dạng cũ sang định dạng mới, dùng khi tải state
+// đã lưu trước khi đổi nhãn hàng. Board >26 hàng cũ dùng chữ+số khối
+// (vd c112 = hàng c1 cột 12, b25 = hàng b2 cột 5); parser mới đọc sai
+// các id này (c112 thành hàng c cột 112, b25 thành hàng b cột 25) nên
+// phải đổi bằng quy tắc parse CŨ với số hàng đã lưu, rồi định dạng lại
+// bằng rowLabel mới. Board <=26 hàng thì id cũ đã đúng định dạng mới.
+// Id rail (T+/B-) và cọc nguồn (PSU1.+/-) không khớp mẫu lỗ nên giữ
+// nguyên. Chỉ gọi 1 lần cho state cũ — state mới đã có cờ labelFormat
+// 'sheet' thì không gọi nữa, vì id mới 'a12' trùng chữ với id cũ 'a12'
+// nhưng nghĩa khác (hàng a cột 12 thay vì hàng a1 cột 2).
+export function migrateOldHoleId(id, oldRows) {
+  if (typeof id !== 'string' || oldRows <= 26) return id;
+  const m = id.match(/^([a-z])(\d)(\d+)$/);
+  if (!m) return id;
+  const r = (Number(m[2]) - 1) * 26 + (m[1].charCodeAt(0) - 97);
+  const c = Number(m[3]);
+  if (r < 0 || r >= oldRows || c < 1) return id;
+  return rowLabel(r) + c;
+}
+// Định dạng nhãn hàng của các id lỗ trong state đã lưu: 'sheet' (kiểu
+// bảng tính). State lưu trước khi đổi nhãn không có trường này.
+export const HOLE_LABEL_FORMAT = 'sheet';
 // Hàng trong lưới nội bộ: T+ = -2, T− = -1, a..z = 0..rows-1,
 // B+ = rows, B− = rows+1 (B+/B− phụ thuộc số hàng).
 const railRowName = (r, rows) => (r === -2 ? 'T+' : r === -1 ? 'T-' : r === rows ? 'B+' : r === rows + 1 ? 'B-' : null);
@@ -151,7 +199,7 @@ export function holeId(r, c, size = DEFAULT_SIZE) {
   const rows = rowsOf(size);
   if (r >= 0 && r < rows) {
     if (c < 1 || c > colsOf(size)) return null;
-    return rowLabel(r, rows) + c;
+    return rowLabel(r) + c;
   }
   const name = railRowName(r, rows);
   if (name) {
@@ -162,35 +210,25 @@ export function holeId(r, c, size = DEFAULT_SIZE) {
 }
 
 // Phân tích id lỗ -> {r, c} (r là hàng nội bộ) hoặc null nếu sai định dạng
-// hoặc ngoài board size cho trước. Định dạng theo số hàng của board:
-// board <=26 hàng: 1 chữ + toàn bộ số sau là cột (vd c12 = hàng c cột 12);
-// board >26 hàng: 1 chữ + 1 số khối + số còn lại là cột
-// (vd c112 = hàng c1 cột 12, b25 = hàng b2 cột 5).
+// hoặc ngoài board size cho trước. Một định dạng duy nhất cho mọi board:
+// nhãn hàng kiểu bảng tính (a–z, aa, ab, ...) + số cột
+// (vd c12 = hàng c cột 12, aa12 = hàng aa cột 12, cv99 = hàng cv cột 99).
+// Id rail (T+40, T-5, B+42, B-1) vẫn giữ nguyên như cũ.
 export function parseHole(id, size = DEFAULT_SIZE) {
   if (typeof id !== 'string') return null;
   const rows = rowsOf(size);
-  if (rows <= 26) {
-    const m = id.match(/^([a-z])(\d+)$/);
-    if (m) {
-      const r = ROWS.indexOf(m[1]);
-      const c = Number(m[2]);
-      if (r >= 0 && r < rows && c >= 1 && c <= colsOf(size)) return { r, c };
-      return null;
-    }
-  } else {
-    const m = id.match(/^([a-z])(\d)(\d+)$/);
-    if (m) {
-      const r = (Number(m[2]) - 1) * 26 + ROWS.indexOf(m[1]);
-      const c = Number(m[3]);
-      if (r >= 0 && r < rows && c >= 1 && c <= colsOf(size)) return { r, c };
-      return null;
-    }
-  }
-  const m = id.match(/^([TB])([+-])(\d+)$/);
+  const m = id.match(/^([a-z]+)(\d+)$/);
   if (m) {
-    const c = Number(m[3]);
+    const r = rowIndexFromLabel(m[1]);
+    const c = Number(m[2]);
+    if (r >= 0 && r < rows && c >= 1 && c <= colsOf(size)) return { r, c };
+    return null;
+  }
+  const m2 = id.match(/^([TB])([+-])(\d+)$/);
+  if (m2) {
+    const c = Number(m2[3]);
     if (c < 1 || c > railColsOf(size)) return null;
-    return { r: railRowOf(m[1] + m[2], rows), c };
+    return { r: railRowOf(m2[1] + m2[2], rows), c };
   }
   return null;
 }
@@ -635,6 +673,7 @@ export function defaultBenchState(size = DEFAULT_SIZE) {
   }
   return {
     size: normalizeSize(size),
+    labelFormat: HOLE_LABEL_FORMAT,
     components: [
       { id: 'PIC1', type: 'pic', anchor: picAnchor(size), rot: 0, fixed: true, props: {} },
       { id: 'PSU1', type: 'psu', tx: 0, tz: -150, fixed: true, props: defaultProps('psu') },
@@ -648,6 +687,11 @@ export function defaultBenchState(size = DEFAULT_SIZE) {
 export function sanitizeState(raw) {
   if (!raw || !Array.isArray(raw.components) || !Array.isArray(raw.wires)) return defaultBenchState();
   const size = normalizeSize(raw.size);
+  // State lưu trước khi đổi nhãn hàng (không có cờ labelFormat) thì id lỗ
+  // còn ở định dạng cũ — chuyển 1 lần theo số hàng đã lưu. State mới đã
+  // có cờ thì id đã đúng, không chuyển lại.
+  const oldRows = rowsOf(size);
+  const migrate = raw.labelFormat !== HOLE_LABEL_FORMAT ? (id) => migrateOldHoleId(id, oldRows) : (id) => id;
   const components = [];
   for (const c of raw.components) {
     if (!c || typeof c.id !== 'string' || typeof c.type !== 'string') continue;
@@ -658,10 +702,11 @@ export function sanitizeState(raw) {
       }
       continue;
     }
-    if (!LEG_LAYOUTS[c.type] || !parseHole(c.anchor, size)) continue;
-    const chk = canPlace({ size, components }, c.type, c.anchor, c.rot || 0);
+    const anchor = migrate(c.anchor);
+    if (!LEG_LAYOUTS[c.type] || !parseHole(anchor, size)) continue;
+    const chk = canPlace({ size, components }, c.type, anchor, c.rot || 0);
     if (!chk.ok) continue;
-    components.push({ id: c.id, type: c.type, anchor: c.anchor, rot: c.rot || 0, props: c.props || defaultProps(c.type) });
+    components.push({ id: c.id, type: c.type, anchor, rot: c.rot || 0, props: c.props || defaultProps(c.type) });
   }
   if (!components.some((c) => c.type === 'pic')) {
     components.unshift({ id: 'PIC1', type: 'pic', anchor: picAnchor(size), rot: 0, fixed: true, props: {} });
@@ -682,11 +727,11 @@ export function sanitizeState(raw) {
       return e && typeof e.x === 'number' && typeof e.y === 'number' && typeof e.z === 'number';
     };
     // Đầu {x,y,z} cũ khớp cọc nguồn thì đổi thành id cọc.
-    const na = normalizeWireEnd({ components }, w.a);
-    const nb = normalizeWireEnd({ components }, w.b);
+    const na = normalizeWireEnd({ components }, migrate(w.a));
+    const nb = normalizeWireEnd({ components }, migrate(w.b));
     if (okEnd(na) && okEnd(nb)) wires.push({ id: w.id, a: na, b: nb, color: w.color });
   }
-  return { size, components, wires };
+  return { size, components, wires, labelFormat: HOLE_LABEL_FORMAT };
 }
 
 // ---------------------------------------------------------------------------
@@ -769,7 +814,7 @@ export function pruneStateForSize(state, newSize) {
     seen.add(key);
     keptWires.push({ id: w.id, a, b, color: w.color });
   }
-  return { state: { size, components: keptComponents, wires: keptWires }, removed };
+  return { state: { size, components: keptComponents, wires: keptWires, labelFormat: HOLE_LABEL_FORMAT }, removed };
 }
 
 // ---------------------------------------------------------------------------
