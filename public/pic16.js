@@ -235,15 +235,47 @@ export function assemble(source) {
   const lines = String(source).split(/\r?\n/);
   const errors = [];
   const labels = {};      // TÊN -> địa chỉ
-  const symbols = {};     // EQU + nhãn (dùng khi parse số)
+  const symbols = {};     // EQU + CBLOCK + nhãn (dùng khi parse số)
   const lineInfo = [];    // mỗi dòng: { lineNo, label, mnemonic, ops, addr, size }
   let pc = 0;
+  let cblockAddr = null;  // null = ngoài khối CBLOCK; số = địa chỉ tiếp theo để gán
 
   // --- Pass 1: quét nhãn, EQU, ORG; tính địa chỉ ---
   for (let i = 0; i < lines.length; i++) {
     const lineNo = i + 1;
     const clean = stripComment(lines[i]).trim();
     if (!clean) { lineInfo.push({ lineNo }); continue; }
+    // CBLOCK/ENDC và tên biến trong khối: xử lý TRƯỚC khi tách nhãn, vì
+    // "X:3" trong CBLOCK là giữ 3 byte, không phải nhãn code "X:".
+    {
+      const firstTok = clean.split(/\s+/)[0].toUpperCase();
+      if (firstTok === 'CBLOCK') {
+        const tailC = clean.slice(clean.split(/\s+/)[0].length).trim();
+        const v = parseNumberToken(tailC, symbols);
+        if (v === null || v === undefined) errors.push({ line: lineNo, message: `CBLOCK không hiểu "${tailC}"` });
+        else cblockAddr = v & 0xff;
+        lineInfo.push({ lineNo, directive: 'CBLOCK' }); continue;
+      }
+      if (firstTok === 'ENDC') {
+        cblockAddr = null;
+        lineInfo.push({ lineNo, directive: 'ENDC' }); continue;
+      }
+      if (cblockAddr !== null) {
+        // Trong khối CBLOCK: mỗi dòng là 1 tên biến, chiếm 1 byte, địa chỉ tăng dần.
+        // Cho phép "TEN:n" để giữ n byte (mặc định 1).
+        const mRes = clean.match(/^([A-Za-z_][A-Za-z0-9_]*)(?::(\d+))?$/);
+        if (mRes) {
+          const up = mRes[1].toUpperCase();
+          const n = mRes[2] ? parseInt(mRes[2], 10) : 1;
+          if (up in symbols) errors.push({ line: lineNo, message: `Tên "${mRes[1]}" bị trùng trong CBLOCK` });
+          else symbols[up] = cblockAddr;
+          cblockAddr += n;
+          lineInfo.push({ lineNo, directive: 'CBLOCK' }); continue;
+        }
+        errors.push({ line: lineNo, message: `CBLOCK không hiểu dòng: "${clean}"` });
+        lineInfo.push({ lineNo }); continue;
+      }
+    }
     // Tách nhãn ở đầu: "LOOP:" hoặc "LOOP" đứng một mình / trước lệnh
     let rest = clean; let label = null;
     const mColon = rest.match(/^([A-Za-z_][A-Za-z0-9_]*)\s*:\s*(.*)$/);
