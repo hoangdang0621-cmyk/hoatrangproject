@@ -2,7 +2,7 @@
 // Chạy: node test-pic16.mjs   (exit 0 = tất cả pass)
 import { assemble, createCPU, parseIntelHex, exportHex, disassemble } from './public/pic16.js';
 import { defaultNetlist, resolvePeripherals, checkWiring, ledStates, applyButtonToCpu, applyPotToCpu, PIC_PINS } from './public/wiring.js';
-import { allHoles, stripKey, parseHole, holePos, picLegs, canPlace, benchToNetlist, defaultBenchState, sanitizeState, boardSize, picCol, pruneStateForSize, validateWireEnd, retargetWireEnd, togglePlacement } from './public/bench-model.js';
+import { PITCH, allHoles, stripKey, parseHole, holePos, picLegs, canPlace, benchToNetlist, defaultBenchState, sanitizeState, boardSize, picCol, pruneStateForSize, validateWireEnd, retargetWireEnd, togglePlacement, normalizeSize, holeCount, sizeLabel, sameSize } from './public/bench-model.js';
 
 // Các chương trình Assembly dùng để kiểm thử — inline tại đây (file
 // public/examples.js chứa các bài lab mẫu đã bị gỡ ngày 25/11/2026 nên test
@@ -840,6 +840,148 @@ function rewire(netlist, a, b, a2, b2) {
   check('(c-g) đang chọn LED -> bấm lại LED thì thoát', togglePlacement('led', 'led') === null, '');
   check('(c-g) đang chọn LED -> bấm điện trở thì chuyển sang điện trở',
     togglePlacement('led', 'resistor') === 'resistor', '');
+}
+
+// ===========================================================================
+// SIZE TỰ ĐIỀN {cols, rails} — popup Bo mạch (bấm vào board)
+// ===========================================================================
+// (d-a) normalizeSize: chuẩn hoá giá trị lưu trong state
+{
+  check('(d-a) {cols:42, rails:true} giữ nguyên',
+    JSON.stringify(normalizeSize({ cols: 42, rails: true })) === JSON.stringify({ cols: 42, rails: true }), JSON.stringify(normalizeSize({ cols: 42, rails: true })));
+  check('(d-a) cols 3 kẹp lên 5, cols 100 kẹp xuống 63',
+    normalizeSize({ cols: 3, rails: false }).cols === 5 && normalizeSize({ cols: 100, rails: true }).cols === 63, '');
+  check('(d-a) cols không phải số / size lạ -> 830',
+    normalizeSize({ cols: 'abc' }) === 830 && normalizeSize(999) === 830 && normalizeSize() === 830, '');
+  check('(d-a) mẫu sẵn 400 giữ nguyên số', normalizeSize(400) === 400, '');
+}
+
+// (d-b) boardSize + holeCount với size tự điền
+{
+  const s = boardSize({ cols: 42, rails: true });
+  check('(d-b) custom 42 cột có rail: id custom, cols 42, railCols 42',
+    s.id === 'custom' && s.cols === 42 && s.railCols === 42, JSON.stringify(s));
+  check('(d-b) custom 42 cột không rail: railCols 0',
+    boardSize({ cols: 42, rails: false }).railCols === 0, '');
+  check('(d-b) holeCount: 42 cột có rail = 588, không rail = 420, 5 cột không rail = 50',
+    holeCount({ cols: 42, rails: true }) === 588 && holeCount({ cols: 42, rails: false }) === 420
+    && holeCount({ cols: 5, rails: false }) === 50, '');
+  check('(d-b) allHoles custom 42 cột có rail = 588 lỗ',
+    allHoles({ cols: 42, rails: true }).length === 588, `holes=${allHoles({ cols: 42, rails: true }).length}`);
+}
+
+// (d-c) parseHole theo giới hạn của size tự điền
+{
+  check('(d-c) custom 42: a42 hợp lệ, a43 ngoài board',
+    parseHole('a42', { cols: 42, rails: true }) !== null && parseHole('a43', { cols: 42, rails: true }) === null, '');
+  check('(d-c) custom 42 có rail: T+42 hợp lệ, T+43 ngoài board',
+    parseHole('T+42', { cols: 42, rails: true }) !== null && parseHole('T+43', { cols: 42, rails: true }) === null, '');
+  check('(d-c) custom 42 không rail: T+1 không hợp lệ',
+    parseHole('T+1', { cols: 42, rails: false }) === null, '');
+  check('(d-c) stripKey rail trên custom: T+5 -> RAIL+',
+    stripKey('T+5', { cols: 42, rails: true }) === 'RAIL+', '');
+}
+
+// (d-d) picCol theo công thức + chip vừa/không vừa trên size tự điền
+{
+  check('(d-d) picCol: custom 42 -> 12, custom 63 có rail -> 22 (như 830), custom 30 -> 6, custom 10 -> 0',
+    picCol({ cols: 42, rails: true }) === 12 && picCol({ cols: 63, rails: true }) === 22
+    && picCol({ cols: 30, rails: false }) === 6 && picCol({ cols: 10, rails: false }) === 0, '');
+  check('(d-d) chip 42 cột: đủ 40 chân trong board',
+    (() => { const legs = picLegs({ cols: 42, rails: true }); return legs.length === 40 && legs.every((l) => !!l.hole); })(), '');
+  check('(d-d) chip 10 cột: 20 chân trong board, 20 chân treo ngoài',
+    (() => { const legs = picLegs({ cols: 10, rails: false }); return legs.filter((l) => l.hole).length === 20 && legs.filter((l) => !l.hole).length === 20; })(), '');
+}
+
+// (d-e) Đổi size sang tự điền: giữ/loại linh kiện + dây nguồn nối lại
+{
+  const st = defaultBenchState(830);
+  st.components.push({ id: 'LED0', type: 'led', anchor: 'a10', rot: 0, props: { color: '#DC2626' } });
+  st.components.push({ id: 'LED1', type: 'led', anchor: 'a60', rot: 0, props: { color: '#DC2626' } });
+  st.wires.push({ id: 'W10', a: 'a10', b: 'a11', color: '#2563EB' });
+  st.wires.push({ id: 'W11', a: 'c10', b: 'b38', color: '#2563EB' });
+  const r30 = pruneStateForSize(st, { cols: 30, rails: true });
+  check('(d-e) 830->{30 cột, có rail}: LED a10 giữ, LED a60 gỡ',
+    r30.state.components.some((c) => c.id === 'LED0') && !r30.state.components.some((c) => c.id === 'LED1')
+    && r30.removed.components.join(',') === 'LED1', JSON.stringify(r30.removed.components));
+  check('(d-e) 830->{30 cột, có rail}: dây W1 nối lại b6->T+22, W6 về T+30',
+    (() => {
+      const w1 = r30.state.wires.find((w) => w.id === 'W1');
+      const w6 = r30.state.wires.find((w) => w.id === 'W6');
+      return w1 && w1.a === 'b6' && w1.b === 'T+22' && w6 && w6.b === 'T+30';
+    })(), JSON.stringify(r30.state.wires.filter((w) => ['W1', 'W6'].includes(w.id))));
+  const r30nr = pruneStateForSize(st, { cols: 30, rails: false });
+  check('(d-e) 830->{30 cột, không rail}: hết dây nguồn W1-W7',
+    ['W1', 'W2', 'W3', 'W4', 'W5', 'W6', 'W7'].every((id) => r30nr.removed.wires.includes(id)), JSON.stringify(r30nr.removed.wires));
+  const st42 = defaultBenchState({ cols: 42, rails: true });
+  const rSame = pruneStateForSize(st42, { cols: 42, rails: true });
+  check('(d-e) đổi size tự điền về chính nó: không gỡ gì, size giữ nguyên {cols:42, rails:true}',
+    rSame.removed.components.length === 0 && rSame.removed.wires.length === 0
+    && JSON.stringify(rSame.state.size) === JSON.stringify({ cols: 42, rails: true }), JSON.stringify(rSame.state.size));
+}
+
+// (d-f) sanitizeState giữ nguyên size tự điền
+{
+  const s = sanitizeState({
+    size: { cols: 42, rails: true },
+    components: [
+      { id: 'PIC1', type: 'pic', anchor: 'b13', rot: 0, fixed: true, props: {} },
+      { id: 'LED0', type: 'led', anchor: 'a10', rot: 0, props: { color: '#DC2626' } },
+    ],
+    wires: [],
+  });
+  check('(d-f) sanitize giữ size tự điền {cols:42, rails:true} + LED a10',
+    JSON.stringify(s.size) === JSON.stringify({ cols: 42, rails: true })
+    && s.components.some((c) => c.id === 'LED0'), JSON.stringify(s.size));
+  check('(d-f) sanitize kẹp cols lạ: {cols:3} -> 5, size 999 -> 830',
+    sanitizeState({ size: { cols: 3 }, components: [], wires: [] }).size.cols === 5
+    && sanitizeState({ size: 999, components: [], wires: [] }).size === 830, '');
+}
+
+// (d-g) sameSize: so sánh size (mẫu sẵn vs tự điền)
+{
+  check('(d-g) sameSize: 830==830, 830!=400',
+    sameSize(830, 830) && !sameSize(830, 400), '');
+  check('(d-g) custom 63 cột có rail != 830 (railCols 63 vs 50)',
+    !sameSize({ cols: 63, rails: true }, 830), '');
+  check('(d-g) custom giống nhau thì bằng, khác rails/cols thì khác',
+    sameSize({ cols: 42, rails: true }, { cols: 42, rails: true })
+    && !sameSize({ cols: 42, rails: true }, { cols: 42, rails: false })
+    && !sameSize({ cols: 42, rails: true }, { cols: 43, rails: true }), '');
+}
+
+// (d-h) Công thức cột từ x (pickHole trong bench.js): c = round(x/PITCH + (cols+1)/2)
+{
+  for (const size of [170, 400, 830, { cols: 42, rails: true }, { cols: 5, rails: false }]) {
+    const cols = boardSize(size).cols;
+    const ids = ['a1', `e${Math.min(20, cols)}`, `j${cols}`];
+    const ok = ids.every((id) => {
+      const p = holePos(id, size);
+      if (!p) return false;
+      return Math.round(p.x / PITCH + (cols + 1) / 2) === parseHole(id, size).c;
+    });
+    check(`(d-h) nghịch đảo holePos trên ${JSON.stringify(size)}: cột tính lại đúng`, ok, '');
+  }
+}
+
+// (d-i) sizeLabel hiển thị
+{
+  check('(d-i) sizeLabel mẫu sẵn: Mini/Nửa/Đầy đủ',
+    sizeLabel(170) === 'Mini 170 lỗ' && sizeLabel(400) === 'Nửa 400 lỗ' && sizeLabel(830) === 'Đầy đủ 830 lỗ', '');
+  check('(d-i) sizeLabel tự điền: 42 cột có rail -> "Tùy chỉnh · 588 lỗ", 5 cột không rail -> "Tùy chỉnh · 50 lỗ"',
+    sizeLabel({ cols: 42, rails: true }) === 'Tùy chỉnh · 588 lỗ'
+    && sizeLabel({ cols: 5, rails: false }) === 'Tùy chỉnh · 50 lỗ', '');
+}
+
+// (d-j) validateWireEnd theo giới hạn size tự điền
+{
+  const st = defaultBenchState({ cols: 42, rails: true });
+  st.wires.push({ id: 'W10', a: 'a10', b: 'a11', color: '#2563EB' });
+  check('(d-j) custom 42: đổi đầu dây sang a43 thì lỗi, sang a42 thì được',
+    validateWireEnd(st, 'W10', 'b', 'a43').ok === false && validateWireEnd(st, 'W10', 'b', 'a42').ok === true, '');
+  const r = retargetWireEnd(st, 'W10', 'b', 'a42');
+  check('(d-j) retarget sang a42 áp dụng đúng vào state',
+    r.ok === true && st.wires.find((w) => w.id === 'W10').b === 'a42', JSON.stringify(st.wires.find((w) => w.id === 'W10')));
 }
 
 console.log(`\nKết quả: ${pass} pass, ${fail} fail`);

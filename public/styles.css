@@ -70,8 +70,6 @@ button { cursor: pointer; }
 }
 .seg button + button { border-left: 1px solid var(--color-border); }
 .seg button[aria-pressed="true"] { background: var(--color-primary); color: var(--color-on-primary); }
-/* Bộ chọn size bo mạch: nằm cùng hàng với nút 3D/Từ trên, dùng màu accent khi chọn. */
-.bench-size-seg button[aria-pressed="true"] { background: var(--color-accent); color: var(--color-on-accent); }
 .bench-canvas-head { display: flex; align-items: center; gap: var(--space-sm); flex-wrap: wrap; }
 .bench-canvas-head h1 { margin-right: auto; }
 
@@ -226,6 +224,16 @@ button { cursor: pointer; }
 }
 .bench-insp-body { padding: 14px 16px; display: flex; flex-direction: column; gap: 8px; }
 .bench-insp-label { font-weight: 600; font-size: 0.9rem; }
+.bench-insp-sub { font-weight: 500; color: var(--color-muted-foreground); margin-top: 4px; }
+/* Popup Bo mạch: 3 mẫu sẵn + tự điền số cột / rail nguồn. */
+.bench-board-presets { display: grid; gap: 8px; margin: 6px 0 12px; }
+.bench-board-preset { width: 100%; justify-content: flex-start; }
+.bench-board-preset[aria-pressed="true"] { background: var(--color-accent); color: var(--color-on-accent); }
+.bench-insp-row {
+  display: flex; align-items: center; gap: 8px; min-height: 44px;
+  font-weight: 600; font-size: 0.95rem; cursor: pointer;
+}
+.bench-insp-row input[type="checkbox"] { width: 20px; height: 20px; accent-color: var(--color-primary); }
 /* Ô nhập địa chỉ lỗ cho đầu dây (Inspector dây) + báo lỗi đỏ. */
 .bench-insp-hole { width: 100%; font-family: "Fira Code", monospace; margin: 4px 0 8px; }
 .bench-insp-err { color: var(--color-destructive); font-size: 0.9rem; min-height: 1.2em; margin: 4px 0 8px; }

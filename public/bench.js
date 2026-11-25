@@ -9,7 +9,8 @@ import {
   describeTerminal, defaultBenchState, nextComponentId, compLabel,
   defaultProps, sanitizeState, boardSize, colsOf, railColsOf, picCol,
   pruneStateForSize, validateWireEnd, retargetWireEnd, togglePlacement,
-} from './bench-model.js?v=20261125g';
+  normalizeSize, holeCount, sizeLabel, sameSize,
+} from './bench-model.js?v=20261125h';
 import { checkWiring, SIGNAL_COLORS } from './wiring.js?v=20261125b';
 
 const $ = (id) => document.getElementById(id);
@@ -215,7 +216,45 @@ function main() {
   function renderInspector() {
     if (!inspectorEl) return;
     if (!selected) { inspectorEl.classList.remove('open'); inspectorEl.innerHTML = ''; return; }
-    if (selected.kind === 'wire') {
+    if (selected.kind === 'board') {
+      // Popup Bo mạch: 3 mẫu sẵn (bấm là áp dụng ngay) + tự điền thông số.
+      const cur = boardSize(state.size);
+      const isPreset = (n) => state.size === n;
+      inspectorEl.innerHTML = `
+        <div class="bench-insp-head"><div><strong>Bo mạch</strong><div class="bench-insp-pos">${esc(sizeLabel(state.size))} · ${cur.cols} cột${cur.railCols > 0 ? ' · có rail nguồn' : ' · không rail'}</div></div>
+        <button type="button" class="bench-insp-close" data-act="close" aria-label="Đóng">×</button></div>
+        <div class="bench-insp-body">
+          <label class="bench-insp-label">Mẫu sẵn — bấm để áp dụng ngay</label>
+          <div class="bench-board-presets">
+            ${[170, 400, 830].map((n) => `<button type="button" class="btn btn-small bench-board-preset" data-size="${n}" aria-pressed="${isPreset(n)}">${sizeLabel(n)}</button>`).join('')}
+          </div>
+          <label class="bench-insp-label" for="inspBoardCols">Tự điền thông số</label>
+          <label class="bench-insp-label bench-insp-sub" for="inspBoardCols">Số cột (5–63)</label>
+          <input class="input bench-insp-hole" id="inspBoardCols" type="number" min="5" max="63" step="1" value="${cur.cols}">
+          <label class="bench-insp-row"><input type="checkbox" id="inspBoardRails"${cur.railCols > 0 ? ' checked' : ''}> Có rail nguồn</label>
+          <p class="bench-insp-err" id="inspBoardErr" role="alert"></p>
+          <button type="button" class="btn btn-accent btn-small" data-act="apply-board">Áp dụng</button>
+          <p class="sub">Đổi kích thước thì chip tự căn lại giữa board; linh kiện/dây ngoài board mới bị gỡ (có ghi chú ở dòng trạng thái).</p>
+        </div>`;
+      inspectorEl.querySelectorAll('[data-size]').forEach((b) => b.addEventListener('click', () => {
+        applyBoardSize(Number(b.dataset.size));
+      }));
+      const applyCustom = () => {
+        const errEl = inspectorEl.querySelector('#inspBoardErr');
+        const cols = Math.round(Number(inspectorEl.querySelector('#inspBoardCols').value));
+        if (!Number.isFinite(cols) || cols < 5 || cols > 63) {
+          if (errEl) errEl.textContent = 'Số cột phải là số nguyên từ 5 đến 63.';
+          return;
+        }
+        const rails = inspectorEl.querySelector('#inspBoardRails').checked;
+        applyBoardSize({ cols, rails });
+      };
+      inspectorEl.querySelector('[data-act="apply-board"]')?.addEventListener('click', applyCustom);
+      inspectorEl.querySelector('#inspBoardCols')?.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') { e.preventDefault(); applyCustom(); }
+        e.stopPropagation();
+      });
+    } else if (selected.kind === 'wire') {
       const w = state.wires.find((x) => x.id === selected.id);
       if (!w) { select(null); return; }
       const endVal = (e) => (typeof e === 'string' ? e : '');
@@ -610,9 +649,11 @@ function main() {
   }
 
   // Đổi size bo mạch: giữ linh kiện/dây còn trên board mới, gỡ cái ngoài board.
+  // newSize là số mẫu sẵn (170/400/830) hoặc {cols, rails} tự điền.
   function applyBoardSize(newSize) {
-    const size = boardSize(newSize).id;
-    if (size === state.size) { updateSizeUI(); return; }
+    const size = normalizeSize(newSize);
+    if (sameSize(size, state.size)) { updateSizeUI(); return; }
+    const wasBoard = selected && selected.kind === 'board';
     const res = pruneStateForSize(state, size);
     state = res.state;
     seq = 1; wireSeq = 100;
@@ -624,21 +665,18 @@ function main() {
       const n = parseInt(String(w.id).replace(/^W/, ''), 10);
       if (!isNaN(n) && n >= wireSeq) wireSeq = n + 1;
     });
-    select(null);
-    setWiringMode(false);
-    setPlacementMode(null);
+    if (wasBoard) { setWiringMode(false); setPlacementMode(null); }
+    else select(null);
     save(); rebuildBoard(); rebuildAll(); syncToCpu(); updateSizeUI();
+    if (wasBoard) renderInspector(); // popup Bo mạch vẫn mở, hiện size mới
     const parts = [];
     if (res.removed.components.length) parts.push('gỡ ' + res.removed.components.length + ' linh kiện ngoài board');
     if (res.removed.wires.length) parts.push('gỡ ' + res.removed.wires.length + ' dây ngoài board');
-    setStatus('Đã đổi size bo mạch sang ' + size + ' lỗ' + (parts.length ? ' — ' + parts.join(', ') + '.' : '.'));
+    setStatus('Đã đổi size bo mạch sang ' + sizeLabel(size) + (parts.length ? ' — ' + parts.join(', ') + '.' : '.'));
   }
   function updateSizeUI() {
-    document.querySelectorAll('#benchSizeSeg [data-size]').forEach((b) => {
-      b.setAttribute('aria-pressed', String(Number(b.dataset.size) === state.size));
-    });
     const info = $('benchBoardInfo');
-    if (info) info.textContent = `Breadboard ${state.size} lỗ · chip PIC16F877A cắm sẵn · nguồn 5V phía sau bàn. Kéo chỗ trống để xoay 360°, cuộn chuột để zoom. Bấm linh kiện để mở Inspector bên phải.`;
+    if (info) info.textContent = `${sizeLabel(state.size)} · chip PIC16F877A cắm sẵn · nguồn 5V phía sau bàn. Kéo chỗ trống để xoay 360°, cuộn chuột để zoom. Bấm vào board để đổi kích thước, bấm linh kiện để mở Inspector bên phải.`;
   }
 
   // --- Vẽ linh kiện 3D ---
@@ -965,7 +1003,9 @@ function main() {
     raycaster.setFromCamera(ndc, camera);
     const pt = new THREE.Vector3();
     if (!raycaster.ray.intersectPlane(boardPlane(), pt)) return null;
-    const col = Math.round(pt.x / PITCH) + 32;
+    // Cột từ x: x = (c − (cols+1)/2) × PITCH -> c = x/PITCH + (cols+1)/2
+    // (không hardcode 32 — chỉ đúng với board 830).
+    const col = Math.round(pt.x / PITCH + (colsOf(state.size) + 1) / 2);
     let best = null, bestD = 1e9;
     for (let r = -2; r <= 11; r++) {
       const z = (r - 4.5) * PITCH;
@@ -977,6 +1017,18 @@ function main() {
     const hp = holePos(id, state.size);
     const dist = Math.hypot(pt.x - hp.x, pt.z - hp.z);
     return dist <= 2.0 ? id : null;
+  }
+  // Điểm bấm trên thân board (kể cả lỗ trống): giao tia với mặt trên board,
+  // chỉ nhận khi nằm trong hình chữ nhật thân board. Dùng để mở popup Bo mạch.
+  function pickBoardPoint(e) {
+    const ndc = pointerNdc(e);
+    if (!ndc.inside) return null;
+    raycaster.setFromCamera(ndc, camera);
+    const pt = new THREE.Vector3();
+    if (!raycaster.ray.intersectPlane(boardPlane(), pt)) return null;
+    const bodyW = colsOf(state.size) * PITCH + 10;
+    if (Math.abs(pt.x) > bodyW / 2 || Math.abs(pt.z) > 24) return null;
+    return { x: pt.x, z: pt.z };
   }
   function pickTablePoint(e) {
     const ndc = pointerNdc(e);
@@ -1294,7 +1346,12 @@ function main() {
       return;
     }
     if (d.mode === 'orbit') {
-      if (!d.moved) select(null); // bấm chỗ trống: bỏ chọn
+      if (!d.moved) {
+        // Bấm (không kéo) lên thân board hoặc lỗ trống: mở popup Bo mạch;
+        // bấm ra ngoài board thì bỏ chọn như cũ.
+        if (pickBoardPoint(e)) select({ kind: 'board' });
+        else select(null);
+      }
       return;
     }
     if (d.mode === 'move') {
@@ -1477,11 +1534,6 @@ function main() {
   renderPalette();
   renderChecks();
   updateModeBanner();
-  // --- Bộ chọn size bo mạch ---
-  document.querySelectorAll('#benchSizeSeg [data-size]').forEach((b) => b.addEventListener('click', () => {
-    if (!sceneReady) { state.size = boardSize(Number(b.dataset.size)).id; save(); updateSizeUI(); return; }
-    applyBoardSize(Number(b.dataset.size));
-  }));
   updateSizeUI();
 }
 

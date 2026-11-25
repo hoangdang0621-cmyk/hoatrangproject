@@ -1,6 +1,6 @@
 // bench-model.js — Mô hình lỗ/strip của bàn thực hành 3D (không DOM, không Three.js).
-// Breadboard 3 size (kiểu ohmimic): Mini 170 lỗ (17 cột, không rail),
-// Nửa 400 lỗ (30 cột, rail 25), Đầy đủ 830 lỗ (63 cột, rail 50).
+// Breadboard đổi được kích thước: 3 mẫu sẵn (Mini 170 lỗ, Nửa 400 lỗ,
+// Đầy đủ 830 lỗ) hoặc tự điền số cột 5–63 + chọn có rail nguồn hay không.
 // Hàng a–e của mỗi cột nối nhau thành 1 strip, f–j nối nhau, rail chạy suốt
 // chiều dài (mọi lỗ rail + là +5V, mọi lỗ rail − là GND).
 // Chân linh kiện cắm thẳng vào lỗ, breadboard chính là đế (kiểu ohmimic).
@@ -11,9 +11,10 @@
 // (terminal 'PIC.RB0', 'LED0.A', 'VCC', 'GND') để nối vào CPU.
 
 export const PITCH = 2.54;       // khoảng cách lỗ (mm)
-// Size bo mạch (kiểu ohmimic): Mini 170 lỗ, Nửa 400 lỗ, Đầy đủ 830 lỗ.
+// Size bo mạch: 3 mẫu sẵn (kiểu ohmimic) hoặc tự điền {cols, rails}.
 // 830 = 63 cột x 10 hàng + 4 rail x 50; 400 = 30 x 10 + 4 x 25;
 // 170 = 17 x 10, không có rail (đúng board mini thật).
+// Tự điền: số cột 5–63, rail bật/tắt; rail bật thì dài bằng số cột.
 // Chip PIC DIP-40 rộng 20 cột nên trên board Mini 17 cột thì 6 chân ngoài
 // cùng (MCLR, RD0, RD1, RD2, RD3, RB7) treo ngoài board — giới hạn vật lý thật.
 export const BOARD_SIZES = {
@@ -23,16 +24,52 @@ export const BOARD_SIZES = {
 };
 export const BOARD_SIZE_IDS = [170, 400, 830];
 export const DEFAULT_SIZE = 830;
+export const CUSTOM_COLS_MIN = 5;
+export const CUSTOM_COLS_MAX = 63;
+// Chuẩn hoá size thành giá trị lưu trong state: số (mẫu sẵn) hoặc
+// {cols, rails} (tự điền, số cột kẹp 5–63). Không hợp lệ -> 830.
+export function normalizeSize(size) {
+  if (typeof size === 'number' && BOARD_SIZES[size]) return size;
+  if (size && typeof size === 'object') {
+    const cols = Math.round(Number(size.cols));
+    if (Number.isFinite(cols)) {
+      return {
+        cols: Math.max(CUSTOM_COLS_MIN, Math.min(CUSTOM_COLS_MAX, cols)),
+        rails: !!size.rails,
+      };
+    }
+  }
+  return DEFAULT_SIZE;
+}
+// Mô tả size: {id, cols, railCols} — id là số mẫu sẵn hoặc 'custom'.
 export function boardSize(size) {
-  const s = Number(size);
-  return BOARD_SIZES[s] ? { id: s, ...BOARD_SIZES[s] } : { id: 830, ...BOARD_SIZES[830] };
+  const s = normalizeSize(size);
+  if (typeof s === 'number') return { id: s, ...BOARD_SIZES[s] };
+  return { id: 'custom', cols: s.cols, railCols: s.rails ? s.cols : 0 };
 }
 export function colsOf(size) { return boardSize(size).cols; }
 export function railColsOf(size) { return boardSize(size).railCols; }
-// Cột bắt đầu của chip PIC (căn giữa board): 830 -> 22 (như cũ),
-// 400 -> 6, 170 -> 0 (chip tràn nửa cột mỗi bên).
-const PIC_COL_BY_SIZE = { 830: 22, 400: 6, 170: 0 };
-export function picCol(size) { return PIC_COL_BY_SIZE[boardSize(size).id]; }
+// Tổng số lỗ trên board (10 hàng + 4 rail).
+export function holeCount(size) {
+  const s = boardSize(size);
+  return s.cols * 10 + 4 * s.railCols;
+}
+// Tên hiển thị của size: tên mẫu sẵn hoặc 'Tùy chỉnh · N lỗ'.
+export function sizeLabel(size) {
+  const s = boardSize(size);
+  if (s.id === 170) return 'Mini 170 lỗ';
+  if (s.id === 400) return 'Nửa 400 lỗ';
+  if (s.id === 830) return 'Đầy đủ 830 lỗ';
+  return `Tùy chỉnh · ${holeCount(size)} lỗ`;
+}
+// Hai size có bằng nhau không (so theo id + cols + railCols).
+export function sameSize(a, b) {
+  const x = boardSize(a), y = boardSize(b);
+  return x.id === y.id && x.cols === y.cols && x.railCols === y.railCols;
+}
+// Cột bắt đầu của chip PIC (căn giữa board): 830 -> 22, 400 -> 6,
+// 170 -> 0 (chip tràn nửa cột mỗi bên); board tự điền theo cùng công thức.
+export function picCol(size) { return Math.max(0, Math.floor((colsOf(size) - 20) / 2) + 1); }
 export const ROWS = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j'];
 // Hàng trong lưới nội bộ: T+ = -2, T− = -1, a..j = 0..9, B+ = 10, B− = 11
 const RAIL_ROW = { 'T+': -2, 'T-': -1, 'B+': 10, 'B-': 11 };
@@ -137,7 +174,7 @@ export const PIC_PIN_IDS_RIGHT = ['RD2', 'RD3', 'RC4', 'RC5', 'RC6', 'RC7', 'RD4
 
 // Chân chip: [{term: 'PIC.RA0', hole: 'b23', pin: 2, r: 1, c: 23}] —
 // pin 1 ở (b, picCol), pin 20 ở (b, picCol+19), pin 21 ở (h, picCol+19),
-// pin 40 ở (h, picCol). Trên board Mini 170 thì 4 chân ngoài cùng có
+// pin 40 ở (h, picCol). Trên board Mini 170 thì 6 chân ngoài cùng có
 // hole = null (treo ngoài board, xem ghi chú ở BOARD_SIZES).
 export function picLegs(size = DEFAULT_SIZE) {
   const pc = picCol(size);
@@ -383,7 +420,7 @@ export function defaultProps(type) {
 // có rail nên không có dây nguồn mặc định.
 export function defaultBenchState(size = DEFAULT_SIZE) {
   const s = boardSize(size);
-  const legs = picLegs(s.id);
+  const legs = picLegs(size);
   const legByPin = new Map(legs.map((l) => [l.pin, l]));
   const wires = [];
   // Dây nguồn của chip: chân PIC -> rail cùng cột (cột rail kẹp về railCols).
@@ -404,9 +441,9 @@ export function defaultBenchState(size = DEFAULT_SIZE) {
     wires.push({ id: 'W7', a: { x: 12, y: 28, z: -108 }, b: 'T-' + rc, color: '#0F172A' });
   }
   return {
-    size: s.id,
+    size: normalizeSize(size),
     components: [
-      { id: 'PIC1', type: 'pic', anchor: holeId(1, Math.max(1, picCol(s.id)), s.id) ?? 'b1', rot: 0, fixed: true, props: {} },
+      { id: 'PIC1', type: 'pic', anchor: holeId(1, Math.max(1, picCol(size)), size) ?? 'b1', rot: 0, fixed: true, props: {} },
       { id: 'PSU1', type: 'psu', tx: 0, tz: -150, fixed: true, props: {} },
     ],
     wires,
@@ -417,7 +454,7 @@ export function defaultBenchState(size = DEFAULT_SIZE) {
 // trên size của nó (state cũ không có size thì mặc định 830).
 export function sanitizeState(raw) {
   if (!raw || !Array.isArray(raw.components) || !Array.isArray(raw.wires)) return defaultBenchState();
-  const size = boardSize(raw.size).id;
+  const size = normalizeSize(raw.size);
   const components = [];
   for (const c of raw.components) {
     if (!c || typeof c.id !== 'string' || typeof c.type !== 'string') continue;
@@ -455,8 +492,8 @@ export function sanitizeState(raw) {
 // chân PIC và rail của size mới. Trả {state, removed: {components, wires}}.
 // ---------------------------------------------------------------------------
 export function pruneStateForSize(state, newSize) {
-  const size = boardSize(newSize).id;
-  const oldSize = boardSize(state.size).id;
+  const size = normalizeSize(newSize);
+  const oldSize = normalizeSize(state.size);
   const removed = { components: [], wires: [] };
   const legs = picLegs(size);
   const legByPin = new Map(legs.map((l) => [l.pin, l]));
@@ -529,11 +566,11 @@ export function pruneStateForSize(state, newSize) {
 // Kiểm tra trước bằng validateWireEnd rồi mới áp dụng bằng retargetWireEnd.
 // ---------------------------------------------------------------------------
 export function validateWireEnd(state, wireId, end, newHole) {
-  const size = boardSize(state.size).id;
+  const size = normalizeSize(state.size);
   const w = state.wires.find((x) => x.id === wireId);
   if (!w) return { ok: false, reason: 'Không tìm thấy dây.' };
   if (end !== 'a' && end !== 'b') return { ok: false, reason: 'Đầu dây không hợp lệ.' };
-  if (!parseHole(newHole, size)) return { ok: false, reason: 'Địa chỉ lỗ "' + newHole + '" không hợp lệ trên board ' + size + '.' };
+  if (!parseHole(newHole, size)) return { ok: false, reason: 'Địa chỉ lỗ "' + newHole + '" không hợp lệ trên board ' + sizeLabel(size) + '.' };
   const other = end === 'a' ? w.b : w.a;
   if (other === newHole) return { ok: false, reason: 'Hai đầu dây trùng nhau.' };
   const dup = state.wires.some((x) => x.id !== wireId
