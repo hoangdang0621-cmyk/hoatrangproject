@@ -70,6 +70,10 @@ button { cursor: pointer; }
 }
 .seg button + button { border-left: 1px solid var(--color-border); }
 .seg button[aria-pressed="true"] { background: var(--color-primary); color: var(--color-on-primary); }
+/* Bộ chọn size bo mạch: nằm cùng hàng với nút 3D/Từ trên, dùng màu accent khi chọn. */
+.bench-size-seg button[aria-pressed="true"] { background: var(--color-accent); color: var(--color-on-accent); }
+.bench-canvas-head { display: flex; align-items: center; gap: var(--space-sm); flex-wrap: wrap; }
+.bench-canvas-head h1 { margin-right: auto; }
 
 .select, .input {
   min-height: 44px; padding: 8px 12px; border: 1px solid var(--color-border);
@@ -130,6 +134,8 @@ button { cursor: pointer; }
 .bench-pal-item:hover { border-color: var(--color-primary); box-shadow: var(--shadow-sm); }
 .bench-pal-item:active { cursor: grabbing; }
 .bench-pal-item.wiring { border-color: var(--color-accent); box-shadow: 0 0 0 2px var(--color-accent); }
+/* Thẻ khay đang ở chế độ đặt dính: giữ trạng thái chọn cho tới khi bấm lại. */
+.bench-pal-item.placing { border-color: var(--color-accent); background: #ECFDF5; box-shadow: 0 0 0 2px var(--color-accent); }
 .bench-pal-item svg { width: 100%; height: 56px; display: block; }
 .bench-pal-item span { display: block; font-size: 0.85rem; font-weight: 600; margin-top: 4px; }
 .bench-mode-banner {
@@ -220,6 +226,10 @@ button { cursor: pointer; }
 }
 .bench-insp-body { padding: 14px 16px; display: flex; flex-direction: column; gap: 8px; }
 .bench-insp-label { font-weight: 600; font-size: 0.9rem; }
+/* Ô nhập địa chỉ lỗ cho đầu dây (Inspector dây) + báo lỗi đỏ. */
+.bench-insp-hole { width: 100%; font-family: "Fira Code", monospace; margin: 4px 0 8px; }
+.bench-insp-err { color: var(--color-destructive); font-size: 0.9rem; min-height: 1.2em; margin: 4px 0 8px; }
+.bench-insp-err:empty { display: none; }
 .bench-insp-foot { padding: 12px 16px; border-top: 1px solid var(--color-border); margin-top: auto; }
 .bench-conns { display: flex; flex-direction: column; gap: 4px; margin-top: 4px; }
 .bench-conn {

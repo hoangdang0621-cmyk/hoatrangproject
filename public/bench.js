@@ -7,8 +7,9 @@ import {
   PITCH, holeId, holePos, allHoles,
   legOffsets, legsFor, picLegs, canPlace, benchToNetlist,
   describeTerminal, defaultBenchState, nextComponentId, compLabel,
-  defaultProps, sanitizeState,
-} from './bench-model.js?v=20261125e';
+  defaultProps, sanitizeState, boardSize, colsOf, railColsOf, picCol,
+  pruneStateForSize, validateWireEnd, retargetWireEnd, togglePlacement,
+} from './bench-model.js?v=20261125g';
 import { checkWiring, SIGNAL_COLORS } from './wiring.js?v=20261125b';
 
 const $ = (id) => document.getElementById(id);
@@ -50,8 +51,10 @@ function main() {
   let wireColor = SIGNAL_COLORS[0];
   let wireStart = null;         // lỗ bắt đầu của dây đang đi
   let placementMode = null;     // type đang chờ bấm lỗ để đặt (bấm khay, không kéo)
-  let drag = null;              // {mode:'palette'|'move'|'move-psu'|'orbit', ...}
+  let placementRot = 0;         // góc xoay khi đặt dính (0..3, R để xoay)
+  let drag = null;              // {mode:'palette'|'move'|'move-psu'|'orbit'|'wire-end', ...}
   let pressedBtn = null;        // id nút đang nhấn giữ trên bàn
+  let wireAddrError = '';       // lỗi nhập địa chỉ lỗ trong Inspector dây
   let seq = 1, wireSeq = 100;
   state.components.forEach((c) => {
     const n = parseInt(String(c.id).replace(/^[A-Z]+/, ''), 10);
@@ -65,13 +68,16 @@ function main() {
   // --- Three.js (tải lười khi mở tab lần đầu) ---
   let THREE = null, sceneReady = false, threeFailed = false;
   let renderer, scene, camera, raycaster;
-  let boardGroup, compRoot, wireRoot, highlightBox, startMarker;
+  let boardGroup, compRoot, wireRoot, highlightBox, startMarker, ghostLine;
   const compMeshes = new Map();   // compId -> THREE.Group
   const wireMeshes = new Map();   // wireId -> THREE.Mesh (ống) + hit tube
+  const wireHandleMeshes = [];    // núm tròn ở 2 đầu dây đang chọn (để kéo)
   const ledMats = new Map();      // compId -> material phát sáng LED
   const lcdTexs = new Map();      // compId -> {canvas, ctx, tex, last}
   const buzzerMats = new Map();   // compId -> material còi
   const btnTops = new Map();      // compId -> mesh nút bấm (để nhấn xuống)
+  // Khoảng cách camera đóng khung vừa board (tỉ lệ theo chiều rộng board).
+  const frameR = (size) => Math.max(150, Math.round(480 * ((colsOf(size) * PITCH + 10) / 170)));
   const orbit = { az: 0.5, el: 0.72, r: 480 };
   const orbitTarget = { az: 0.5, el: 0.72, r: 480 };
   const camTarget = { x: 0, y: 0, z: -20 };
@@ -142,7 +148,7 @@ function main() {
   function renderPalette(filter = '') {
     const q = filter.trim().toLowerCase();
     paletteEl.innerHTML = PALETTE.filter((p) => !q || p.name.toLowerCase().includes(q)).map((p) =>
-      `<div class="bench-pal-item${p.type === 'wire' && wiringMode ? ' wiring' : ''}" data-type="${p.type}" title="${p.hint}">${p.svg}<span>${p.name}</span></div>`).join('')
+      `<div class="bench-pal-item${p.type === 'wire' && wiringMode ? ' wiring' : ''}${p.type === placementMode ? ' placing' : ''}" data-type="${p.type}" title="${p.hint}">${p.svg}<span>${p.name}</span></div>`).join('')
       || '<p class="sub">Không tìm thấy linh kiện nào.</p>';
     paletteEl.querySelectorAll('.bench-pal-item').forEach((el) => {
       el.addEventListener('pointerdown', (e) => onPalettePointerDown(e, el.dataset.type));
@@ -159,10 +165,13 @@ function main() {
     if (on) setStatus('Đang đi dây — bấm lỗ bắt đầu rồi bấm lỗ kết thúc. Esc để hủy.');
   }
   function setPlacementMode(type) {
-    placementMode = type;
-    if (type) { wiringMode = false; wireStart = null; }
+    // Đặt dính: bấm lại đúng thẻ đang chọn thì thoát chế độ đặt.
+    placementMode = togglePlacement(placementMode, type);
+    placementRot = 0;
+    if (placementMode) { wiringMode = false; wireStart = null; }
     updateModeBanner();
-    if (type) setStatus('Đang đặt ' + (PALETTE.find((p) => p.type === type)?.name || type) + ' — bấm vào lỗ để đặt. Esc để hủy.');
+    renderPalette(searchEl ? searchEl.value : '');
+    if (placementMode) setStatus('Đang đặt ' + (PALETTE.find((p) => p.type === placementMode)?.name || placementMode) + ' — bấm vào lỗ để đặt, thả liên tục. Bấm lại thẻ để thoát, Esc để hủy.');
   }
   function updateModeBanner() {
     if (!modeBanner) return;
@@ -178,7 +187,7 @@ function main() {
       }));
     } else if (placementMode) {
       modeBanner.hidden = false;
-      modeText.innerHTML = '<strong>Đang đặt ' + esc(PALETTE.find((p) => p.type === placementMode)?.name || placementMode) + '</strong> — bấm vào lỗ để đặt · Esc hủy';
+      modeText.innerHTML = '<strong>Đang đặt ' + esc(PALETTE.find((p) => p.type === placementMode)?.name || placementMode) + '</strong> — bấm vào lỗ để đặt, thả liên tục · R xoay (hiện ' + (placementRot * 90) + '°) · bấm lại thẻ để thoát · Esc hủy';
       modeColors.hidden = true;
     } else {
       modeBanner.hidden = true;
@@ -188,8 +197,12 @@ function main() {
 
   // --- Chọn / Inspector (panel trượt từ phải) ---
   function select(sel) {
+    const prevWire = selected && selected.kind === 'wire' ? selected.id : null;
     selected = sel;
-    updateSelectionVisual();
+    wireAddrError = '';
+    // Dây được chọn vẽ lại dày + sáng hơn + có núm kéo 2 đầu.
+    if (prevWire || (sel && sel.kind === 'wire')) rebuildWires();
+    else updateSelectionVisual();
     renderInspector();
   }
   function updateSelectionVisual() {
@@ -198,10 +211,6 @@ function main() {
       ? state.components.find((c) => c.id === selected.id) : null;
     if (selComp && selComp.type !== 'psu' && selComp.type !== 'pic') showHighlightForComp(selComp.id);
     else hideHighlight();
-    wireMeshes.forEach((m, id) => {
-      const on = selected && selected.kind === 'wire' && selected.id === id;
-      if (m.userData.tubeMat) m.userData.tubeMat.emissive = new THREE.Color(on ? 0x059669 : 0x000000);
-    });
   }
   function renderInspector() {
     if (!inspectorEl) return;
@@ -209,18 +218,52 @@ function main() {
     if (selected.kind === 'wire') {
       const w = state.wires.find((x) => x.id === selected.id);
       if (!w) { select(null); return; }
+      const endVal = (e) => (typeof e === 'string' ? e : '');
+      const endHint = (e) => (typeof e === 'string' ? '' : ' placeholder="cọc nguồn"');
       inspectorEl.innerHTML = `
         <div class="bench-insp-head"><div><strong>Dây dẫn</strong><div class="bench-insp-pos">${esc(holeName(w.a))} ↔ ${esc(holeName(w.b))}</div></div>
         <button type="button" class="bench-insp-close" data-act="close" aria-label="Đóng">×</button></div>
         <div class="bench-insp-body">
+          <label class="bench-insp-label" for="inspWireA">Đầu A — địa chỉ lỗ</label>
+          <input class="input bench-insp-hole" id="inspWireA" type="text" value="${esc(endVal(w.a))}"${endHint(w.a)} autocomplete="off" spellcheck="false">
+          <label class="bench-insp-label" for="inspWireB">Đầu B — địa chỉ lỗ</label>
+          <input class="input bench-insp-hole" id="inspWireB" type="text" value="${esc(endVal(w.b))}"${endHint(w.b)} autocomplete="off" spellcheck="false">
+          <p class="sub">Địa chỉ lỗ: chữ hàng a–j + số cột (vd c12, h29) hoặc rail T+/T−/B+/B− + số (vd T+5). Gõ xong bấm Áp dụng hoặc Enter. Để trống 1 ô thì giữ nguyên đầu đó.</p>
+          <p class="bench-insp-err" id="inspWireErr" role="alert">${esc(wireAddrError)}</p>
+          <button type="button" class="btn btn-accent btn-small" data-act="apply-wire">Áp dụng</button>
           <label class="bench-insp-label">Màu dây</label>
           <div class="bench-colors">${SIGNAL_COLORS.map((c) => `<button type="button" class="bench-color${c === w.color ? ' sel' : ''}" data-color="${c}" style="background:${c}" aria-label="Màu dây ${c}"></button>`).join('')}</div>
-          <p class="sub">Dây nối 2 strip của 2 lỗ. Bấm vào dây trên bàn để chọn lại.</p>
+          <p class="sub">Dây nối 2 strip của 2 lỗ. Bấm vào dây trên bàn để chọn, kéo núm tròn ở 2 đầu dây để cắm sang lỗ khác.</p>
         </div>
         <div class="bench-insp-foot"><button type="button" class="btn btn-danger-outline btn-small" data-act="del-wire">Xoá dây</button></div>`;
       inspectorEl.querySelectorAll('.bench-color').forEach((b) => b.addEventListener('click', () => {
         w.color = b.dataset.color;
         save(); rebuildWires(); renderInspector();
+      }));
+      const applyAddrs = () => {
+        const aVal = inspectorEl.querySelector('#inspWireA').value;
+        const bVal = inspectorEl.querySelector('#inspWireB').value;
+        const errs = [];
+        let applied = 0;
+        for (const [end, raw] of [['a', aVal], ['b', bVal]]) {
+          const norm = normalizeHoleInput(raw);
+          if (!norm) continue; // để trống: giữ nguyên đầu đó
+          const r = retargetWireEnd(state, w.id, end, norm);
+          if (r.ok) applied++;
+          else errs.push((end === 'a' ? 'Đầu A' : 'Đầu B') + ': ' + r.reason);
+        }
+        if (applied) { save(); rebuildWires(); syncToCpu(); }
+        wireAddrError = errs.join(' ');
+        if (applied && !errs.length) {
+          setStatus('Đã chuyển đầu dây.');
+          wireAddrError = '';
+        }
+        renderInspector();
+      };
+      inspectorEl.querySelector('[data-act="apply-wire"]')?.addEventListener('click', applyAddrs);
+      inspectorEl.querySelectorAll('.bench-insp-hole').forEach((inp) => inp.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') { e.preventDefault(); applyAddrs(); }
+        e.stopPropagation();
       }));
     } else {
       const comp = state.components.find((c) => c.id === selected.id);
@@ -251,7 +294,7 @@ function main() {
       } else if (comp.type === 'buzzer') {
         body = `<p class="sub">Còi kêu khi chân + ra mức 1.</p>`;
       } else if (comp.type === 'pic') {
-        const conns = picLegs().map((l) => {
+        const conns = picLegs(state.size).map((l) => {
           const d = describeTerminal(state, l.term);
           const others = d.members.filter((m) => m !== l.term);
           if (!others.length && !d.vcc && !d.gnd) return null;
@@ -264,7 +307,7 @@ function main() {
         body = `<p class="sub">Nguồn 5V cố định. Cọc + (đỏ) và − (đen) nối vào rail trên/dưới của breadboard.</p>`;
       }
       const conns = comp.type !== 'pic' && comp.type !== 'psu'
-        ? `<div class="bench-conns">${legsFor(comp).map((l) => {
+        ? `<div class="bench-conns">${legsFor(comp, state.size).map((l) => {
           const term = comp.id + '.' + l.term;
           const d = describeTerminal(state, term);
           const others = d.members.filter((m) => m !== term);
@@ -316,6 +359,16 @@ function main() {
     if (typeof e === 'string') return e;
     if (e && typeof e.x === 'number') return 'cọc nguồn';
     return '?';
+  }
+  // Thường hoá địa chỉ lỗ người dùng gõ: trim, chữ hàng về thường
+  // ('C12' -> 'c12'), chữ rail về hoa ('t+5' -> 'T+5').
+  function normalizeHoleInput(v) {
+    const s = String(v || '').trim();
+    let m = s.match(/^([a-jA-J])(\d+)$/);
+    if (m) return m[1].toLowerCase() + m[2];
+    m = s.match(/^([tTbB])([+-])(\d+)$/);
+    if (m) return m[1].toUpperCase() + m[2] + m[3];
+    return s;
   }
   function deleteSelected() {
     if (!selected) return;
@@ -376,6 +429,9 @@ function main() {
     scene.background = new THREE.Color(0xEDF1F5);
     camera = new THREE.PerspectiveCamera(42, 1, 1, 5000);
     raycaster = new THREE.Raycaster();
+    // Đóng khung vừa board theo size đã lưu.
+    orbitTarget.r = frameR(state.size);
+    orbit.r = orbitTarget.r;
 
     const hemi = new THREE.HemisphereLight(0xFFFFFF, 0x94A3B8, 0.9);
     scene.add(hemi);
@@ -401,7 +457,7 @@ function main() {
 
     boardGroup = new THREE.Group();
     scene.add(boardGroup);
-    buildBreadboardMesh();
+    buildBreadboardMesh(state.size);
     compRoot = new THREE.Group();
     scene.add(compRoot);
     wireRoot = new THREE.Group();
@@ -419,6 +475,12 @@ function main() {
       new THREE.MeshBasicMaterial({ color: 0x2563EB }));
     startMarker.visible = false;
     scene.add(startMarker);
+    // Đường dây tạm khi kéo 1 đầu dây (từ đầu cố định tới chuột)
+    ghostLine = new THREE.Line(
+      new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), new THREE.Vector3()]),
+      new THREE.LineBasicMaterial({ color: 0x2563EB }));
+    ghostLine.visible = false;
+    scene.add(ghostLine);
 
     // Sự kiện chuột trên canvas
     const cv = renderer.domElement;
@@ -428,7 +490,7 @@ function main() {
     cv.addEventListener('pointercancel', onCanvasPointerUp);
     cv.addEventListener('wheel', (e) => {
       e.preventDefault();
-      orbitTarget.r = clamp(orbitTarget.r * Math.exp(e.deltaY * 0.001), 180, 900);
+      orbitTarget.r = clamp(orbitTarget.r * Math.exp(e.deltaY * 0.001), 120, 900);
     }, { passive: false });
     new ResizeObserver(() => {
       if (!renderer) return;
@@ -444,72 +506,81 @@ function main() {
     camera.updateProjectionMatrix();
   }
 
-  function makeBoardTexture() {
+  function makeBoardTexture(size) {
+    const cols = colsOf(size);
+    const bodyW = cols * PITCH + 10;
     const c = document.createElement('canvas');
     c.width = 1024; c.height = 292;
     const ctx = c.getContext('2d');
     ctx.fillStyle = '#F8FAFC';
     ctx.fillRect(0, 0, 1024, 292);
-    const px = (xmm) => (xmm + 85) * (1024 / 170);
+    const px = (xmm) => (xmm + bodyW / 2) * (1024 / bodyW);
     const py = (zmm) => (zmm + 24) * (292 / 48);
     ctx.fillStyle = '#94A3B8';
     ctx.font = '600 15px "Fira Code", monospace';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    for (let col = 1; col <= 63; col += 5) {
-      const x = px((col - 32) * PITCH);
+    for (let col = 1; col <= cols; col += 5) {
+      const x = px((col - (cols + 1) / 2) * PITCH);
       ctx.fillText(String(col), x, py(-22));
       ctx.fillText(String(col), x, py(22));
     }
     for (let r = 0; r <= 9; r++) {
       const z = py((r - 4.5) * PITCH);
-      ctx.fillText('abcdefghij'[r], px(-82), z);
-      ctx.fillText('abcdefghij'[r], px(82), z);
+      ctx.fillText('abcdefghij'[r], px(-bodyW / 2 + 3), z);
+      ctx.fillText('abcdefghij'[r], px(bodyW / 2 - 3), z);
     }
-    ctx.font = '700 17px "Fira Code", monospace';
-    ctx.fillStyle = '#DC2626';
-    ctx.fillText('+', px(-82), py(-16.5));
-    ctx.fillText('+', px(-82), py(16.5));
-    ctx.fillStyle = '#2563EB';
-    ctx.fillText('−', px(-82), py(-14));
-    ctx.fillText('−', px(-82), py(19));
+    if (railColsOf(size) > 0) {
+      ctx.font = '700 17px "Fira Code", monospace';
+      ctx.fillStyle = '#DC2626';
+      ctx.fillText('+', px(-bodyW / 2 + 3), py(-16.5));
+      ctx.fillText('+', px(-bodyW / 2 + 3), py(16.5));
+      ctx.fillStyle = '#2563EB';
+      ctx.fillText('−', px(-bodyW / 2 + 3), py(-14));
+      ctx.fillText('−', px(-bodyW / 2 + 3), py(19));
+    }
     const tex = new THREE.CanvasTexture(c);
     tex.anisotropy = 4;
     return tex;
   }
 
-  function buildBreadboardMesh() {
+  function buildBreadboardMesh(size) {
+    const cols = colsOf(size);
+    const rc = railColsOf(size);
+    const bodyW = cols * PITCH + 10;
     // Thân board
     const body = new THREE.Mesh(
-      new THREE.BoxGeometry(170, BOARD_TOP, 48),
+      new THREE.BoxGeometry(bodyW, BOARD_TOP, 48),
       new THREE.MeshStandardMaterial({ color: 0xF1F5F9, roughness: 0.6 }));
     body.position.y = BOARD_TOP / 2;
     body.receiveShadow = true;
     boardGroup.add(body);
     // Mặt trên có chữ hàng/cột
     const top = new THREE.Mesh(
-      new THREE.PlaneGeometry(170, 48),
-      new THREE.MeshStandardMaterial({ map: makeBoardTexture(), roughness: 0.6 }));
+      new THREE.PlaneGeometry(bodyW, 48),
+      new THREE.MeshStandardMaterial({ map: makeBoardTexture(size), roughness: 0.6 }));
     top.rotation.x = -Math.PI / 2;
     top.position.y = BOARD_TOP + 0.05;
     top.receiveShadow = true;
     boardGroup.add(top);
     // Rãnh giữa (giữa hàng e và f)
     const groove = new THREE.Mesh(
-      new THREE.BoxGeometry(170, 0.6, 2.4),
+      new THREE.BoxGeometry(bodyW, 0.6, 2.4),
       new THREE.MeshStandardMaterial({ color: 0xCBD5E1 }));
     groove.position.y = BOARD_TOP + 0.02;
     boardGroup.add(groove);
-    // Vạch màu rail +/−
-    for (const [r, color] of [[-2, 0xDC2626], [-1, 0x2563EB], [10, 0xDC2626], [11, 0x2563EB]]) {
-      const strip = new THREE.Mesh(
-        new THREE.BoxGeometry(50 * PITCH, 0.5, 1.6),
-        new THREE.MeshStandardMaterial({ color }));
-      strip.position.set(((50 + 1) / 2 - 32) * PITCH, BOARD_TOP + 0.08, (r - 4.5) * PITCH);
-      boardGroup.add(strip);
+    // Vạch màu rail +/− (chỉ khi board có rail)
+    if (rc > 0) {
+      for (const [r, color] of [[-2, 0xDC2626], [-1, 0x2563EB], [10, 0xDC2626], [11, 0x2563EB]]) {
+        const strip = new THREE.Mesh(
+          new THREE.BoxGeometry(rc * PITCH, 0.5, 1.6),
+          new THREE.MeshStandardMaterial({ color }));
+        strip.position.set(((rc + 1) / 2 - (cols + 1) / 2) * PITCH, BOARD_TOP + 0.08, (r - 4.5) * PITCH);
+        boardGroup.add(strip);
+      }
     }
-    // 830 lỗ (InstancedMesh)
-    const holes = allHoles();
+    // Lỗ (InstancedMesh)
+    const holes = allHoles(size);
     const inst = new THREE.InstancedMesh(
       new THREE.CylinderGeometry(0.95, 0.95, 0.6, 10),
       new THREE.MeshStandardMaterial({ color: 0x1F2937, roughness: 0.9 }),
@@ -518,6 +589,56 @@ function main() {
     holes.forEach((h, i) => { m.makeTranslation(h.x, BOARD_TOP - 0.25, h.z); inst.setMatrixAt(i, m); });
     inst.receiveShadow = true;
     boardGroup.add(inst);
+  }
+
+  // Dựng lại mesh board khi đổi size (dỡ mesh cũ rồi vẽ lại).
+  function rebuildBoard() {
+    if (!sceneReady) return;
+    for (const ch of [...boardGroup.children]) {
+      boardGroup.remove(ch);
+      ch.traverse((o) => {
+        if (o.geometry) o.geometry.dispose();
+        if (o.material) {
+          const mats = Array.isArray(o.material) ? o.material : [o.material];
+          for (const mm of mats) { if (mm.map) mm.map.dispose(); mm.dispose(); }
+        }
+      });
+    }
+    buildBreadboardMesh(state.size);
+    orbitTarget.r = frameR(state.size);
+    orbitTarget.el = 0.72;
+  }
+
+  // Đổi size bo mạch: giữ linh kiện/dây còn trên board mới, gỡ cái ngoài board.
+  function applyBoardSize(newSize) {
+    const size = boardSize(newSize).id;
+    if (size === state.size) { updateSizeUI(); return; }
+    const res = pruneStateForSize(state, size);
+    state = res.state;
+    seq = 1; wireSeq = 100;
+    state.components.forEach((c) => {
+      const n = parseInt(String(c.id).replace(/^[A-Z]+/, ''), 10);
+      if (!isNaN(n) && n >= seq) seq = n + 1;
+    });
+    state.wires.forEach((w) => {
+      const n = parseInt(String(w.id).replace(/^W/, ''), 10);
+      if (!isNaN(n) && n >= wireSeq) wireSeq = n + 1;
+    });
+    select(null);
+    setWiringMode(false);
+    setPlacementMode(null);
+    save(); rebuildBoard(); rebuildAll(); syncToCpu(); updateSizeUI();
+    const parts = [];
+    if (res.removed.components.length) parts.push('gỡ ' + res.removed.components.length + ' linh kiện ngoài board');
+    if (res.removed.wires.length) parts.push('gỡ ' + res.removed.wires.length + ' dây ngoài board');
+    setStatus('Đã đổi size bo mạch sang ' + size + ' lỗ' + (parts.length ? ' — ' + parts.join(', ') + '.' : '.'));
+  }
+  function updateSizeUI() {
+    document.querySelectorAll('#benchSizeSeg [data-size]').forEach((b) => {
+      b.setAttribute('aria-pressed', String(Number(b.dataset.size) === state.size));
+    });
+    const info = $('benchBoardInfo');
+    if (info) info.textContent = `Breadboard ${state.size} lỗ · chip PIC16F877A cắm sẵn · nguồn 5V phía sau bàn. Kéo chỗ trống để xoay 360°, cuộn chuột để zoom. Bấm linh kiện để mở Inspector bên phải.`;
   }
 
   // --- Vẽ linh kiện 3D ---
@@ -555,25 +676,30 @@ function main() {
     const g = new THREE.Group();
     g.userData.compId = comp.id;
     if (comp.type === 'pic') {
-      // Thân chip + 40 chân cắm vào lỗ (cố định ở cột 22..41, hàng b/h)
+      // Thân chip + 40 chân cắm vào lỗ (căn giữa board theo size).
+      // Chân treo ngoài board (Mini 170) vẫn vẽ nhưng nhô lên khỏi mặt board.
+      const cols = colsOf(state.size);
+      const cx = (picCol(state.size) + 9.5 - (cols + 1) / 2) * PITCH;
       const body = new THREE.Mesh(new THREE.BoxGeometry(52.5, 4.5, 14), stdMat(0x0F172A, { roughness: 0.4 }));
-      body.position.set(-1.27, BOARD_TOP + 6.2, -1.27);
+      body.position.set(cx, BOARD_TOP + 6.2, -1.27);
       body.castShadow = true;
       g.add(body);
       const label = new THREE.Mesh(
         new THREE.PlaneGeometry(44, 11),
         new THREE.MeshBasicMaterial({ map: makeTextTexture('PIC16F877A', 'DIP-40'), transparent: true }));
       label.rotation.x = -Math.PI / 2;
-      label.position.set(-1.27, BOARD_TOP + 8.5, -1.27);
+      label.position.set(cx, BOARD_TOP + 8.5, -1.27);
       g.add(label);
       const dot = new THREE.Mesh(new THREE.CylinderGeometry(1.2, 1.2, 0.5, 12), stdMat(0xF8FAFC));
-      dot.position.set(-25.4, BOARD_TOP + 8.5, -8.89);
+      dot.position.set(cx - 24.13, BOARD_TOP + 8.5, -8.89);
       g.add(dot);
       const pinMat = stdMat(0xCBD5E1, { metalness: 0.7, roughness: 0.35 });
-      for (const leg of picLegs()) {
-        const p = holePos(leg.hole);
+      for (const leg of picLegs(state.size)) {
+        const px = (leg.c - (cols + 1) / 2) * PITCH;
+        const pz = (leg.r - 4.5) * PITCH;
         const pin = new THREE.Mesh(new THREE.BoxGeometry(1.0, 4.5, 0.7), pinMat);
-        pin.position.set(p.x, BOARD_TOP + 2.2, p.z);
+        // Chân không có lỗ (treo ngoài board) nhô lên để nhìn rõ là chưa cắm.
+        pin.position.set(px, BOARD_TOP + (leg.hole ? 2.2 : 4.6), pz);
         g.add(pin);
       }
       return g;
@@ -602,7 +728,7 @@ function main() {
       return g;
     }
     // Linh kiện cắm lỗ: gốc nhóm ở lỗ neo, chân theo legOffsets
-    const anchor = holePos(comp.anchor);
+    const anchor = holePos(comp.anchor, state.size);
     g.position.set(anchor.x, BOARD_TOP, anchor.z);
     g.rotation.y = -((comp.rot || 0) * Math.PI) / 2;
     const offs = legOffsets(comp.type, comp.rot || 0);
@@ -717,13 +843,20 @@ function main() {
     const a = endpointPos(wire.a);
     const b = endpointPos(wire.b);
     if (!a || !b) return null;
+    const isSel = selected && selected.kind === 'wire' && selected.id === wire.id;
     const up = (p, h) => new THREE.Vector3(p.x, p.y + h, p.z);
     const mid = new THREE.Vector3((a.x + b.x) / 2, Math.max(a.y, b.y) + 42, (a.z + b.z) / 2);
     const curve = new THREE.CatmullRomCurve3([
       new THREE.Vector3(a.x, a.y, a.z), up(a, 18), mid, up(b, 18), new THREE.Vector3(b.x, b.y, b.z),
     ]);
-    const mat = new THREE.MeshStandardMaterial({ color: new THREE.Color(wire.color), emissive: 0x000000, roughness: 0.5 });
-    const tube = new THREE.Mesh(new THREE.TubeGeometry(curve, 32, 1.1, 8), mat);
+    const baseColor = new THREE.Color(wire.color);
+    const mat = new THREE.MeshStandardMaterial({
+      color: isSel ? baseColor.clone().lerp(new THREE.Color(0xFFFFFF), 0.35) : baseColor,
+      emissive: isSel ? baseColor : 0x000000,
+      emissiveIntensity: isSel ? 0.55 : 0,
+      roughness: 0.5,
+    });
+    const tube = new THREE.Mesh(new THREE.TubeGeometry(curve, 32, isSel ? 1.8 : 1.1, 8), mat);
     tube.castShadow = true;
     tube.userData = { wireId: wire.id, tubeMat: mat };
     // Ống vô hình dày hơn để bấm chọn dây cho dễ
@@ -734,11 +867,23 @@ function main() {
     grp.add(tube);
     grp.add(hit);
     grp.userData = { wireId: wire.id, tubeMat: mat };
+    // Dây được chọn: núm tròn ở 2 đầu để kéo cắm sang lỗ khác.
+    if (isSel) {
+      for (const [end, p] of [['a', a], ['b', b]]) {
+        const knob = new THREE.Mesh(
+          new THREE.SphereGeometry(2.6, 14, 14),
+          new THREE.MeshBasicMaterial({ color: 0x059669 }));
+        knob.position.set(p.x, p.y + 2, p.z);
+        knob.userData = { wireId: wire.id, wireEnd: end };
+        grp.add(knob);
+        wireHandleMeshes.push(knob);
+      }
+    }
     return grp;
   }
   function endpointPos(e) {
     if (typeof e === 'string') {
-      const p = holePos(e);
+      const p = holePos(e, state.size);
       return p ? { x: p.x, y: BOARD_TOP, z: p.z } : null;
     }
     if (e && typeof e.x === 'number') return { x: e.x, y: e.y, z: e.z };
@@ -761,6 +906,7 @@ function main() {
     if (!sceneReady) return;
     for (const [, g] of wireMeshes) wireRoot.remove(g);
     wireMeshes.clear();
+    wireHandleMeshes.length = 0;
     for (const w of state.wires) {
       const g = buildWireMesh(w);
       if (!g) continue;
@@ -826,9 +972,9 @@ function main() {
       const d = Math.abs(pt.z - z);
       if (d < bestD) { bestD = d; best = r; }
     }
-    const id = holeId(best, col);
+    const id = holeId(best, col, state.size);
     if (!id) return null;
-    const hp = holePos(id);
+    const hp = holePos(id, state.size);
     const dist = Math.hypot(pt.x - hp.x, pt.z - hp.z);
     return dist <= 2.0 ? id : null;
   }
@@ -839,6 +985,15 @@ function main() {
     const pt = new THREE.Vector3();
     if (!raycaster.ray.intersectPlane(tablePlane(), pt)) return null;
     return { x: Math.max(-330, Math.min(330, pt.x)), z: Math.max(-200, Math.min(200, pt.z)) };
+  }
+  function pickWireHandle(e) {
+    const ndc = pointerNdc(e);
+    if (!ndc.inside || !wireHandleMeshes.length) return null;
+    raycaster.setFromCamera(ndc, camera);
+    const hits = raycaster.intersectObjects(wireHandleMeshes, false);
+    if (!hits.length) return null;
+    const u = hits[0].object.userData;
+    return u && u.wireId && u.wireEnd ? { wireId: u.wireId, end: u.wireEnd } : null;
   }
   function pickObject(e) {
     const ndc = pointerNdc(e);
@@ -871,7 +1026,7 @@ function main() {
   }
   function showHighlight(anchor, type, rot, ok) {
     if (!sceneReady) return;
-    const p = holePos(anchor);
+    const p = holePos(anchor, state.size);
     if (!p) { highlightBox.visible = false; return; }
     const fp = footprintBox(type, rot);
     highlightBox.visible = true;
@@ -963,16 +1118,28 @@ function main() {
     else if (d.anchor) setStatus('Không đặt được linh kiện vào lỗ này.');
   }
 
-  // --- Chuột trên canvas: xoay / di chuyển / chọn / đi dây ---
+  // --- Chuột trên canvas: xoay / di chuyển / chọn / đi dây / kéo đầu dây ---
   function onCanvasPointerDown(e) {
     if (e.pointerType && e.pointerType !== 'mouse') return;
     if (e.button !== 0) return;
+    // Kéo 1 đầu dây đang chọn: núm tròn ở đầu dây được ưu tiên trước.
+    const handle = pickWireHandle(e);
+    if (handle) {
+      const w = state.wires.find((x) => x.id === handle.wireId);
+      if (w) {
+        select({ kind: 'wire', id: w.id });
+        drag = { mode: 'wire-end', wireId: w.id, end: handle.end, origEnd: w[handle.end], moved: false, startX: e.clientX, startY: e.clientY, hoverHole: null };
+        renderer.domElement.setPointerCapture(e.pointerId);
+        e.preventDefault();
+        return;
+      }
+    }
     if (wiringMode) {
       const hole = pickHole(e);
       if (!hole) { wireStart = null; startMarker.visible = false; return; }
       if (!wireStart) {
         wireStart = hole;
-        const p = holePos(hole);
+        const p = holePos(hole, state.size);
         startMarker.position.set(p.x, BOARD_TOP + 2, p.z);
         startMarker.visible = true;
         setStatus('Đã chọn lỗ bắt đầu ' + hole + ' — bấm lỗ kết thúc.');
@@ -993,7 +1160,8 @@ function main() {
       }
       const hole = pickHole(e);
       if (!hole) return;
-      placeComponent(placementMode, hole, 0);
+      // Đặt dính: thả xong vẫn giữ chế độ đặt để thả tiếp cái nữa.
+      placeComponent(placementMode, hole, placementRot);
       return;
     }
     const hit = pickObject(e);
@@ -1026,7 +1194,49 @@ function main() {
   }
   function onCanvasPointerMove(e) {
     if (e.pointerType && e.pointerType !== 'mouse') return;
+    // Hover ở chế độ đặt dính: hiện ô sáng báo lỗ sắp đặt + góc xoay hiện tại.
+    if (!drag && placementMode && placementMode !== 'psu') {
+      const hole = pickHole(e);
+      if (!hole) { hideHighlight(); return; }
+      const chk = canPlace(state, placementMode, hole, placementRot);
+      showHighlight(hole, placementMode, placementRot, chk.ok);
+      return;
+    }
     if (!drag) return;
+    if (drag.mode === 'wire-end') {
+      if (Math.abs(e.clientX - drag.startX) + Math.abs(e.clientY - drag.startY) > 4) drag.moved = true;
+      const w = state.wires.find((x) => x.id === drag.wireId);
+      if (!w || !ghostLine) return;
+      const fixedEnd = drag.end === 'a' ? w.b : w.a;
+      const fixedPos = endpointPos(fixedEnd);
+      if (!fixedPos) return;
+      const hole = pickHole(e);
+      drag.hoverHole = hole;
+      // Đường dây tạm từ đầu cố định tới chuột.
+      const ndc = pointerNdc(e);
+      raycaster.setFromCamera(ndc, camera);
+      const pt = new THREE.Vector3();
+      let target = null;
+      if (hole) {
+        const hp = holePos(hole, state.size);
+        target = new THREE.Vector3(hp.x, BOARD_TOP + 2, hp.z);
+      } else if (raycaster.ray.intersectPlane(boardPlane(), pt)) {
+        target = new THREE.Vector3(pt.x, BOARD_TOP + 2, pt.z);
+      }
+      if (target) {
+        ghostLine.geometry.setFromPoints([new THREE.Vector3(fixedPos.x, fixedPos.y + 2, fixedPos.z), target]);
+        ghostLine.visible = true;
+      } else ghostLine.visible = false;
+      // Chấm tròn ở lỗ đang trỏ: xanh = cắm được, đỏ = không.
+      if (hole) {
+        const hp = holePos(hole, state.size);
+        const v = validateWireEnd(state, drag.wireId, drag.end, hole);
+        startMarker.position.set(hp.x, BOARD_TOP + 2, hp.z);
+        startMarker.material.color.set(v.ok ? 0x059669 : 0xDC2626);
+        startMarker.visible = true;
+      } else startMarker.visible = false;
+      return;
+    }
     if (drag.mode === 'orbit') {
       const dx = e.clientX - drag.lastX, dy = e.clientY - drag.lastY;
       drag.lastX = e.clientX; drag.lastY = e.clientY;
@@ -1044,7 +1254,7 @@ function main() {
       const chk = canPlace(state, state.components.find((c) => c.id === drag.id).type, hole, drag.rot, drag.id);
       drag.anchor = hole;
       drag.valid = chk.ok;
-      const p = holePos(hole);
+      const p = holePos(hole, state.size);
       g.position.set(p.x, BOARD_TOP, p.z);
       g.rotation.y = -((drag.rot || 0) * Math.PI) / 2;
       showHighlight(hole, state.components.find((c) => c.id === drag.id).type, drag.rot, chk.ok);
@@ -1068,6 +1278,21 @@ function main() {
     if (!drag) return;
     const d = drag;
     drag = null;
+    if (d.mode === 'wire-end') {
+      if (ghostLine) ghostLine.visible = false;
+      startMarker.visible = false;
+      const w = state.wires.find((x) => x.id === d.wireId);
+      if (!w) return;
+      if (!d.moved || !d.hoverHole) { setStatus('Kéo đầu dây tới lỗ khác để cắm lại.'); return; }
+      const r = retargetWireEnd(state, d.wireId, d.end, d.hoverHole);
+      if (r.ok) {
+        save(); rebuildWires(); syncToCpu();
+        setStatus('Đã chuyển đầu dây sang lỗ ' + d.hoverHole + '.');
+      } else {
+        setStatus(r.reason);
+      }
+      return;
+    }
     if (d.mode === 'orbit') {
       if (!d.moved) select(null); // bấm chỗ trống: bỏ chọn
       return;
@@ -1176,12 +1401,12 @@ function main() {
 
   // --- Nút chế độ xem / dọn bàn ---
   $('btnView3D')?.addEventListener('click', () => {
-    orbitTarget.el = 0.72; orbitTarget.r = 480;
+    orbitTarget.el = 0.72; orbitTarget.r = frameR(state.size);
     $('btnView3D').setAttribute('aria-pressed', 'true');
     $('btnViewTop').setAttribute('aria-pressed', 'false');
   });
   $('btnViewTop')?.addEventListener('click', () => {
-    orbitTarget.el = 1.42; orbitTarget.r = 560;
+    orbitTarget.el = 1.42; orbitTarget.r = frameR(state.size) * 1.17;
     $('btnView3D').setAttribute('aria-pressed', 'false');
     $('btnViewTop').setAttribute('aria-pressed', 'true');
   });
@@ -1193,7 +1418,7 @@ function main() {
     setStatus('Đã dọn hết bàn (giữ chip PIC, nguồn 5V và dây nguồn).');
   });
   $('btnBenchDefault')?.addEventListener('click', () => {
-    state = defaultBenchState();
+    state = defaultBenchState(state.size);
     seq = 1; wireSeq = 100;
     select(null);
     save(); rebuildAll(); syncToCpu();
@@ -1209,7 +1434,8 @@ function main() {
       return;
     }
     if (e.key === 'Escape') {
-      if (drag?.mode === 'palette') { window.removeEventListener('pointermove', onPaletteDragMove); removeGhost(); hideHighlight(); drag = null; }
+      if (drag?.mode === 'wire-end') { drag = null; if (ghostLine) ghostLine.visible = false; }
+      else if (drag?.mode === 'palette') { window.removeEventListener('pointermove', onPaletteDragMove); removeGhost(); hideHighlight(); drag = null; }
       else if (wiringMode) setWiringMode(false);
       else if (placementMode) setPlacementMode(null);
       else if (selected) select(null);
@@ -1227,6 +1453,10 @@ function main() {
           showHighlight(drag.anchor, comp.type, drag.rot, chk.ok);
         }
       }
+    } else if ((e.key === 'r' || e.key === 'R') && placementMode) {
+      // R xoay trong lúc đặt dính (không kéo).
+      placementRot = (placementRot + 1) % 4;
+      updateModeBanner();
     } else if ((e.key === 'Delete' || e.key === 'Backspace') && selected) {
       e.preventDefault();
       deleteSelected();
@@ -1247,6 +1477,12 @@ function main() {
   renderPalette();
   renderChecks();
   updateModeBanner();
+  // --- Bộ chọn size bo mạch ---
+  document.querySelectorAll('#benchSizeSeg [data-size]').forEach((b) => b.addEventListener('click', () => {
+    if (!sceneReady) { state.size = boardSize(Number(b.dataset.size)).id; save(); updateSizeUI(); return; }
+    applyBoardSize(Number(b.dataset.size));
+  }));
+  updateSizeUI();
 }
 
 function esc(s) {

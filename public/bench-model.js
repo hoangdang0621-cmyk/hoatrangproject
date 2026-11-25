@@ -1,88 +1,109 @@
 // bench-model.js — Mô hình lỗ/strip của bàn thực hành 3D (không DOM, không Three.js).
-// Breadboard 830 lỗ: 63 cột x 10 hàng (a–e, f–j) + 4 rail (T+/T−/B+/B−).
+// Breadboard 3 size (kiểu ohmimic): Mini 170 lỗ (17 cột, không rail),
+// Nửa 400 lỗ (30 cột, rail 25), Đầy đủ 830 lỗ (63 cột, rail 50).
 // Hàng a–e của mỗi cột nối nhau thành 1 strip, f–j nối nhau, rail chạy suốt
 // chiều dài (mọi lỗ rail + là +5V, mọi lỗ rail − là GND).
 // Chân linh kiện cắm thẳng vào lỗ, breadboard chính là đế (kiểu ohmimic).
-// Trạng thái bàn: { components: [{id, type, anchor, rot, props, fixed?}],
+// Trạng thái bàn: { size, components: [{id, type, anchor, rot, props, fixed?}],
 //   wires: [{id, a, b, color}] } với a/b là id lỗ ('c12', 'T+40') hoặc
 //   điểm 3D {x, y, z} (đầu dây gắn vào cọc nguồn).
 // benchToNetlist(state) dịch trạng thái bàn thành netlist kiểu wiring.js
 // (terminal 'PIC.RB0', 'LED0.A', 'VCC', 'GND') để nối vào CPU.
 
 export const PITCH = 2.54;       // khoảng cách lỗ (mm)
-export const COLS = 63;          // cột 1..63
-export const RAIL_COLS = 50;     // rail: 50 lỗ mỗi rail
-export const PIC_COL = 22;       // chip PIC cắm ở cột 22..41
+// Size bo mạch (kiểu ohmimic): Mini 170 lỗ, Nửa 400 lỗ, Đầy đủ 830 lỗ.
+// 830 = 63 cột x 10 hàng + 4 rail x 50; 400 = 30 x 10 + 4 x 25;
+// 170 = 17 x 10, không có rail (đúng board mini thật).
+// Chip PIC DIP-40 rộng 20 cột nên trên board Mini 17 cột thì 6 chân ngoài
+// cùng (MCLR, RD0, RD1, RD2, RD3, RB7) treo ngoài board — giới hạn vật lý thật.
+export const BOARD_SIZES = {
+  830: { cols: 63, railCols: 50 },
+  400: { cols: 30, railCols: 25 },
+  170: { cols: 17, railCols: 0 },
+};
+export const BOARD_SIZE_IDS = [170, 400, 830];
+export const DEFAULT_SIZE = 830;
+export function boardSize(size) {
+  const s = Number(size);
+  return BOARD_SIZES[s] ? { id: s, ...BOARD_SIZES[s] } : { id: 830, ...BOARD_SIZES[830] };
+}
+export function colsOf(size) { return boardSize(size).cols; }
+export function railColsOf(size) { return boardSize(size).railCols; }
+// Cột bắt đầu của chip PIC (căn giữa board): 830 -> 22 (như cũ),
+// 400 -> 6, 170 -> 0 (chip tràn nửa cột mỗi bên).
+const PIC_COL_BY_SIZE = { 830: 22, 400: 6, 170: 0 };
+export function picCol(size) { return PIC_COL_BY_SIZE[boardSize(size).id]; }
 export const ROWS = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i', 'j'];
 // Hàng trong lưới nội bộ: T+ = -2, T− = -1, a..j = 0..9, B+ = 10, B− = 11
 const RAIL_ROW = { 'T+': -2, 'T-': -1, 'B+': 10, 'B-': 11 };
 const ROW_NAME = { '-2': 'T+', '-1': 'T-', '10': 'B+', '11': 'B-' };
 
-// Id lỗ từ (hàng nội bộ, cột). Trả null nếu ngoài board.
-export function holeId(r, c) {
+// Id lỗ từ (hàng nội bộ, cột) trên board size cho trước. Trả null nếu ngoài board.
+export function holeId(r, c, size = DEFAULT_SIZE) {
   if (r >= 0 && r <= 9) {
-    if (c < 1 || c > COLS) return null;
+    if (c < 1 || c > colsOf(size)) return null;
     return ROWS[r] + c;
   }
   if (r in ROW_NAME) {
-    if (c < 1 || c > RAIL_COLS) return null;
+    if (c < 1 || c > railColsOf(size)) return null;
     return ROW_NAME[r] + c;
   }
   return null;
 }
 
-// Phân tích id lỗ -> {r, c} (r là hàng nội bộ) hoặc null nếu sai định dạng.
-export function parseHole(id) {
+// Phân tích id lỗ -> {r, c} (r là hàng nội bộ) hoặc null nếu sai định dạng
+// hoặc ngoài board size cho trước.
+export function parseHole(id, size = DEFAULT_SIZE) {
   if (typeof id !== 'string') return null;
   let m = id.match(/^([a-j])(\d+)$/);
   if (m) {
     const c = Number(m[2]);
-    if (c >= 1 && c <= COLS) return { r: ROWS.indexOf(m[1]), c };
+    if (c >= 1 && c <= colsOf(size)) return { r: ROWS.indexOf(m[1]), c };
     return null;
   }
   m = id.match(/^([TB])([+-])(\d+)$/);
   if (m) {
     const c = Number(m[3]);
-    if (c < 1 || c > RAIL_COLS) return null;
+    if (c < 1 || c > railColsOf(size)) return null;
     return { r: RAIL_ROW[m[1] + m[2]], c };
   }
   return null;
 }
 
-export function isRailHole(id) {
-  const p = parseHole(id);
+export function isRailHole(id, size = DEFAULT_SIZE) {
+  const p = parseHole(id, size);
   return !!p && (p.r < 0 || p.r > 9);
 }
 
 // Khóa strip của một lỗ: 'S' + mặt (T: a–e, B: f–j) + cột, hoặc 'RAIL+'/'RAIL-'.
-export function stripKey(id) {
-  const p = parseHole(id);
+export function stripKey(id, size = DEFAULT_SIZE) {
+  const p = parseHole(id, size);
   if (!p) return null;
   if (p.r < 0 || p.r > 9) return (p.r === -2 || p.r === 10) ? 'RAIL+' : 'RAIL-';
   return 'S' + (p.r <= 4 ? 'T' : 'B') + p.c;
 }
 
 // Vị trí 3D của tâm lỗ trên mặt bàn (mm, gốc ở giữa board, y tính riêng).
-export function holePos(id) {
-  const p = parseHole(id);
+export function holePos(id, size = DEFAULT_SIZE) {
+  const p = parseHole(id, size);
   if (!p) return null;
-  return { x: (p.c - 32) * PITCH, z: (p.r - 4.5) * PITCH };
+  return { x: (p.c - (colsOf(size) + 1) / 2) * PITCH, z: (p.r - 4.5) * PITCH };
 }
 
 // Mọi lỗ trên board (để vẽ InstancedMesh): [{id, x, z}]
-export function allHoles() {
+export function allHoles(size = DEFAULT_SIZE) {
   const out = [];
   for (let r = -2; r <= 11; r++) {
     if (r === -2 || r === -1 || r === 10 || r === 11) {
-      for (let c = 1; c <= RAIL_COLS; c++) {
-        const id = holeId(r, c);
-        const p = holePos(id);
+      for (let c = 1; c <= railColsOf(size); c++) {
+        const id = holeId(r, c, size);
+        const p = holePos(id, size);
         out.push({ id, x: p.x, z: p.z });
       }
     } else {
-      for (let c = 1; c <= COLS; c++) {
-        const id = holeId(r, c);
-        const p = holePos(id);
+      for (let c = 1; c <= colsOf(size); c++) {
+        const id = holeId(r, c, size);
+        const p = holePos(id, size);
         out.push({ id, x: p.x, z: p.z });
       }
     }
@@ -109,20 +130,23 @@ export const LEG_LAYOUTS = {
 };
 
 // Chân chip PIC16F877A DIP-40 (rộng 600 mil = 6 bước lỗ): chân 1..20 ở hàng b,
-// chân 21..40 ở hàng h, cột PIC_COL..PIC_COL+19. Thứ tự chân khớp datasheet
-// (và khớp PIC_PINS trong wiring.js — test kiểm chứng điều này).
+// chân 21..40 ở hàng h, cột picCol(size)..picCol(size)+19. Thứ tự chân khớp
+// datasheet (và khớp PIC_PINS trong wiring.js — test kiểm chứng điều này).
 export const PIC_PIN_IDS_LEFT = ['MCLR', 'RA0', 'RA1', 'RA2', 'RA3', 'RA4', 'RA5', 'RE0', 'RE1', 'RE2', 'VDD', 'VSS', 'OSC1', 'OSC2', 'RC0', 'RC1', 'RC2', 'RC3', 'RD0', 'RD1'];
 export const PIC_PIN_IDS_RIGHT = ['RD2', 'RD3', 'RC4', 'RC5', 'RC6', 'RC7', 'RD4', 'RD5', 'RD6', 'RD7', 'VSS', 'VDD', 'RB0', 'RB1', 'RB2', 'RB3', 'RB4', 'RB5', 'RB6', 'RB7'];
 
-// Chân chip: [{term: 'PIC.RA0', hole: 'b23', pin: 2}] — pin 1 ở (b, PIC_COL),
-// pin 20 ở (b, PIC_COL+19), pin 21 ở (h, PIC_COL+19), pin 40 ở (h, PIC_COL).
-export function picLegs() {
+// Chân chip: [{term: 'PIC.RA0', hole: 'b23', pin: 2, r: 1, c: 23}] —
+// pin 1 ở (b, picCol), pin 20 ở (b, picCol+19), pin 21 ở (h, picCol+19),
+// pin 40 ở (h, picCol). Trên board Mini 170 thì 4 chân ngoài cùng có
+// hole = null (treo ngoài board, xem ghi chú ở BOARD_SIZES).
+export function picLegs(size = DEFAULT_SIZE) {
+  const pc = picCol(size);
   const out = [];
   PIC_PIN_IDS_LEFT.forEach((id, i) => {
-    out.push({ term: 'PIC.' + id, hole: holeId(1, PIC_COL + i), pin: i + 1 });
+    out.push({ term: 'PIC.' + id, hole: holeId(1, pc + i, size), pin: i + 1, r: 1, c: pc + i });
   });
   PIC_PIN_IDS_RIGHT.forEach((id, i) => {
-    out.push({ term: 'PIC.' + id, hole: holeId(7, PIC_COL + 19 - i), pin: 21 + i });
+    out.push({ term: 'PIC.' + id, hole: holeId(7, pc + 19 - i, size), pin: 21 + i, r: 7, c: pc + 19 - i });
   });
   return out;
 }
@@ -147,25 +171,27 @@ export function legOffsets(type, rot = 0) {
 }
 
 // Lỗ của từng chân linh kiện: [{term, hole}] (hole null nếu rơi ngoài board).
-export function legsFor(comp) {
+// size lấy từ state.size khi gọi qua các hàm nhận state, mặc định 830.
+export function legsFor(comp, size = DEFAULT_SIZE) {
   if (comp.type === 'pic') {
-    return picLegs().map((l) => ({ term: l.term, hole: l.hole }));
+    return picLegs(size).map((l) => ({ term: l.term, hole: l.hole }));
   }
   if (comp.type === 'psu') return [];
-  const anchor = parseHole(comp.anchor);
+  const anchor = parseHole(comp.anchor, size);
   if (!anchor) return [];
   return legOffsets(comp.type, comp.rot || 0).map((l) => ({
     term: l.term,
-    hole: holeId(anchor.r + l.dr, anchor.c + l.dc),
+    hole: holeId(anchor.r + l.dr, anchor.c + l.dc, size),
   }));
 }
 
 // Lỗ nào đang bị chân nào chiếm: Map hole -> compId (trừ ignoreId).
 export function occupancy(state, ignoreId = null) {
+  const size = state.size ?? DEFAULT_SIZE;
   const occ = new Map();
   for (const comp of state.components) {
     if (comp.id === ignoreId) continue;
-    for (const leg of legsFor(comp)) {
+    for (const leg of legsFor(comp, size)) {
       if (leg.hole) occ.set(leg.hole, comp.id);
     }
   }
@@ -173,27 +199,34 @@ export function occupancy(state, ignoreId = null) {
 }
 
 // Đặt được linh kiện không? Kiểm tra chân ngoài board, lỗ đã có chân,
-// và chân nằm dưới thân chip PIC (hàng b..h, cột PIC_COL..PIC_COL+19).
+// và chân nằm dưới thân chip PIC (hàng b..h, cột picCol..picCol+19).
 export function canPlace(state, type, anchor, rot = 0, ignoreId = null) {
+  const size = state.size ?? DEFAULT_SIZE;
   if (type === 'psu') return { ok: true, legs: [] }; // nguồn đặt trên mặt bàn, không cần lỗ
-  const legs = legsFor({ type, anchor, rot });
+  const legs = legsFor({ type, anchor, rot }, size);
   if (!legs.length) return { ok: false, reason: 'Không đặt được linh kiện này lên lỗ.' };
   for (const leg of legs) {
-    if (!leg.hole || !parseHole(leg.hole)) return { ok: false, reason: 'Chân linh kiện rơi ra ngoài board.' };
+    if (!leg.hole || !parseHole(leg.hole, size)) return { ok: false, reason: 'Chân linh kiện rơi ra ngoài board.' };
   }
   const occ = occupancy(state, ignoreId);
   for (const leg of legs) {
     if (occ.has(leg.hole)) return { ok: false, reason: 'Lỗ ' + leg.hole + ' đã có chân cắm.' };
   }
   if (type !== 'pic') {
+    const pc = picCol(size);
     for (const leg of legs) {
-      const p = parseHole(leg.hole);
-      if (p.r >= 1 && p.r <= 7 && p.c >= PIC_COL && p.c < PIC_COL + 20) {
+      const p = parseHole(leg.hole, size);
+      if (p.r >= 1 && p.r <= 7 && p.c >= pc && p.c < pc + 20) {
         return { ok: false, reason: 'Chân nằm dưới thân chip PIC.' };
       }
     }
   }
   return { ok: true, legs };
+}
+
+// Bật/tắt chế độ đặt linh kiện dính: bấm lại đúng thẻ đang chọn thì thoát.
+export function togglePlacement(current, clicked) {
+  return current === clicked ? null : clicked;
 }
 
 // ---------------------------------------------------------------------------
@@ -221,6 +254,7 @@ function makeUnionFind() {
 // - điện trở nối 2 strip của nó (như 1 dây); dây nối 2 strip của 2 đầu.
 // - nhóm chạm RAIL+ là +5V, chạm RAIL- là GND.
 export function buildBenchNets(state) {
+  const size = state.size ?? DEFAULT_SIZE;
   const { find, union, ensure } = makeUnionFind();
   ensure('RAIL+');
   ensure('RAIL-');
@@ -228,8 +262,8 @@ export function buildBenchNets(state) {
   const resistorStrips = new Set();
   for (const comp of state.components) {
     if (comp.type === 'pic') {
-      for (const leg of picLegs()) {
-        const key = stripKey(leg.hole);
+      for (const leg of picLegs(size)) {
+        const key = leg.hole ? stripKey(leg.hole, size) : null;
         if (!key) continue;
         ensure(key);
         termStrip.set(leg.term, key);
@@ -237,23 +271,23 @@ export function buildBenchNets(state) {
       continue;
     }
     if (comp.type === 'psu') continue;
-    const legs = legsFor(comp);
+    const legs = legsFor(comp, size);
     if (comp.type === 'resistor') {
-      const keys = legs.map((l) => stripKey(l.hole)).filter(Boolean);
+      const keys = legs.map((l) => (l.hole ? stripKey(l.hole, size) : null)).filter(Boolean);
       keys.forEach((k) => { ensure(k); resistorStrips.add(k); });
       for (let i = 1; i < keys.length; i++) union(keys[0], keys[i]);
       continue;
     }
     for (const leg of legs) {
-      const key = stripKey(leg.hole);
+      const key = leg.hole ? stripKey(leg.hole, size) : null;
       if (!key) continue;
       ensure(key);
       termStrip.set(comp.id + '.' + leg.term, key);
     }
   }
   for (const w of state.wires) {
-    const ka = typeof w.a === 'string' ? stripKey(w.a) : null;
-    const kb = typeof w.b === 'string' ? stripKey(w.b) : null;
+    const ka = typeof w.a === 'string' ? stripKey(w.a, size) : null;
+    const kb = typeof w.b === 'string' ? stripKey(w.b, size) : null;
     if (ka && kb) { ensure(ka); ensure(kb); union(ka, kb); }
   }
   const groups = new Map();
@@ -344,46 +378,63 @@ export function defaultProps(type) {
   return {};
 }
 
-// Trạng thái bàn mặc định: chip PIC cắm sẵn (cột 22..41, hàng b/h), nguồn 5V
-// trên bàn, dây nguồn VDD/VSS/MCLR về rail.
-export function defaultBenchState() {
+// Trạng thái bàn mặc định theo size: chip PIC cắm sẵn (căn giữa board),
+// nguồn 5V trên bàn, dây nguồn VDD/VSS/MCLR về rail. Board Mini 170 không
+// có rail nên không có dây nguồn mặc định.
+export function defaultBenchState(size = DEFAULT_SIZE) {
+  const s = boardSize(size);
+  const legs = picLegs(s.id);
+  const legByPin = new Map(legs.map((l) => [l.pin, l]));
+  const wires = [];
+  // Dây nguồn của chip: chân PIC -> rail cùng cột (cột rail kẹp về railCols).
+  const power = [
+    { id: 'W1', pin: 1, rail: 'T+' }, { id: 'W2', pin: 11, rail: 'T+' },
+    { id: 'W3', pin: 32, rail: 'T+' }, { id: 'W4', pin: 12, rail: 'T-' },
+    { id: 'W5', pin: 31, rail: 'T-' },
+  ];
+  for (const p of power) {
+    const leg = legByPin.get(p.pin);
+    if (!leg || !leg.hole || s.railCols === 0) continue;
+    wires.push({ id: p.id, a: leg.hole, b: p.rail + Math.min(leg.c, s.railCols), color: p.rail === 'T+' ? '#DC2626' : '#0F172A' });
+  }
+  // Dây nguồn: cọc +/− của PSU về rail (cột 40, kẹp về railCols).
+  if (s.railCols > 0) {
+    const rc = Math.min(40, s.railCols);
+    wires.push({ id: 'W6', a: { x: -12, y: 28, z: -108 }, b: 'T+' + rc, color: '#DC2626' });
+    wires.push({ id: 'W7', a: { x: 12, y: 28, z: -108 }, b: 'T-' + rc, color: '#0F172A' });
+  }
   return {
+    size: s.id,
     components: [
-      { id: 'PIC1', type: 'pic', anchor: 'b22', rot: 0, fixed: true, props: {} },
+      { id: 'PIC1', type: 'pic', anchor: holeId(1, Math.max(1, picCol(s.id)), s.id) ?? 'b1', rot: 0, fixed: true, props: {} },
       { id: 'PSU1', type: 'psu', tx: 0, tz: -150, fixed: true, props: {} },
     ],
-    wires: [
-      { id: 'W1', a: 'b22', b: 'T+22', color: '#DC2626' }, // MCLR (chân 1) -> +rail
-      { id: 'W2', a: 'b32', b: 'T+32', color: '#DC2626' }, // VDD (chân 11) -> +rail
-      { id: 'W3', a: 'h30', b: 'T+30', color: '#DC2626' }, // VDD (chân 32) -> +rail
-      { id: 'W4', a: 'b33', b: 'T-33', color: '#0F172A' }, // VSS (chân 12) -> -rail
-      { id: 'W5', a: 'h31', b: 'T-31', color: '#0F172A' }, // VSS (chân 31) -> -rail
-      { id: 'W6', a: { x: -12, y: 28, z: -108 }, b: 'T+40', color: '#DC2626' }, // cọc + nguồn -> +rail
-      { id: 'W7', a: { x: 12, y: 28, z: -108 }, b: 'T-40', color: '#0F172A' }, // cọc - nguồn -> -rail
-    ],
+    wires,
   };
 }
 
-// Lọc trạng thái đọc từ localStorage: chỉ giữ linh kiện/dây còn hợp lệ.
+// Lọc trạng thái đọc từ localStorage: chỉ giữ linh kiện/dây còn hợp lệ
+// trên size của nó (state cũ không có size thì mặc định 830).
 export function sanitizeState(raw) {
   if (!raw || !Array.isArray(raw.components) || !Array.isArray(raw.wires)) return defaultBenchState();
+  const size = boardSize(raw.size).id;
   const components = [];
   for (const c of raw.components) {
     if (!c || typeof c.id !== 'string' || typeof c.type !== 'string') continue;
-    if (c.type === 'pic') { components.push({ id: 'PIC1', type: 'pic', anchor: 'b22', rot: 0, fixed: true, props: {} }); continue; }
+    if (c.type === 'pic') { components.push({ id: 'PIC1', type: 'pic', anchor: holeId(1, Math.max(1, picCol(size)), size) ?? 'b1', rot: 0, fixed: true, props: {} }); continue; }
     if (c.type === 'psu') {
       if (typeof c.tx === 'number' && typeof c.tz === 'number') {
         components.push({ id: c.id, type: 'psu', tx: c.tx, tz: c.tz, fixed: true, props: {} });
       }
       continue;
     }
-    if (!LEG_LAYOUTS[c.type] || !parseHole(c.anchor)) continue;
-    const chk = canPlace({ components }, c.type, c.anchor, c.rot || 0);
+    if (!LEG_LAYOUTS[c.type] || !parseHole(c.anchor, size)) continue;
+    const chk = canPlace({ size, components }, c.type, c.anchor, c.rot || 0);
     if (!chk.ok) continue;
     components.push({ id: c.id, type: c.type, anchor: c.anchor, rot: c.rot || 0, props: c.props || defaultProps(c.type) });
   }
   if (!components.some((c) => c.type === 'pic')) {
-    components.unshift({ id: 'PIC1', type: 'pic', anchor: 'b22', rot: 0, fixed: true, props: {} });
+    components.unshift({ id: 'PIC1', type: 'pic', anchor: holeId(1, Math.max(1, picCol(size)), size) ?? 'b1', rot: 0, fixed: true, props: {} });
   }
   if (!components.some((c) => c.type === 'psu')) {
     components.push({ id: 'PSU1', type: 'psu', tx: 0, tz: -150, fixed: true, props: {} });
@@ -391,9 +442,109 @@ export function sanitizeState(raw) {
   const wires = [];
   for (const w of raw.wires) {
     if (!w || typeof w.id !== 'string' || typeof w.color !== 'string') continue;
-    const okEnd = (e) => (typeof e === 'string' && !!parseHole(e))
+    const okEnd = (e) => (typeof e === 'string' && !!parseHole(e, size))
       || (e && typeof e.x === 'number' && typeof e.y === 'number' && typeof e.z === 'number');
     if (okEnd(w.a) && okEnd(w.b)) wires.push({ id: w.id, a: w.a, b: w.b, color: w.color });
   }
-  return { components, wires };
+  return { size, components, wires };
+}
+
+// ---------------------------------------------------------------------------
+// Đổi size bo mạch: giữ linh kiện/dây mà lỗ còn tồn tại trên size mới,
+// gỡ cái nào ngoài board; dây nguồn mặc định (W1–W7) được nối lại theo
+// chân PIC và rail của size mới. Trả {state, removed: {components, wires}}.
+// ---------------------------------------------------------------------------
+export function pruneStateForSize(state, newSize) {
+  const size = boardSize(newSize).id;
+  const oldSize = boardSize(state.size).id;
+  const removed = { components: [], wires: [] };
+  const legs = picLegs(size);
+  const legByPin = new Map(legs.map((l) => [l.pin, l]));
+  const oldLegs = picLegs(oldSize);
+  const pinOfHole = new Map(oldLegs.filter((l) => l.hole).map((l) => [l.hole, l.pin]));
+  // Đầu rail 'T+40' -> kẹp cột về railCols của size mới (null nếu hết rail).
+  const remapRail = (id) => {
+    const p = parseHole(id, oldSize);
+    if (!p) return null;
+    const rc = railColsOf(size);
+    if (rc === 0) return null;
+    if (p.r >= 0 && p.r <= 9) return id;
+    const rowName = { '-2': 'T+', '-1': 'T-', '10': 'B+', '11': 'B-' }[String(p.r)];
+    return rowName + Math.min(p.c, rc);
+  };
+  const keptComponents = [
+    { id: 'PIC1', type: 'pic', anchor: holeId(1, Math.max(1, picCol(size)), size) ?? 'b1', rot: 0, fixed: true, props: {} },
+  ];
+  const probe = { size, components: keptComponents, wires: [] };
+  for (const comp of state.components) {
+    if (comp.type === 'pic') continue;
+    if (comp.type === 'psu') {
+      if (typeof comp.tx === 'number' && typeof comp.tz === 'number') {
+        keptComponents.push({ id: comp.id, type: 'psu', tx: comp.tx, tz: comp.tz, fixed: true, props: {} });
+      }
+      continue;
+    }
+    if (!LEG_LAYOUTS[comp.type] || !parseHole(comp.anchor, size)) { removed.components.push(comp.id); continue; }
+    const chk = canPlace(probe, comp.type, comp.anchor, comp.rot || 0);
+    if (!chk.ok) { removed.components.push(comp.id); continue; }
+    keptComponents.push({ id: comp.id, type: comp.type, anchor: comp.anchor, rot: comp.rot || 0, props: comp.props || defaultProps(comp.type) });
+  }
+  const keptWires = [];
+  const seen = new Set();
+  const wireKey = (a, b) => {
+    const k = (e) => (typeof e === 'string' ? e : `P${e.x},${e.y},${e.z}`);
+    return [k(a), k(b)].sort().join('|');
+  };
+  for (const w of state.wires) {
+    if (!w || typeof w.id !== 'string' || typeof w.color !== 'string') continue;
+    let a = w.a, b = w.b;
+    if (['W1', 'W2', 'W3', 'W4', 'W5'].includes(w.id)) {
+      // Đầu a là chân PIC: đổi sang lỗ chân mới của cùng pin.
+      const pin = typeof a === 'string' ? pinOfHole.get(a) : null;
+      const leg = pin ? legByPin.get(pin) : null;
+      if (!leg || !leg.hole) { removed.wires.push(w.id); continue; }
+      a = leg.hole;
+      const rb = typeof b === 'string' ? remapRail(b) : b;
+      if (rb === null) { removed.wires.push(w.id); continue; }
+      b = rb;
+    } else if (w.id === 'W6' || w.id === 'W7') {
+      const rb = typeof b === 'string' ? remapRail(b) : b;
+      if (rb === null) { removed.wires.push(w.id); continue; }
+      b = rb;
+    } else {
+      const okEnd = (e) => (typeof e === 'string' ? !!parseHole(e, size)
+        : (e && typeof e.x === 'number' && typeof e.y === 'number' && typeof e.z === 'number'));
+      if (!okEnd(a) || !okEnd(b)) { removed.wires.push(w.id); continue; }
+    }
+    const key = wireKey(a, b);
+    if (seen.has(key)) { removed.wires.push(w.id); continue; }
+    seen.add(key);
+    keptWires.push({ id: w.id, a, b, color: w.color });
+  }
+  return { state: { size, components: keptComponents, wires: keptWires }, removed };
+}
+
+// ---------------------------------------------------------------------------
+// Chuyển 1 đầu dây sang lỗ mới (kéo đầu dây / nhập địa chỉ lỗ trong popup).
+// Kiểm tra trước bằng validateWireEnd rồi mới áp dụng bằng retargetWireEnd.
+// ---------------------------------------------------------------------------
+export function validateWireEnd(state, wireId, end, newHole) {
+  const size = boardSize(state.size).id;
+  const w = state.wires.find((x) => x.id === wireId);
+  if (!w) return { ok: false, reason: 'Không tìm thấy dây.' };
+  if (end !== 'a' && end !== 'b') return { ok: false, reason: 'Đầu dây không hợp lệ.' };
+  if (!parseHole(newHole, size)) return { ok: false, reason: 'Địa chỉ lỗ "' + newHole + '" không hợp lệ trên board ' + size + '.' };
+  const other = end === 'a' ? w.b : w.a;
+  if (other === newHole) return { ok: false, reason: 'Hai đầu dây trùng nhau.' };
+  const dup = state.wires.some((x) => x.id !== wireId
+    && ((x.a === newHole && x.b === other) || (x.b === newHole && x.a === other)));
+  if (dup) return { ok: false, reason: 'Đã có dây nối 2 lỗ này rồi.' };
+  return { ok: true };
+}
+export function retargetWireEnd(state, wireId, end, newHole) {
+  const v = validateWireEnd(state, wireId, end, newHole);
+  if (!v.ok) return v;
+  const w = state.wires.find((x) => x.id === wireId);
+  if (end === 'a') w.a = newHole; else w.b = newHole;
+  return { ok: true };
 }

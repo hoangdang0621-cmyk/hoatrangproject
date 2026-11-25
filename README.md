@@ -1,9 +1,10 @@
 # HoaTrang — Bàn thực hành 3D PIC16F877A
 
 Trang web là một bàn thí nghiệm 3D cho vi điều khiển PIC16F877A, chạy ngay
-trên trình duyệt. Trên bàn có sẵn breadboard 830 lỗ, chip PIC16F877A cắm
-sẵn vắt qua rãnh giữa, nguồn 5V đặt phía sau đã nối dây về rail. Linh kiện
-trên bàn nối vào chip thật — đổi dây trên bàn thì chip chạy theo dây mới.
+trên trình duyệt. Trên bàn có sẵn breadboard chọn được 3 size (Mini 170
+lỗ, Nửa 400 lỗ, Đầy đủ 830 lỗ), chip PIC16F877A cắm sẵn vắt qua rãnh giữa,
+nguồn 5V đặt phía sau đã nối dây về rail. Linh kiện trên bàn nối vào chip
+thật — đổi dây trên bàn thì chip chạy theo dây mới.
 Trang này chỉ dùng trên máy tính.
 
 Chip chạy sẵn chương trình nhấp nháy LED RB0: nối một LED (kèm điện trở
@@ -15,16 +16,25 @@ nối tiếp) vào strip của chân RB0 thì LED nhấp nháy theo nhịp chip.
    vào lỗ breadboard — chân cắm thẳng vào lỗ, breadboard chính là đế.
    Ô xanh là đặt được, ô đỏ là không (lỗ đã có chân, dưới thân chip,
    ngoài bàn). Bấm phím R trong lúc kéo để xoay linh kiện 90°.
-   Bấm vào khay (không kéo) rồi bấm vào lỗ cũng đặt được.
+   Bấm vào khay (không kéo) rồi bấm vào lỗ cũng đặt được — và bấm 1 lần
+   thì giữ chế độ đặt (đặt dính): bấm liên tục nhiều lỗ để thả nhiều cái,
+   bấm lại đúng thẻ đó hoặc Esc để thoát. R vẫn xoay trong lúc đặt dính.
 2. **Xoay bàn:** kéo chuột vào chỗ trống trên bàn để xoay 360°, cuộn
    chuột để zoom. Nút **3D** / **Từ trên** đổi góc nhìn.
 3. **Đi dây:** bấm **Dây dẫn** rồi bấm lỗ bắt đầu và lỗ kết thúc, dây
    hiện thành đường cong nối 2 lỗ. Chọn màu dây trong bảng 8 màu.
+   Bấm chọn 1 dây thì dây highlight (sáng + dày hơn, 2 đầu hiện núm
+   tròn): kéo núm tròn tới lỗ khác để cắm lại đầu dây đó, hoặc nhập
+   địa chỉ lỗ cho từng đầu dây trong Inspector (vd `c12`, `T+5`).
 4. **Chỉnh linh kiện:** bấm chọn linh kiện thì panel Inspector trượt từ
    phải sang — đổi giá trị điện trở, màu LED, mức chiết áp (%), xem chân
    nào nối đi đâu, xoá linh kiện/dây (hoặc phím Delete).
 5. **Kiểm tra:** panel bên trái liệt kê cảnh báo đấu nối trên bàn, bấm
    vào cảnh báo để chọn linh kiện liên quan.
+6. **Chọn size bo mạch:** nút Mini 170 / Nửa 400 / Đầy đủ 830 ngay trên
+   thanh công cụ của bàn. Đổi size thì chip tự căn lại giữa board,
+   linh kiện/dây còn trên board mới được giữ nguyên, cái ngoài board
+   bị gỡ (có ghi chú ở dòng trạng thái).
 
 ## Khay linh kiện
 
@@ -41,12 +51,16 @@ nối tiếp) vào strip của chân RB0 thì LED nhấp nháy theo nhịp chip.
   trên/dưới của breadboard.
 - **Dây dẫn:** bấm 2 lỗ để nối, dây hiện thành đường cong màu.
 
-## Breadboard 830 lỗ
+## Breadboard (3 size)
 
 Hàng a–e của mỗi cột nối với nhau thành một strip, hàng f–j nối với nhau
 thành một strip riêng; 2 rail +/− chạy suốt chiều dài (mọi lỗ rail + là
-+5V, mọi lỗ rail − là GND). Chip PIC16F877A cắm ở cột 22–41: chân 1–20
-ở hàng b, chân 21–40 ở hàng h. Dây nguồn VDD/VSS/MCLR đã nối sẵn về rail.
++5V, mọi lỗ rail − là GND). Chip PIC16F877A luôn căn giữa board: cắm ở
+cột 22–41 trên board 830, cột 6–25 trên board 400, cột 1–17 trên board
+Mini (chip DIP-40 rộng 20 cột nên trên board Mini thì 6 chân ngoài cùng
+MCLR/RD0/RD1/RD2/RD3/RB7 treo ngoài board, 34 chân còn lại cắm đúng lỗ).
+Dây nguồn VDD/VSS/MCLR đã nối sẵn về rail (board Mini không có rail nên
+không có dây nguồn mặc định).
 
 ## Cảnh báo thường gặp (panel "Kiểm tra")
 

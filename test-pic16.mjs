@@ -2,7 +2,7 @@
 // Chạy: node test-pic16.mjs   (exit 0 = tất cả pass)
 import { assemble, createCPU, parseIntelHex, exportHex, disassemble } from './public/pic16.js';
 import { defaultNetlist, resolvePeripherals, checkWiring, ledStates, applyButtonToCpu, applyPotToCpu, PIC_PINS } from './public/wiring.js';
-import { allHoles, stripKey, parseHole, holePos, picLegs, canPlace, benchToNetlist, defaultBenchState, sanitizeState } from './public/bench-model.js';
+import { allHoles, stripKey, parseHole, holePos, picLegs, canPlace, benchToNetlist, defaultBenchState, sanitizeState, boardSize, picCol, pruneStateForSize, validateWireEnd, retargetWireEnd, togglePlacement } from './public/bench-model.js';
 
 // Các chương trình Assembly dùng để kiểm thử — inline tại đây (file
 // public/examples.js chứa các bài lab mẫu đã bị gỡ ngày 25/11/2026 nên test
@@ -719,6 +719,127 @@ function rewire(netlist, a, b, a2, b2) {
   const s = sanitizeState({ components: [{ id: 'X', type: 'led', anchor: 'zzz' }], wires: 'rong' });
   check('(b-i) sanitize rác: có chip PIC + nguồn 5V', s.components.some((c) => c.type === 'pic') && s.components.some((c) => c.type === 'psu'), JSON.stringify(s.components.map((c) => c.type)));
   check('(b-i) sanitize rác: linh kiện lỗi bị loại', s.components.length === 2, `n=${s.components.length}`);
+}
+
+// ===========================================================================
+// SIZE BO MẠCH (170/400/830) + CHUYỂN ĐẦU DÂY + ĐẶT DÍNH
+// ===========================================================================
+// (c-a) Số lỗ theo từng size
+{
+  check('(c-a) board 170 lỗ', allHoles(170).length === 170, `holes=${allHoles(170).length}`);
+  check('(c-a) board 400 lỗ', allHoles(400).length === 400, `holes=${allHoles(400).length}`);
+  check('(c-a) board 830 lỗ', allHoles(830).length === 830, `holes=${allHoles(830).length}`);
+  check('(c-a) mặc định là 830', allHoles().length === 830 && boardSize().id === 830 && boardSize(999).id === 830, '');
+}
+
+// (c-b) Strip/rail nối đúng theo size
+{
+  check('(c-b) a12/e12 cùng strip trên 400, f12 khác strip',
+    stripKey('a12', 400) === stripKey('e12', 400) && stripKey('a12', 400) !== stripKey('f12', 400), '');
+  check('(c-b) rail 400: T+25 hợp lệ, T+26 ngoài board',
+    (() => { const q = parseHole('T+25', 400); return q && q.r === -2 && q.c === 25; })() && parseHole('T+26', 400) === null, '');
+  check('(c-b) board 170 không có rail, a17 hợp lệ, a18 ngoài board',
+    parseHole('T+1', 170) === null && parseHole('B-1', 170) === null
+    && (() => { const q = parseHole('a17', 170); return q && q.c === 17; })() && parseHole('a18', 170) === null, '');
+  const p = holePos('a1', 170);
+  check('(c-b) holePos a1 trên 170 = x -20.32mm (gốc giữa board)',
+    p && Math.abs(p.x + 20.32) < 0.01 && Math.abs(p.z + 11.43) < 0.01, JSON.stringify(p));
+  check('(c-b) rail 830 vẫn 50 lỗ', parseHole('T+50', 830) !== null && parseHole('T+51', 830) === null, '');
+}
+
+// (c-c) Chip PIC vừa trên cả 3 size (căn giữa board)
+// Lưu ý vật lý: DIP-40 rộng 20 cột nên trên board Mini 17 cột thì 6 chân
+// ngoài cùng (MCLR, RD0, RD1, RD2, RD3, RB7) treo ngoài board — chip vẫn
+// căn giữa, 34 chân còn lại cắm đúng lỗ.
+{
+  for (const size of [830, 400]) {
+    const legs = picLegs(size);
+    check(`(c-c) chip ${size}: đủ 40 chân trong board`,
+      legs.length === 40 && legs.every((l) => !!l.hole), `valid=${legs.filter((l) => l.hole).length}`);
+  }
+  const legs170 = picLegs(170);
+  const dangling = legs170.filter((l) => !l.hole).map((l) => l.pin);
+  check('(c-c) chip 170: căn giữa (picCol=0), 34 chân trong board, 6 chân treo ngoài là 1/19/20/21/22/40',
+    picCol(170) === 0 && legs170.length === 40 && legs170.filter((l) => l.hole).length === 34
+    && JSON.stringify(dangling) === JSON.stringify([1, 19, 20, 21, 22, 40]), JSON.stringify(dangling));
+  check('(c-c) chip 400 căn giữa (picCol=6), chip 830 như cũ (picCol=22)',
+    picCol(400) === 6 && picCol(830) === 22, `${picCol(400)}/${picCol(830)}`);
+}
+
+// (c-d) Đổi size: linh kiện/dây ngoài board bị loại, trong board được giữ
+{
+  const st = defaultBenchState(830);
+  st.components.push({ id: 'LED0', type: 'led', anchor: 'a10', rot: 0, props: { color: '#DC2626' } });
+  st.components.push({ id: 'LED1', type: 'led', anchor: 'a60', rot: 0, props: { color: '#DC2626' } });
+  st.wires.push({ id: 'W10', a: 'a10', b: 'a11', color: '#2563EB' });
+  st.wires.push({ id: 'W11', a: 'c10', b: 'b38', color: '#2563EB' });
+  const r400 = pruneStateForSize(st, 400);
+  check('(c-d) 830->400: LED a10 giữ, LED a60 gỡ',
+    r400.state.components.some((c) => c.id === 'LED0') && !r400.state.components.some((c) => c.id === 'LED1')
+    && r400.removed.components.join(',') === 'LED1', JSON.stringify(r400.removed.components));
+  check('(c-d) 830->400: dây a10-a11 giữ, dây c10-b38 gỡ (b38 ngoài board)',
+    r400.state.wires.some((w) => w.id === 'W10') && !r400.state.wires.some((w) => w.id === 'W11')
+    && r400.removed.wires.join(',') === 'W11', JSON.stringify(r400.removed.wires));
+  check('(c-d) 830->400: dây nguồn W1-W7 được nối lại theo chân PIC/rail mới',
+    (() => {
+      const w1 = r400.state.wires.find((w) => w.id === 'W1');
+      const w6 = r400.state.wires.find((w) => w.id === 'W6');
+      return w1 && w1.a === 'b6' && w1.b === 'T+22' && w6 && w6.b === 'T+25';
+    })(), JSON.stringify(r400.state.wires.filter((w) => ['W1', 'W6'].includes(w.id))));
+  const r170 = pruneStateForSize(st, 170);
+  check('(c-d) 830->170: hết dây nguồn mặc định (board mini không có rail) + dây W11 ngoài board',
+    ['W1', 'W2', 'W3', 'W4', 'W5', 'W6', 'W7'].every((id) => r170.removed.wires.includes(id))
+    && r170.removed.wires.includes('W11') && r170.removed.wires.length === 8, JSON.stringify(r170.removed.wires));
+  check('(c-d) 830->170: chip PIC + nguồn 5V vẫn còn, LED a10 giữ',
+    r170.state.components.some((c) => c.type === 'pic') && r170.state.components.some((c) => c.type === 'psu')
+    && r170.state.components.some((c) => c.id === 'LED0'), '');
+  const rSame = pruneStateForSize(st, 830);
+  check('(c-d) đổi size về chính nó: không gỡ gì',
+    rSame.removed.components.length === 0 && rSame.removed.wires.length === 0, JSON.stringify(rSame.removed));
+}
+
+// (c-e) Địa chỉ lỗ hợp lệ/không hợp lệ (popup dây dùng parseHole)
+{
+  check('(c-e) "c12" hợp lệ', (() => { const p = parseHole('c12'); return p && p.r === 2 && p.c === 12; })(), '');
+  check('(c-e) "z99" không hợp lệ', parseHole('z99') === null, '');
+  check('(c-e) "C12" (hoa) không hợp lệ ở model — UI phải thường hoá trước',
+    parseHole('C12') === null, '');
+  check('(c-e) "T+5" (rail) hợp lệ, "a0" và "" không hợp lệ',
+    parseHole('T+5') !== null && parseHole('a0') === null && parseHole('') === null, '');
+  check('(c-e) "c12 " (thừa khoảng trắng) không hợp lệ — UI phải trim trước',
+    parseHole('c12 ') === null, '');
+}
+
+// (c-f) Đổi đầu dây sang lỗ mới thì netlist đổi theo
+{
+  const st = defaultBenchState(830);
+  st.components.push({ id: 'LED0', type: 'led', anchor: 'c10', rot: 0, props: { color: '#DC2626' } });
+  st.wires.push({ id: 'W10', a: 'c10', b: 'b38', color: '#2563EB' });
+  st.wires.push({ id: 'W11', a: 'c11', b: 'T-5', color: '#0F172A' });
+  let mapping = resolvePeripherals(benchToNetlist(st));
+  check('(c-f) trước khi đổi: LED anode -> RC2', mapping.leds[0].pin.id === 'RC2', JSON.stringify(mapping.leds[0].pin));
+  const ok = retargetWireEnd(st, 'W10', 'b', 'h29');
+  mapping = resolvePeripherals(benchToNetlist(st));
+  check('(c-f) đổi đầu dây sang h29: LED anode -> RB0',
+    ok.ok === true && mapping.leds[0].pin.id === 'RB0', JSON.stringify(mapping.leds[0].pin));
+  const before = JSON.stringify(st.wires);
+  check('(c-f) đổi sang lỗ trùng đầu kia thì lỗi, state không đổi',
+    retargetWireEnd(st, 'W10', 'b', 'c10').ok === false && JSON.stringify(st.wires) === before, '');
+  check('(c-f) đổi sang lỗ sai ("z99") thì lỗi, state không đổi',
+    retargetWireEnd(st, 'W10', 'b', 'z99').ok === false && JSON.stringify(st.wires) === before, '');
+  st.wires.push({ id: 'W12', a: 'c10', b: 'h30', color: '#2563EB' });
+  check('(c-f) đổi sang cặp lỗ đã có dây thì lỗi',
+    retargetWireEnd(st, 'W10', 'b', 'h30').ok === false, '');
+  check('(c-f) validateWireEnd không đổi state',
+    validateWireEnd(st, 'W10', 'b', 'b38').ok === true && st.wires.find((w) => w.id === 'W10').b === 'h29', '');
+}
+
+// (c-g) Đặt dính: bấm thẻ đang chọn thì thoát, bấm thẻ khác thì chuyển
+{
+  check('(c-g) chưa chọn -> bấm LED thì chọn LED', togglePlacement(null, 'led') === 'led', '');
+  check('(c-g) đang chọn LED -> bấm lại LED thì thoát', togglePlacement('led', 'led') === null, '');
+  check('(c-g) đang chọn LED -> bấm điện trở thì chuyển sang điện trở',
+    togglePlacement('led', 'resistor') === 'resistor', '');
 }
 
 console.log(`\nKết quả: ${pass} pass, ${fail} fail`);
