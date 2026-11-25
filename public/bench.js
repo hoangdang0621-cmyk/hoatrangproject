@@ -1096,7 +1096,12 @@ D2
   function stdMat(color, opts = {}) {
     return new THREE.MeshStandardMaterial({ color, roughness: 0.55, metalness: 0.05, ...opts });
   }
-  function legMesh(x, z, h = 5.5) {
+  // Chân kim loại cắm lỗ: cao 7mm (mặc định) để CHỒNG vào thân/dây nối ít
+  // nhất 0.5mm, nhìn ngang không còn thấy khe hở. Chân 5.5mm cũ chỉ chạm
+  // mép (LED/nút đáy thân y=5.5) và hở 0.55mm với dây nối điện trở (đáy
+  // y=6.05) nên linh kiện nhìn như lơ lửng. Chân ở x ngoài thân (điện trở
+  // x=0/x=10.16) chỉ nối qua dây ngang nên càng cần chồng vào dây.
+  function legMesh(x, z, h = 7) {
     const leg = new THREE.Mesh(
       new THREE.CylinderGeometry(0.45, 0.45, h, 8),
       stdMat(0xCBD5E1, { metalness: 0.7, roughness: 0.35 }));
@@ -1214,7 +1219,13 @@ D2
     g.position.set(anchor.x, BOARD_TOP, anchor.z);
     g.rotation.y = -((comp.rot || 0) * Math.PI) / 2;
     const offs = legOffsets(comp.type, comp.rot || 0);
-    for (const o of offs) g.add(legMesh(o.dc * PITCH, rowZ(anchorR + o.dr, compRows) - rowZ(anchorR, compRows)));
+    // Đồng hồ: hộp đáy y=8 (cao hơn các linh kiện khác) nên chân phải dài
+    // 9mm mới chồng 1mm vào thân; các loại khác chân 7mm là đủ (xem
+    // legMesh). Chân chui vào trong thân là bình thường, không chọc xuyên
+    // qua đỉnh linh kiện nào (thân thấp nhất là điện trở, đỉnh y=7.65, mà
+    // chân điện trở ở x=0/x=10.16 nằm ngoài thân).
+    const legH = comp.type === 'voltmeter' || comp.type === 'ammeter' ? 9 : 7;
+    for (const o of offs) g.add(legMesh(o.dc * PITCH, rowZ(anchorR + o.dr, compRows) - rowZ(anchorR, compRows), legH));
     if (comp.type === 'led') {
       const color = comp.props?.color || '#DC2626';
       const mat = new THREE.MeshStandardMaterial({ color, emissive: new THREE.Color(color), emissiveIntensity: 0.15, roughness: 0.3 });
@@ -1294,10 +1305,12 @@ D2
       g.add(hole);
       buzzerMats.set(comp.id, mat);
     } else if (comp.type === 'voltmeter' || comp.type === 'ammeter') {
-      // Đồng hồ số: hộp navy 20×6×12 (đáy chạm mặt board, đỉnh y=14),
-      // màn hình nằm ngửa trên nóc, 2 chấm màu ở mặt trước đánh dấu cực
-      // (đỏ = chân P/A, tối = chân N/B). Chân kim loại đã thêm ở vòng
-      // legOffsets phía trên (2 chân cách nhau 4 cột, dùng rowZ).
+      // Đồng hồ số: hộp navy 20×6×12, đáy y=8, đỉnh y=14. Chân kim loại
+      // dài 9mm (xem vòng legOffsets phía trên) chui 1mm vào đáy hộp nên
+      // nhìn ngang không hở. Màn hình nằm ngửa trên nóc, 2 chấm màu ở mặt
+      // trước đánh dấu cực (đỏ = chân P/A, tối = chân N/B). Chân kim loại
+      // đã thêm ở vòng legOffsets phía trên (2 chân cách nhau 4 cột,
+      // dùng rowZ).
       const body = new THREE.Mesh(new THREE.BoxGeometry(20, 6, 12), stdMat(0x1E3A5F, { roughness: 0.5 }));
       body.position.set(5.08, 11, 0);
       body.castShadow = true;
