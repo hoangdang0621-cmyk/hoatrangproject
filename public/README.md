@@ -3,10 +3,10 @@
 Bàn thí nghiệm 3D cho vi điều khiển PIC16F877A, chạy ngay trên trình
 duyệt: breadboard đổi được kích thước (3 mẫu sẵn Mini 170 lỗ, Nửa 400
 lỗ, Đầy đủ 830 lỗ, hoặc tự điền rộng × dài), chip PIC16F877A cắm sẵn, nguồn
-5V phía sau đã nối dây về rail. Linh kiện trên bàn nối vào chip thật —
+phía sau đã nối dây về rail. Linh kiện trên bàn nối vào chip thật —
 đổi dây trên bàn thì chip chạy theo dây mới. Trang này chỉ dùng trên
 máy tính. Trang chính của trang web là index.html (3 mục Lý thuyết,
-Bài tập, Thực hành); bấm Thực hành để vào bàn thực hành này (bench.html).
+Bài tập, Thực hành); bấm Thực hành để vào bàn thực hành này (thuc-hanh/).
 
 Chip chạy sẵn chương trình nhấp nháy LED RB0: nối một LED (kèm điện trở
 nối tiếp) vào strip của chân RB0 thì LED nhấp nháy theo nhịp chip.
@@ -16,21 +16,23 @@ nối tiếp) vào strip của chân RB0 thì LED nhấp nháy theo nhịp chip.
 - **Đặt linh kiện:** kéo từ khay **Linh Kiện** bên trái thả vào lỗ
   breadboard (chân cắm thẳng vào lỗ). Ô xanh là đặt được, ô đỏ là không.
   Phím R xoay linh kiện 90° trong lúc kéo. Bấm vào khay rồi bấm vào lỗ
-  cũng đặt được — bấm 1 lần thì giữ chế độ đặt (đặt dính) để thả liên
-  tục nhiều cái, bấm lại thẻ đó hoặc Esc để thoát.
+  cũng đặt được — bấm 1 lần thì đặt đúng 1 cái rồi tự thoát chế độ đặt;
+  muốn thả cái nữa thì bấm chọn lại thẻ đó. Bấm lại thẻ đó hoặc Esc để
+  thoát trước khi đặt.
 - **Xoay bàn:** kéo chỗ trống để xoay 360°, cuộn chuột để zoom, nút
   **3D** / **Từ trên** đổi góc nhìn.
-- **Đi dây:** bấm **Dây dẫn** rồi bấm 2 lỗ; chọn màu dây trong bảng màu.
-  Bấm chọn 1 dây thì dây highlight, kéo núm tròn ở 2 đầu để cắm lại,
-  hoặc nhập địa chỉ lỗ cho từng đầu trong Inspector (vd `c12`, `T+5`).
+- **Đi dây:** bấm **Dây dẫn** rồi bấm 2 điểm; chọn màu dây trong bảng màu.
+  Bấm chọn 1 dây thì dây highlight, kéo núm tròn ở 2 đầu để cắm lại
+  (sang lỗ khác hoặc cọc +/− của nguồn), hoặc nhập địa chỉ cho từng đầu
+  trong Inspector (vd `c12`, `T+5`, cọc nguồn `PSU1.+` / `PSU1.-`).
 - **Chọn size bo mạch:** nhấn vào board (thân board hoặc lỗ trống) để
   mở popup **Bo mạch** bên phải: bấm 1 trong 3 mẫu sẵn để áp dụng ngay,
   hoặc tự điền rộng (số cột 5–99) × dài (số hàng 2–26) + chọn có rail
   nguồn rồi bấm Áp dụng; đổi size thì chip căn lại giữa, linh kiện/dây
   ngoài board mới bị gỡ (có ghi chú ở dòng trạng thái).
 - **Inspector:** bấm chọn linh kiện thì panel trượt từ phải sang để đổi
-  tính chất (giá trị điện trở, màu LED, mức chiết áp), xem chân nối đi
-  đâu, xoá linh kiện/dây (phím Delete).
+  tính chất (giá trị điện trở, màu LED, mức chiết áp, điện áp nguồn
+  0–24V), xem chân nối đi đâu, xoá linh kiện/dây (phím Delete).
 - **Kiểm tra:** panel bên trái liệt kê cảnh báo đấu nối (nối tắt, LED
   thiếu điện trở, LCD thiếu dây...), bấm vào cảnh báo để chọn linh kiện
   liên quan.

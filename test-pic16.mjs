@@ -2,7 +2,7 @@
 // Chạy: node test-pic16.mjs   (exit 0 = tất cả pass)
 import { assemble, createCPU, parseIntelHex, exportHex, disassemble } from './public/pic16.js';
 import { defaultNetlist, resolvePeripherals, checkWiring, ledStates, applyButtonToCpu, applyPotToCpu, PIC_PINS } from './public/wiring.js';
-import { PITCH, allHoles, stripKey, parseHole, holePos, picLegs, canPlace, benchToNetlist, defaultBenchState, sanitizeState, boardSize, picCol, picRows, bodyDepth, pruneStateForSize, validateWireEnd, retargetWireEnd, togglePlacement, normalizeSize, holeCount, sizeLabel, sameSize } from './public/bench-model.js';
+import { PITCH, allHoles, stripKey, parseHole, holePos, picLegs, canPlace, benchToNetlist, defaultBenchState, sanitizeState, boardSize, picCol, picRows, bodyDepth, pruneStateForSize, validateWireEnd, retargetWireEnd, togglePlacement, normalizeSize, holeCount, sizeLabel, sameSize, compLabel, psuVolts, validatePsuVolts, parsePsuPost, psuPostPos, normalizeWireEnd } from './public/bench-model.js';
 
 // Các chương trình Assembly dùng để kiểm thử — inline tại đây (file
 // public/examples.js chứa các bài lab mẫu đã bị gỡ ngày 25/11/2026 nên test
@@ -1189,6 +1189,131 @@ function rewire(netlist, a, b, a2, b2) {
     && Math.abs(bodyDepth({ cols: 20, rows: 26, rails: false }) - 87.66) < 0.01
     && Math.abs(bodyDepth({ cols: 20, rows: 2, rails: false }) - 26.7) < 0.01,
     `${bodyDepth(830)}/${bodyDepth({ cols: 20, rows: 26, rails: false })}/${bodyDepth({ cols: 20, rows: 2, rails: false })}`);
+}
+
+// ===========================================================================
+// ĐẶT 1 LẦN + CỌC NGUỒN + ĐIỆN ÁP NGUỒN
+// ===========================================================================
+// (f-a) Đặt 1 lần: vào chế độ đặt -> đặt 1 cái -> thoát; chọn lại mới đặt tiếp được
+{
+  let mode = togglePlacement(null, 'led'); // bấm thẻ LED
+  check('(f-a) bấm thẻ LED -> vào chế độ đặt LED', mode === 'led', '');
+  const st = defaultBenchState();
+  check('(f-a) đặt được LED vào a10', canPlace(st, 'led', 'a10', 0).ok === true, '');
+  st.components.push({ id: 'LED0', type: 'led', anchor: 'a10', rot: 0, props: { color: '#DC2626' } });
+  mode = togglePlacement(mode, mode); // đặt xong 1 cái thì thoát (UI gọi setPlacementMode(null))
+  check('(f-a) đặt 1 lần xong thì thoát chế độ đặt', mode === null, '');
+  mode = togglePlacement(mode, 'led'); // chọn lại thẻ LED
+  check('(f-a) chọn lại thẻ LED thì vào lại chế độ đặt', mode === 'led', '');
+  check('(f-a) đặt cái nữa vào a12 được', canPlace(st, 'led', 'a12', 0).ok === true, '');
+}
+
+// (f-b) Cọc nguồn: parse + vị trí + dây mặc định W6/W7 + netlist về VCC
+{
+  check('(f-b) parsePsuPost: PSU1.+ -> {PSU1, +}, PSU1.- -> {PSU1, -}; "c12"/"PSU1.x" không phải cọc nguồn',
+    (() => { const p = parsePsuPost('PSU1.+'); return p && p.psuId === 'PSU1' && p.sign === '+'; })()
+    && (() => { const p = parsePsuPost('PSU1.-'); return p && p.psuId === 'PSU1' && p.sign === '-'; })()
+    && parsePsuPost('c12') === null && parsePsuPost('PSU1.x') === null, '');
+  const st = defaultBenchState();
+  check('(f-b) vị trí cọc PSU1: + ở (-12, 28, -108), − ở (12, 28, -108)',
+    (() => { const p = psuPostPos(st, 'PSU1.+'); return p && p.x === -12 && p.y === 28 && p.z === -108; })()
+    && (() => { const p = psuPostPos(st, 'PSU1.-'); return p && p.x === 12 && p.y === 28 && p.z === -108; })()
+    && psuPostPos(st, 'PSU9.+') === null, '');
+  check('(f-b) dây mặc định W6/W7 nối cọc nguồn về rail: W6 = PSU1.+ -> T+40, W7 = PSU1.- -> T-40',
+    st.wires.find((w) => w.id === 'W6').a === 'PSU1.+' && st.wires.find((w) => w.id === 'W6').b === 'T+40'
+    && st.wires.find((w) => w.id === 'W7').a === 'PSU1.-' && st.wires.find((w) => w.id === 'W7').b === 'T-40',
+    JSON.stringify(st.wires.filter((w) => ['W6', 'W7'].includes(w.id))));
+  const st2 = defaultBenchState();
+  st2.components.push({ id: 'LED0', type: 'led', anchor: 'c10', rot: 0, props: { color: '#DC2626' } });
+  st2.wires.push({ id: 'W10', a: 'PSU1.+', b: 'c10', color: '#DC2626' });
+  st2.wires.push({ id: 'W11', a: 'c11', b: 'T-5', color: '#0F172A' });
+  const mapping = resolvePeripherals(benchToNetlist(st2));
+  check('(f-b) dây PSU1.+ -> c10: LED anode về VCC, cathode về GND',
+    mapping.leds[0].vccAnode === true && mapping.leds[0].gnd === true, JSON.stringify(mapping.leds[0]));
+  check('(f-b) dây PSU1.+ -> c10: không có cảnh báo nối tắt',
+    !checkWiring(benchToNetlist(st2)).some((w) => w.kind === 'short'),
+    JSON.stringify(checkWiring(benchToNetlist(st2)).map((w) => w.message)));
+}
+
+// (f-c) Đổi đầu dây sang cọc nguồn — cả 2 chiều (lỗ -> nguồn và nguồn -> lỗ)
+{
+  const st = defaultBenchState();
+  st.components.push({ id: 'LED0', type: 'led', anchor: 'c10', rot: 0, props: { color: '#DC2626' } });
+  st.wires.push({ id: 'W10', a: 'c10', b: 'b38', color: '#2563EB' });
+  check('(f-c) chiều lỗ -> nguồn: đổi đầu B sang PSU1.+ thì được',
+    validateWireEnd(st, 'W10', 'b', 'PSU1.+').ok === true, JSON.stringify(validateWireEnd(st, 'W10', 'b', 'PSU1.+')));
+  const r1 = retargetWireEnd(st, 'W10', 'b', 'PSU1.+');
+  let mapping = resolvePeripherals(benchToNetlist(st));
+  check('(f-c) lỗ -> nguồn: LED anode về VCC sau khi đổi đầu sang PSU1.+',
+    r1.ok === true && st.wires.find((w) => w.id === 'W10').b === 'PSU1.+' && mapping.leds[0].vccAnode === true, '');
+  check('(f-c) chiều nguồn -> lỗ: đổi đầu B từ PSU1.+ sang h29 thì được',
+    validateWireEnd(st, 'W10', 'b', 'h29').ok === true, '');
+  const r2 = retargetWireEnd(st, 'W10', 'b', 'h29');
+  mapping = resolvePeripherals(benchToNetlist(st));
+  check('(f-c) nguồn -> lỗ: LED anode -> RB0 sau khi đổi đầu ra h29',
+    r2.ok === true && mapping.leds[0].pin.id === 'RB0', JSON.stringify(mapping.leds[0].pin));
+  check('(f-c) đổi sang PSU9.+ (không có nguồn này) thì lỗi, state không đổi',
+    validateWireEnd(st, 'W10', 'b', 'PSU9.+').ok === false && st.wires.find((w) => w.id === 'W10').b === 'h29', '');
+  st.wires.push({ id: 'W11', a: 'PSU1.+', b: 'a20', color: '#DC2626' });
+  check('(f-c) đổi đầu B sang PSU1.+ khi đầu A đã là PSU1.+ thì lỗi (2 đầu trùng nhau)',
+    validateWireEnd(st, 'W11', 'b', 'PSU1.+').ok === false, '');
+}
+
+// (f-d) Điện áp nguồn: mặc định 5V, đổi 12V lưu vào state, giá trị sai bị từ chối
+{
+  const st = defaultBenchState();
+  const psu = st.components.find((c) => c.type === 'psu');
+  check('(f-d) voltage mặc định của nguồn là 5V', psuVolts(psu) === 5, JSON.stringify(psu.props));
+  check('(f-d) netlist mang theo psu.volts = 5', benchToNetlist(st).psu.volts === 5, JSON.stringify(benchToNetlist(st).psu));
+  check('(f-d) validatePsuVolts: 12 được, 0 và 24 được, 3.3 được',
+    validatePsuVolts('12').ok === true && validatePsuVolts('12').volts === 12
+    && validatePsuVolts(0).ok === true && validatePsuVolts(24).ok === true
+    && validatePsuVolts('3.3').ok === true && validatePsuVolts('3.3').volts === 3.3, '');
+  check('(f-d) validatePsuVolts: -1, 30, "abc", "" đều bị từ chối',
+    validatePsuVolts(-1).ok === false && validatePsuVolts(30).ok === false
+    && validatePsuVolts('abc').ok === false && validatePsuVolts('').ok === false, '');
+  psu.props = { volts: 12 };
+  check('(f-d) đổi nguồn sang 12V: label "Nguồn 12V", netlist psu.volts = 12',
+    compLabel(psu) === 'Nguồn 12V' && benchToNetlist(st).psu.volts === 12, compLabel(psu));
+  check('(f-d) nguồn không có props -> mặc định 5V, label "Nguồn 5V"',
+    psuVolts({ type: 'psu' }) === 5 && psuVolts() === 5 && compLabel({ id: 'PSU1', type: 'psu' }) === 'Nguồn 5V', '');
+}
+
+// (f-e) normalizeWireEnd + sanitizeState: đầu dây {x,y,z} cũ -> id cọc; giữ voltage
+{
+  const st = defaultBenchState();
+  check('(f-e) normalizeWireEnd: điểm cọc + cũ -> PSU1.+, cọc − cũ -> PSU1.-, điểm lạ giữ nguyên, lỗ giữ nguyên',
+    normalizeWireEnd(st, { x: -12, y: 28, z: -108 }) === 'PSU1.+'
+    && normalizeWireEnd(st, { x: 12, y: 28, z: -108 }) === 'PSU1.-'
+    && JSON.stringify(normalizeWireEnd(st, { x: 0, y: 28, z: -108 })) === JSON.stringify({ x: 0, y: 28, z: -108 })
+    && normalizeWireEnd(st, 'c12') === 'c12', '');
+  const old = {
+    size: 830,
+    components: [
+      { id: 'PIC1', type: 'pic', anchor: 'b22', rot: 0, fixed: true, props: {} },
+      { id: 'PSU1', type: 'psu', tx: 0, tz: -150, fixed: true, props: {} },
+    ],
+    wires: [
+      { id: 'W6', a: { x: -12, y: 28, z: -108 }, b: 'T+40', color: '#DC2626' },
+      { id: 'W7', a: { x: 12, y: 28, z: -108 }, b: 'T-40', color: '#0F172A' },
+    ],
+  };
+  const s = sanitizeState(old);
+  check('(f-e) sanitizeState: dây nguồn cũ {x,y,z} đổi thành PSU1.+/PSU1.-',
+    s.wires.find((w) => w.id === 'W6').a === 'PSU1.+' && s.wires.find((w) => w.id === 'W7').a === 'PSU1.-', JSON.stringify(s.wires));
+  check('(f-e) sanitizeState: nguồn cũ không có props.volts -> mặc định 5V',
+    psuVolts(s.components.find((c) => c.type === 'psu')) === 5, '');
+  const old12 = JSON.parse(JSON.stringify(old));
+  old12.components[1].props = { volts: 12 };
+  const s12 = sanitizeState(old12);
+  check('(f-e) sanitizeState giữ voltage 12V của nguồn đã lưu',
+    psuVolts(s12.components.find((c) => c.type === 'psu')) === 12, '');
+  const r400 = pruneStateForSize(s12, 400);
+  check('(f-e) đổi size giữ voltage 12V của nguồn, W6/W7 vẫn là cọc nguồn về rail mới',
+    psuVolts(r400.state.components.find((c) => c.type === 'psu')) === 12
+    && r400.state.wires.find((w) => w.id === 'W6').a === 'PSU1.+'
+    && r400.state.wires.find((w) => w.id === 'W7').a === 'PSU1.-'
+    && r400.state.wires.find((w) => w.id === 'W6').b === 'T+25', JSON.stringify(r400.state.wires.filter((w) => ['W6', 'W7'].includes(w.id))));
 }
 
 console.log(`\nKết quả: ${pass} pass, ${fail} fail`);

@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Bàn thực hành 3D — Mô phỏng PIC16F877A</title>
+<meta name="description" content="Bàn thực hành 3D cho vi điều khiển PIC16F877A: chọn size breadboard 170/400/830 lỗ, kéo-thả linh kiện, đi dây, xoay 360°, linh kiện chạy thật theo chip.">
+<link rel="stylesheet" href="/styles.css?v=20261125k">
+<script type="importmap">
+{ "imports": { "three": "https://unpkg.com/three@0.160.0/build/three.module.js" } }
+</script>
+</head>
+<body>
+<div class="desktop-only-banner" role="note">Trang mô phỏng này chỉ dùng trên máy tính. Hãy mở bằng trình duyệt trên máy tính để đầy đủ chức năng.</div>
+<div class="bench-page" id="benchView">
+  <aside class="bench-side">
+    <a class="bench-back" href="/">← Trang chính</a>
+    <div class="bench-mini-tabs" role="tablist" aria-label="Panel bên trái bàn thực hành">
+      <button type="button" class="bench-mini-tab active" role="tab" aria-selected="true">Linh Kiện</button>
+    </div>
+    <input class="input bench-search" id="benchSearch" type="search" placeholder="Tìm linh kiện..." aria-label="Tìm linh kiện">
+    <div class="bench-palette" id="benchPalette"></div>
+    <div class="bench-mode-banner" id="benchModeBanner" hidden>
+      <p id="benchModeText"></p>
+      <div class="bench-colors" id="benchModeColors" hidden></div>
+      <button type="button" class="btn btn-small" id="btnWireCancel">Hủy (Esc)</button>
+    </div>
+    <h2 class="bb-side-h">Thao tác</h2>
+    <div class="row">
+      <button type="button" class="btn btn-small" id="btnBenchClear">Dọn hết bàn</button>
+      <button type="button" class="btn btn-small" id="btnBenchDefault">Về bàn mặc định</button>
+    </div>
+    <p class="sub" id="benchStatus">Kéo linh kiện từ khay vào bàn. Kéo chỗ trống trên bàn để xoay 360°.</p>
+    <h2 class="bb-side-h">Kiểm tra</h2>
+    <p class="sub">Cảnh báo đấu nối trên bàn 3D. Bấm vào một cảnh báo để chọn linh kiện liên quan.</p>
+    <ul class="checks" id="benchChecks"></ul>
+  </aside>
+  <main class="bench-main">
+    <div class="bench-canvas-head">
+      <h1>Bàn thực hành 3D — PIC16F877A</h1>
+      <div class="seg bench-view-seg" role="group" aria-label="Chế độ xem">
+        <button type="button" id="btnView3D" aria-pressed="true">3D</button>
+        <button type="button" id="btnViewTop" aria-pressed="false">Từ trên</button>
+      </div>
+    </div>
+    <p class="sub" id="benchBoardInfo">Breadboard 830 lỗ · chip PIC16F877A cắm sẵn · nguồn phía sau bàn. Kéo chỗ trống để xoay 360°, cuộn chuột để zoom. Bấm linh kiện để mở Inspector bên phải.</p>
+    <div class="bench-canvas-wrap" id="benchCanvasWrap">
+      <div class="bench-angle" id="benchAngle" aria-live="polite">Góc xoay: 0°</div>
+      <div class="bench-error" id="benchError" hidden>Không tải được thư viện 3D, kiểm tra mạng rồi tải lại trang.</div>
+      <div class="bench-hint" id="benchHint" role="note">
+        <span>Kéo chỗ trống để xoay góc nhìn · Cuộn để phóng to · Kéo linh kiện từ khay lên bàn · Bấm linh kiện để chỉnh · R xoay</span>
+        <button type="button" class="bench-hint-close" id="benchHintClose" aria-label="Ẩn gợi ý">×</button>
+      </div>
+      <aside class="bench-inspector" id="benchInspector" aria-label="Inspector linh kiện"></aside>
+    </div>
+  </main>
+</div>
+<script type="module" src="/app.js?v=20261125j"></script>
+<script type="module" src="/bench.js?v=20261125j"></script>
+</body>
+</html>

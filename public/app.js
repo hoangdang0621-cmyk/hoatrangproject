@@ -7,12 +7,12 @@ import {
   resolvePeripherals, ledStates,
   applyButtonToCpu, applyPotToCpu,
 } from './wiring.js?v=20261125b';
-import { defaultBenchState, benchToNetlist } from './bench-model.js?v=20261125i';
+import { defaultBenchState, benchToNetlist } from './bench-model.js?v=20261125j';
 
 const cpu = createCPU();
 cpu.clockHz = 4000000;
 
-// Netlist ban đầu = bàn mặc định (chip PIC + nguồn 5V + dây nguồn về rail).
+// Netlist ban đầu = bàn mặc định (chip PIC + nguồn + dây nguồn về rail).
 let mapping = resolvePeripherals(benchToNetlist(defaultBenchState()));
 cpu.setWiring(mapping);
 let potVoltsById = {};         // id chiết áp -> volt (0..5)

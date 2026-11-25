@@ -363,9 +363,24 @@ export function buildBenchNets(state) {
       termStrip.set(comp.id + '.' + leg.term, key);
     }
   }
+  // Strip của 1 đầu dây: lỗ -> strip của lỗ đó; cọc nguồn -> RAIL+/RAIL-;
+  // đầu {x,y,z} cũ -> cọc nguồn nếu khớp vị trí cọc, còn không thì bỏ qua.
+  const endStripKey = (e) => {
+    if (typeof e === 'string') {
+      const pp = parsePsuPost(e);
+      if (pp) return pp.sign === '+' ? 'RAIL+' : 'RAIL-';
+      return stripKey(e, size);
+    }
+    const norm = normalizeWireEnd(state, e);
+    if (typeof norm === 'string') {
+      const pp = parsePsuPost(norm);
+      if (pp) return pp.sign === '+' ? 'RAIL+' : 'RAIL-';
+    }
+    return null;
+  };
   for (const w of state.wires) {
-    const ka = typeof w.a === 'string' ? stripKey(w.a, size) : null;
-    const kb = typeof w.b === 'string' ? stripKey(w.b, size) : null;
+    const ka = endStripKey(w.a);
+    const kb = endStripKey(w.b);
     if (ka && kb) { ensure(ka); ensure(kb); union(ka, kb); }
   }
   const groups = new Map();
@@ -397,11 +412,66 @@ export function describeTerminal(state, term) {
 // ---------------------------------------------------------------------------
 // Dịch trạng thái bàn thành netlist kiểu wiring.js (để resolvePeripherals).
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// Nguồn chung (PSU): điện áp danh định điều chỉnh được 0–24V, mặc định 5V.
+// Chỉ là giá trị hiển thị/danh định — không mô phỏng analog.
+// ---------------------------------------------------------------------------
+export const PSU_VOLTS_MIN = 0;
+export const PSU_VOLTS_MAX = 24;
+export const PSU_VOLTS_DEFAULT = 5;
+export function psuVolts(comp) {
+  const v = Number(comp?.props?.volts);
+  if (!Number.isFinite(v)) return PSU_VOLTS_DEFAULT;
+  return Math.min(PSU_VOLTS_MAX, Math.max(PSU_VOLTS_MIN, v));
+}
+export function formatVolts(v) {
+  return String(Math.round(v * 100) / 100);
+}
+// Kiểm tra điện áp người dùng nhập: số thập phân 0–24; sai thì từ chối
+// (không kẹp lén) để UI báo đỏ.
+export function validatePsuVolts(raw) {
+  if (raw === '' || raw === null || raw === undefined) return { ok: false, reason: 'Nhập điện áp nguồn (V).' };
+  const v = Number(raw);
+  if (!Number.isFinite(v)) return { ok: false, reason: 'Điện áp phải là số.' };
+  if (v < PSU_VOLTS_MIN || v > PSU_VOLTS_MAX) return { ok: false, reason: `Điện áp phải từ ${PSU_VOLTS_MIN} đến ${PSU_VOLTS_MAX} V.` };
+  return { ok: true, volts: Math.round(v * 100) / 100 };
+}
+
+// ---------------------------------------------------------------------------
+// Cọc nguồn: đầu dây gắn vào cọc +/− của 1 khối nguồn, id 'PSU1.+' / 'PSU1.-'.
+// Cọc + nối về rail + (VCC), cọc − nối về rail − (GND).
+// ---------------------------------------------------------------------------
+export function parsePsuPost(id) {
+  const m = typeof id === 'string' ? id.match(/^PSU(\d+)\.([+-])$/) : null;
+  return m ? { psuId: 'PSU' + m[1], sign: m[2] } : null;
+}
+// Vị trí 3D của cọc nguồn trên bàn (mm): cọc + ở x = tx−12, cọc − ở
+// x = tx+12, cao y = 28, mặt trước hộp nguồn z = tz+42.
+export function psuPostPos(state, id) {
+  const pp = parsePsuPost(id);
+  if (!pp) return null;
+  const comp = state.components.find((c) => c.id === pp.psuId && c.type === 'psu');
+  if (!comp) return null;
+  return { x: comp.tx + (pp.sign === '+' ? -12 : 12), y: 28, z: comp.tz + 42 };
+}
+// Đầu dây {x,y,z} cũ (lưu trước khi có id cọc) -> id cọc nếu khớp vị trí cọc nguồn.
+export function normalizeWireEnd(state, e) {
+  if (typeof e === 'string') return e;
+  if (e && typeof e.x === 'number' && typeof e.z === 'number') {
+    for (const c of state.components) {
+      if (c.type !== 'psu') continue;
+      if (Math.abs(e.x - (c.tx - 12)) < 6 && Math.abs(e.z - (c.tz + 42)) < 6) return c.id + '.+';
+      if (Math.abs(e.x - (c.tx + 12)) < 6 && Math.abs(e.z - (c.tz + 42)) < 6) return c.id + '.-';
+    }
+  }
+  return e;
+}
+
 const KIND_LABEL = { led: 'LED', button: 'Nút', pot: 'Chiết áp', lcd: 'LCD', buzzer: 'Còi' };
 export function compLabel(comp) {
   const n = comp.id.replace(/^[A-Z]+/, '');
   if (comp.type === 'pic') return 'PIC16F877A';
-  if (comp.type === 'psu') return 'Nguồn 5V';
+  if (comp.type === 'psu') return 'Nguồn ' + formatVolts(psuVolts(comp)) + 'V';
   if (comp.type === 'resistor') return 'R' + n + ' (' + (comp.props?.value ?? 220) + 'Ω)';
   return (KIND_LABEL[comp.type] || comp.type) + ' ' + n;
 }
@@ -432,7 +502,9 @@ export function benchToNetlist(state) {
   }
   // Dây nối rail + với rail − (nối tắt nguồn): đưa vào netlist để checkWiring thấy
   if (find('RAIL+') === find('RAIL-')) wires.push({ id: 'BW' + (n++), a: 'VCC', b: 'GND' });
-  return { components, wires };
+  // Điện áp danh định của nguồn (để cầu nối CPU thấy được; không mô phỏng analog).
+  const psu = state.components.find((c) => c.type === 'psu');
+  return { components, wires, psu: { volts: psuVolts(psu) } };
 }
 
 // ---------------------------------------------------------------------------
@@ -453,11 +525,12 @@ export function defaultProps(type) {
   if (type === 'led') return { color: '#DC2626' };
   if (type === 'resistor') return { value: 220 };
   if (type === 'pot') return { pct: 0 };
+  if (type === 'psu') return { volts: PSU_VOLTS_DEFAULT };
   return {};
 }
 
 // Trạng thái bàn mặc định theo size: chip PIC cắm sẵn (căn giữa board),
-// nguồn 5V trên bàn, dây nguồn VDD/VSS/MCLR về rail. Board Mini 170 không
+// nguồn trên bàn, dây nguồn VDD/VSS/MCLR về rail. Board Mini 170 không
 // có rail nên không có dây nguồn mặc định.
 export function defaultBenchState(size = DEFAULT_SIZE) {
   const s = boardSize(size);
@@ -478,14 +551,14 @@ export function defaultBenchState(size = DEFAULT_SIZE) {
   // Dây nguồn: cọc +/− của PSU về rail (cột 40, kẹp về railCols).
   if (s.railCols > 0) {
     const rc = Math.min(40, s.railCols);
-    wires.push({ id: 'W6', a: { x: -12, y: 28, z: -108 }, b: 'T+' + rc, color: '#DC2626' });
-    wires.push({ id: 'W7', a: { x: 12, y: 28, z: -108 }, b: 'T-' + rc, color: '#0F172A' });
+    wires.push({ id: 'W6', a: 'PSU1.+', b: 'T+' + rc, color: '#DC2626' });
+    wires.push({ id: 'W7', a: 'PSU1.-', b: 'T-' + rc, color: '#0F172A' });
   }
   return {
     size: normalizeSize(size),
     components: [
       { id: 'PIC1', type: 'pic', anchor: picAnchor(size), rot: 0, fixed: true, props: {} },
-      { id: 'PSU1', type: 'psu', tx: 0, tz: -150, fixed: true, props: {} },
+      { id: 'PSU1', type: 'psu', tx: 0, tz: -150, fixed: true, props: defaultProps('psu') },
     ],
     wires,
   };
@@ -502,7 +575,7 @@ export function sanitizeState(raw) {
     if (c.type === 'pic') { components.push({ id: 'PIC1', type: 'pic', anchor: picAnchor(size), rot: 0, fixed: true, props: {} }); continue; }
     if (c.type === 'psu') {
       if (typeof c.tx === 'number' && typeof c.tz === 'number') {
-        components.push({ id: c.id, type: 'psu', tx: c.tx, tz: c.tz, fixed: true, props: {} });
+        components.push({ id: c.id, type: 'psu', tx: c.tx, tz: c.tz, fixed: true, props: { volts: psuVolts(c) } });
       }
       continue;
     }
@@ -515,14 +588,24 @@ export function sanitizeState(raw) {
     components.unshift({ id: 'PIC1', type: 'pic', anchor: picAnchor(size), rot: 0, fixed: true, props: {} });
   }
   if (!components.some((c) => c.type === 'psu')) {
-    components.push({ id: 'PSU1', type: 'psu', tx: 0, tz: -150, fixed: true, props: {} });
+    components.push({ id: 'PSU1', type: 'psu', tx: 0, tz: -150, fixed: true, props: defaultProps('psu') });
   }
   const wires = [];
   for (const w of raw.wires) {
     if (!w || typeof w.id !== 'string' || typeof w.color !== 'string') continue;
-    const okEnd = (e) => (typeof e === 'string' && !!parseHole(e, size))
-      || (e && typeof e.x === 'number' && typeof e.y === 'number' && typeof e.z === 'number');
-    if (okEnd(w.a) && okEnd(w.b)) wires.push({ id: w.id, a: w.a, b: w.b, color: w.color });
+    // Đầu dây hợp lệ: lỗ trên board, cọc nguồn (PSU1.+/PSU1.-), hoặc điểm 3D cũ.
+    const okEnd = (e) => {
+      if (typeof e === 'string') {
+        if (parseHole(e, size)) return true;
+        const pp = parsePsuPost(e);
+        return !!pp && components.some((c) => c.id === pp.psuId);
+      }
+      return e && typeof e.x === 'number' && typeof e.y === 'number' && typeof e.z === 'number';
+    };
+    // Đầu {x,y,z} cũ khớp cọc nguồn thì đổi thành id cọc.
+    const na = normalizeWireEnd({ components }, w.a);
+    const nb = normalizeWireEnd({ components }, w.b);
+    if (okEnd(na) && okEnd(nb)) wires.push({ id: w.id, a: na, b: nb, color: w.color });
   }
   return { size, components, wires };
 }
@@ -558,7 +641,7 @@ export function pruneStateForSize(state, newSize) {
     if (comp.type === 'pic') continue;
     if (comp.type === 'psu') {
       if (typeof comp.tx === 'number' && typeof comp.tz === 'number') {
-        keptComponents.push({ id: comp.id, type: 'psu', tx: comp.tx, tz: comp.tz, fixed: true, props: {} });
+        keptComponents.push({ id: comp.id, type: 'psu', tx: comp.tx, tz: comp.tz, fixed: true, props: { volts: psuVolts(comp) } });
       }
       continue;
     }
@@ -575,7 +658,8 @@ export function pruneStateForSize(state, newSize) {
   };
   for (const w of state.wires) {
     if (!w || typeof w.id !== 'string' || typeof w.color !== 'string') continue;
-    let a = w.a, b = w.b;
+    // Đầu {x,y,z} cũ khớp cọc nguồn thì đổi thành id cọc.
+    let a = normalizeWireEnd(state, w.a), b = normalizeWireEnd(state, w.b);
     if (['W1', 'W2', 'W3', 'W4', 'W5'].includes(w.id)) {
       // Đầu a là chân PIC: đổi sang lỗ chân mới của cùng pin.
       const pin = typeof a === 'string' ? pinOfHole.get(a) : null;
@@ -590,8 +674,15 @@ export function pruneStateForSize(state, newSize) {
       if (rb === null) { removed.wires.push(w.id); continue; }
       b = rb;
     } else {
-      const okEnd = (e) => (typeof e === 'string' ? !!parseHole(e, size)
-        : (e && typeof e.x === 'number' && typeof e.y === 'number' && typeof e.z === 'number'));
+      // Đầu dây hợp lệ: lỗ trên board, cọc nguồn, hoặc điểm 3D cũ.
+      const okEnd = (e) => {
+        if (typeof e === 'string') {
+          if (parseHole(e, size)) return true;
+          const pp = parsePsuPost(e);
+          return !!pp && keptComponents.some((c) => c.id === pp.psuId);
+        }
+        return e && typeof e.x === 'number' && typeof e.y === 'number' && typeof e.z === 'number';
+      };
       if (!okEnd(a) || !okEnd(b)) { removed.wires.push(w.id); continue; }
     }
     const key = wireKey(a, b);
@@ -611,12 +702,20 @@ export function validateWireEnd(state, wireId, end, newHole) {
   const w = state.wires.find((x) => x.id === wireId);
   if (!w) return { ok: false, reason: 'Không tìm thấy dây.' };
   if (end !== 'a' && end !== 'b') return { ok: false, reason: 'Đầu dây không hợp lệ.' };
-  if (!parseHole(newHole, size)) return { ok: false, reason: 'Địa chỉ lỗ "' + newHole + '" không hợp lệ trên board ' + sizeLabel(size) + '.' };
+  // Đích hợp lệ: lỗ trên board hoặc cọc nguồn (PSU1.+/PSU1.-) của nguồn đang có trên bàn.
+  const pp = parsePsuPost(newHole);
+  if (pp) {
+    if (!state.components.some((c) => c.id === pp.psuId && c.type === 'psu')) {
+      return { ok: false, reason: 'Không có nguồn ' + pp.psuId + ' trên bàn.' };
+    }
+  } else if (!parseHole(newHole, size)) {
+    return { ok: false, reason: 'Địa chỉ "' + newHole + '" không hợp lệ trên board ' + sizeLabel(size) + ' (lỗ vd c12, hoặc cọc nguồn PSU1.+/PSU1.-).' };
+  }
   const other = end === 'a' ? w.b : w.a;
   if (other === newHole) return { ok: false, reason: 'Hai đầu dây trùng nhau.' };
   const dup = state.wires.some((x) => x.id !== wireId
     && ((x.a === newHole && x.b === other) || (x.b === newHole && x.a === other)));
-  if (dup) return { ok: false, reason: 'Đã có dây nối 2 lỗ này rồi.' };
+  if (dup) return { ok: false, reason: 'Đã có dây nối 2 điểm này rồi.' };
   return { ok: true };
 }
 export function retargetWireEnd(state, wireId, end, newHole) {

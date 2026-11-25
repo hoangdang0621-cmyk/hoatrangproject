@@ -11,7 +11,8 @@ import {
   picRows, bodyDepth, ROWS,
   pruneStateForSize, validateWireEnd, retargetWireEnd, togglePlacement,
   normalizeSize, holeCount, sizeLabel, sameSize,
-} from './bench-model.js?v=20261125h';
+  psuVolts, validatePsuVolts, parsePsuPost, psuPostPos,
+} from './bench-model.js?v=20261125j';
 import { checkWiring, SIGNAL_COLORS } from './wiring.js?v=20261125b';
 
 const $ = (id) => document.getElementById(id);
@@ -53,7 +54,7 @@ function main() {
   let wireColor = SIGNAL_COLORS[0];
   let wireStart = null;         // lỗ bắt đầu của dây đang đi
   let placementMode = null;     // type đang chờ bấm lỗ để đặt (bấm khay, không kéo)
-  let placementRot = 0;         // góc xoay khi đặt dính (0..3, R để xoay)
+  let placementRot = 0;         // góc xoay khi đặt bằng bấm (0..3, R để xoay)
   let drag = null;              // {mode:'palette'|'move'|'move-psu'|'orbit'|'wire-end', ...}
   let pressedBtn = null;        // id nút đang nhấn giữ trên bàn
   let wireAddrError = '';       // lỗi nhập địa chỉ lỗ trong Inspector dây
@@ -74,6 +75,7 @@ function main() {
   const compMeshes = new Map();   // compId -> THREE.Group
   const wireMeshes = new Map();   // wireId -> THREE.Mesh (ống) + hit tube
   const wireHandleMeshes = [];    // núm tròn ở 2 đầu dây đang chọn (để kéo)
+  const psuHitMeshes = [];        // núm bắt vô hình ở 2 cọc nguồn (để kéo đầu dây vào)
   const ledMats = new Map();      // compId -> material phát sáng LED
   const lcdTexs = new Map();      // compId -> {canvas, ctx, tex, last}
   const buzzerMats = new Map();   // compId -> material còi
@@ -145,7 +147,7 @@ function main() {
     { type: 'pot', name: 'Chiết áp', hint: 'Kéo vào lỗ breadboard', svg: '<svg viewBox="0 0 64 64"><rect x="4" y="4" width="56" height="56" rx="8" fill="#FFFFFF" stroke="#1E3A5F" stroke-width="2"/><circle cx="32" cy="32" r="16" fill="#F1F3F5" stroke="#1E3A5F" stroke-width="2"/><line x1="32" y1="32" x2="32" y2="19" stroke="#DC2626" stroke-width="3"/></svg>' },
     { type: 'lcd', name: 'LCD 16x2', hint: 'Kéo vào lỗ breadboard', svg: '<svg viewBox="0 0 210 84"><rect x="2" y="6" width="206" height="72" rx="6" fill="#123524" stroke="#0F172A" stroke-width="2"/><rect x="16" y="20" width="16" height="16" rx="1" fill="#2E7D4F"/><rect x="38" y="20" width="16" height="16" rx="1" fill="#2E7D4F"/><rect x="60" y="20" width="16" height="16" rx="1" fill="#2E7D4F"/><rect x="16" y="46" width="16" height="16" rx="1" fill="#2E7D4F"/><rect x="38" y="46" width="16" height="16" rx="1" fill="#2E7D4F"/><text x="200" y="14" text-anchor="end" font-family="Fira Code, monospace" font-size="8" fill="#7CFFB2">16x2</text></svg>' },
     { type: 'buzzer', name: 'Còi buzzer', hint: 'Kéo vào lỗ breadboard', svg: '<svg viewBox="0 0 56 56"><circle cx="28" cy="28" r="22" fill="#FFFFFF" stroke="#1E3A5F" stroke-width="2"/><circle cx="28" cy="28" r="9" fill="#F1F3F5" stroke="#94A3B8" stroke-width="2"/><circle cx="28" cy="28" r="3" fill="#475569"/></svg>' },
-    { type: 'psu', name: 'Nguồn 5V', hint: 'Kéo thả lên mặt bàn', svg: '<svg viewBox="0 0 120 72"><rect x="4" y="6" width="112" height="60" rx="6" fill="#334155" stroke="#0F172A" stroke-width="2"/><rect x="14" y="16" width="52" height="20" rx="3" fill="#0F172A"/><text x="40" y="31" text-anchor="middle" font-family="Fira Code, monospace" font-size="12" fill="#F87171">5.00</text><circle cx="88" cy="26" r="7" fill="#DC2626"/><circle cx="104" cy="26" r="7" fill="#0F172A" stroke="#94A3B8" stroke-width="2"/></svg>' },
+    { type: 'psu', name: 'Nguồn', hint: 'Kéo thả lên mặt bàn', svg: '<svg viewBox="0 0 120 72"><rect x="4" y="6" width="112" height="60" rx="6" fill="#334155" stroke="#0F172A" stroke-width="2"/><rect x="14" y="16" width="52" height="20" rx="3" fill="#0F172A"/><text x="40" y="31" text-anchor="middle" font-family="Fira Code, monospace" font-size="12" fill="#F87171">5.00</text><circle cx="88" cy="26" r="7" fill="#DC2626"/><circle cx="104" cy="26" r="7" fill="#0F172A" stroke="#94A3B8" stroke-width="2"/></svg>' },
     { type: 'wire', name: 'Dây dẫn', hint: 'Bấm để vào chế độ đi dây', svg: '<svg viewBox="0 0 76 30"><path d="M6 24 C 24 4, 52 4, 70 24" fill="none" stroke="#2563EB" stroke-width="4" stroke-linecap="round"/><circle cx="6" cy="24" r="4" fill="#1E3A5F"/><circle cx="70" cy="24" r="4" fill="#1E3A5F"/></svg>' },
   ];
   function renderPalette(filter = '') {
@@ -168,13 +170,13 @@ function main() {
     if (on) setStatus('Đang đi dây — bấm lỗ bắt đầu rồi bấm lỗ kết thúc. Esc để hủy.');
   }
   function setPlacementMode(type) {
-    // Đặt dính: bấm lại đúng thẻ đang chọn thì thoát chế độ đặt.
+    // Bấm lại đúng thẻ đang chọn thì thoát chế độ đặt.
     placementMode = togglePlacement(placementMode, type);
     placementRot = 0;
     if (placementMode) { wiringMode = false; wireStart = null; }
     updateModeBanner();
     renderPalette(searchEl ? searchEl.value : '');
-    if (placementMode) setStatus('Đang đặt ' + (PALETTE.find((p) => p.type === placementMode)?.name || placementMode) + ' — bấm vào lỗ để đặt, thả liên tục. Bấm lại thẻ để thoát, Esc để hủy.');
+    if (placementMode) setStatus('Đang đặt ' + (PALETTE.find((p) => p.type === placementMode)?.name || placementMode) + ' — bấm vào lỗ để đặt 1 cái, xong tự thoát. Bấm lại thẻ để thoát, Esc để hủy.');
   }
   function updateModeBanner() {
     if (!modeBanner) return;
@@ -190,7 +192,7 @@ function main() {
       }));
     } else if (placementMode) {
       modeBanner.hidden = false;
-      modeText.innerHTML = '<strong>Đang đặt ' + esc(PALETTE.find((p) => p.type === placementMode)?.name || placementMode) + '</strong> — bấm vào lỗ để đặt, thả liên tục · R xoay (hiện ' + (placementRot * 90) + '°) · bấm lại thẻ để thoát · Esc hủy';
+      modeText.innerHTML = '<strong>Đang đặt ' + esc(PALETTE.find((p) => p.type === placementMode)?.name || placementMode) + '</strong> — bấm vào lỗ để đặt 1 cái · R xoay (hiện ' + (placementRot * 90) + '°) · bấm lại thẻ để thoát · Esc hủy';
       modeColors.hidden = true;
     } else {
       modeBanner.hidden = true;
@@ -276,12 +278,12 @@ function main() {
           <input class="input bench-insp-hole" id="inspWireA" type="text" value="${esc(endVal(w.a))}"${endHint(w.a)} autocomplete="off" spellcheck="false">
           <label class="bench-insp-label" for="inspWireB">Đầu B — địa chỉ lỗ</label>
           <input class="input bench-insp-hole" id="inspWireB" type="text" value="${esc(endVal(w.b))}"${endHint(w.b)} autocomplete="off" spellcheck="false">
-          <p class="sub">Địa chỉ lỗ: chữ hàng a–z (theo số hàng của board) + số cột (vd c12, h29, k5) hoặc rail T+/T−/B+/B− + số (vd T+5). Gõ xong bấm Áp dụng hoặc Enter. Để trống 1 ô thì giữ nguyên đầu đó.</p>
+          <p class="sub">Địa chỉ lỗ: chữ hàng a–z (theo số hàng của board) + số cột (vd c12, h29, k5) hoặc rail T+/T−/B+/B− + số (vd T+5). Hoặc cọc nguồn: PSU1.+ / PSU1.- (cọc + nối về rail +, cọc − nối về rail −). Gõ xong bấm Áp dụng hoặc Enter. Để trống 1 ô thì giữ nguyên đầu đó.</p>
           <p class="bench-insp-err" id="inspWireErr" role="alert">${esc(wireAddrError)}</p>
           <button type="button" class="btn btn-accent btn-small" data-act="apply-wire">Áp dụng</button>
           <label class="bench-insp-label">Màu dây</label>
           <div class="bench-colors">${SIGNAL_COLORS.map((c) => `<button type="button" class="bench-color${c === w.color ? ' sel' : ''}" data-color="${c}" style="background:${c}" aria-label="Màu dây ${c}"></button>`).join('')}</div>
-          <p class="sub">Dây nối 2 strip của 2 lỗ. Bấm vào dây trên bàn để chọn, kéo núm tròn ở 2 đầu dây để cắm sang lỗ khác.</p>
+          <p class="sub">Dây nối 2 strip của 2 điểm. Bấm vào dây trên bàn để chọn, kéo núm tròn ở 2 đầu dây để cắm sang lỗ khác hoặc cọc nguồn.</p>
         </div>
         <div class="bench-insp-foot"><button type="button" class="btn btn-danger-outline btn-small" data-act="del-wire">Xoá dây</button></div>`;
       inspectorEl.querySelectorAll('.bench-color').forEach((b) => b.addEventListener('click', () => {
@@ -354,7 +356,12 @@ function main() {
         body = `<p class="sub">Chip cắm cố định ở cột ${Math.max(1, pc)}–${pc + 19}, hàng ${ROWS[rT]}/${ROWS[rB]}. ${conns.length} chân đang nối dây.</p>
           <div class="bench-conns">${conns.join('') || '<p class="sub">Chưa chân nào nối dây ngoài nguồn.</p>'}</div>`;
       } else if (comp.type === 'psu') {
-        body = `<p class="sub">Nguồn 5V cố định. Cọc + (đỏ) và − (đen) nối vào rail trên/dưới của breadboard.</p>`;
+        const volts = psuVolts(comp);
+        body = `<label class="bench-insp-label" for="inspPsuVolts">Điện áp nguồn (V)</label>
+          <input class="input" id="inspPsuVolts" type="number" min="0" max="24" step="0.1" value="${volts}">
+          <p class="bench-insp-err" id="inspPsuErr" role="alert"></p>
+          <button type="button" class="btn btn-accent btn-small" data-act="apply-psu">Áp dụng</button>
+          <p class="sub">Nguồn chung, điều chỉnh được 0–24V (mặc định 5V). Cọc + (đỏ) và − (đen) nối vào rail trên/dưới của breadboard. Điện áp chỉ là giá trị danh định, không mô phỏng analog.</p>`;
       }
       const conns = comp.type !== 'pic' && comp.type !== 'psu'
         ? `<div class="bench-conns">${legsFor(comp, state.size).map((l) => {
@@ -399,6 +406,22 @@ function main() {
         });
         potRange.addEventListener('change', () => save());
       }
+      const psuApply = () => {
+        const inp = inspectorEl.querySelector('#inspPsuVolts');
+        const errEl = inspectorEl.querySelector('#inspPsuErr');
+        if (!inp) return;
+        const r = validatePsuVolts(inp.value);
+        if (!r.ok) { if (errEl) errEl.textContent = r.reason; return; }
+        comp.props = { ...(comp.props || {}), volts: r.volts };
+        save(); rebuildAll(); renderInspector(); syncToCpu(); updateSizeUI();
+        setStatus('Đã đổi ' + compLabel(comp) + '.');
+      };
+      inspectorEl.querySelector('[data-act="apply-psu"]')?.addEventListener('click', psuApply);
+      const psuInput = inspectorEl.querySelector('#inspPsuVolts');
+      if (psuInput) psuInput.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') { e.preventDefault(); psuApply(); }
+        e.stopPropagation();
+      });
     }
     inspectorEl.classList.add('open');
     inspectorEl.querySelector('[data-act="close"]')?.addEventListener('click', () => select(null));
@@ -406,18 +429,25 @@ function main() {
     inspectorEl.querySelector('[data-act="del-wire"]')?.addEventListener('click', () => deleteSelected());
   }
   function holeName(e) {
-    if (typeof e === 'string') return e;
+    if (typeof e === 'string') {
+      const pp = parsePsuPost(e);
+      if (pp) return 'cọc ' + pp.sign + ' nguồn ' + pp.psuId;
+      return e;
+    }
     if (e && typeof e.x === 'number') return 'cọc nguồn';
     return '?';
   }
-  // Thường hoá địa chỉ lỗ người dùng gõ: trim, chữ hàng về thường
-  // ('C12' -> 'c12'), chữ rail về hoa ('t+5' -> 'T+5').
+  // Thường hoá địa chỉ người dùng gõ: trim, chữ hàng về thường
+  // ('C12' -> 'c12'), chữ rail về hoa ('t+5' -> 'T+5'), cọc nguồn về
+  // dạng chuẩn ('psu1.+' -> 'PSU1.+').
   function normalizeHoleInput(v) {
     const s = String(v || '').trim();
     let m = s.match(/^([a-zA-Z])(\d+)$/);
     if (m) return m[1].toLowerCase() + m[2];
     m = s.match(/^([tTbB])([+-])(\d+)$/);
     if (m) return m[1].toUpperCase() + m[2] + m[3];
+    m = s.match(/^psu(\d+)\.([+-])$/i);
+    if (m) return 'PSU' + m[1] + '.' + m[2];
     return s;
   }
   function deleteSelected() {
@@ -694,7 +724,7 @@ function main() {
   }
   function updateSizeUI() {
     const info = $('benchBoardInfo');
-    if (info) info.textContent = `${sizeLabel(state.size)} · chip PIC16F877A cắm sẵn · nguồn 5V phía sau bàn. Kéo chỗ trống để xoay 360°, cuộn chuột để zoom. Bấm vào board để đổi kích thước, bấm linh kiện để mở Inspector bên phải.`;
+    if (info) info.textContent = `${sizeLabel(state.size)} · chip PIC16F877A cắm sẵn · nguồn phía sau bàn. Kéo chỗ trống để xoay 360°, cuộn chuột để zoom. Bấm vào board để đổi kích thước, bấm linh kiện để mở Inspector bên phải.`;
   }
 
   // --- Vẽ linh kiện 3D ---
@@ -765,7 +795,7 @@ function main() {
       return g;
     }
     if (comp.type === 'psu') {
-      // Hộp nguồn 5V đặt trên mặt bàn, mặt trước quay về phía breadboard
+      // Hộp nguồn đặt trên mặt bàn, mặt trước quay về phía breadboard
       g.position.set(comp.tx, 0, comp.tz);
       const body = new THREE.Mesh(new THREE.BoxGeometry(120, 70, 80), stdMat(0x334155, { roughness: 0.5 }));
       body.position.y = 35;
@@ -774,7 +804,7 @@ function main() {
       g.add(body);
       const disp = new THREE.Mesh(
         new THREE.PlaneGeometry(52, 20),
-        new THREE.MeshBasicMaterial({ map: makeDisplayTexture() }));
+        new THREE.MeshBasicMaterial({ map: makeDisplayTexture(psuVolts(comp)) }));
       disp.position.set(0, 52, 40.2);
       g.add(disp);
       const postR = new THREE.Mesh(new THREE.CylinderGeometry(4, 4, 10, 16), stdMat(0xDC2626));
@@ -785,6 +815,16 @@ function main() {
       postB.rotation.x = Math.PI / 2;
       postB.position.set(12, 28, 42);
       g.add(postB);
+      // Núm bắt vô hình ở 2 cọc nguồn để kéo đầu dây vào được (pickPsuPost).
+      for (const [sign, x] of [['+', -12], ['-', 12]]) {
+        const hit = new THREE.Mesh(
+          new THREE.SphereGeometry(7, 10, 10),
+          new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false }));
+        hit.position.set(x, 28, 42);
+        hit.userData = { psuPostId: comp.id + '.' + sign };
+        g.add(hit);
+        psuHitMeshes.push(hit);
+      }
       return g;
     }
     // Linh kiện cắm lỗ: gốc nhóm ở lỗ neo, chân theo legOffsets
@@ -874,7 +914,8 @@ function main() {
     }
     return g;
   }
-  function makeDisplayTexture() {
+  // Màn hình nguồn: hiện điện áp hiện tại của nguồn (vd 12.00 V).
+  function makeDisplayTexture(volts = 5) {
     const c = document.createElement('canvas');
     c.width = 256; c.height = 96;
     const ctx = c.getContext('2d');
@@ -884,7 +925,7 @@ function main() {
     ctx.font = '700 52px "Fira Code", monospace';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.fillText('5.00', 108, 48);
+    ctx.fillText(Number(volts).toFixed(2), 108, 48);
     ctx.fillStyle = '#94A3B8';
     ctx.font = '600 28px "Fira Code", monospace';
     ctx.fillText('V', 216, 48);
@@ -943,6 +984,9 @@ function main() {
   }
   function endpointPos(e) {
     if (typeof e === 'string') {
+      // Cọc nguồn (PSU1.+/PSU1.-) lấy vị trí từ khối nguồn đang có trên bàn.
+      const pp = parsePsuPost(e);
+      if (pp) return psuPostPos(state, e);
       const p = holePos(e, state.size);
       return p ? { x: p.x, y: BOARD_TOP, z: p.z } : null;
     }
@@ -953,6 +997,7 @@ function main() {
     if (!sceneReady) return;
     for (const [, g] of compMeshes) compRoot.remove(g);
     compMeshes.clear();
+    psuHitMeshes.length = 0;
     ledMats.clear(); lcdTexs.clear(); buzzerMats.clear(); btnTops.clear();
     for (const comp of state.components) {
       const g = buildComponentMesh(comp);
@@ -980,10 +1025,11 @@ function main() {
   function placeComponent(type, anchor, rot = 0, tx = 0, tz = 0) {
     if (type === 'psu') {
       const id = nextComponentId(state, 'psu');
-      state.components.push({ id, type: 'psu', tx, tz, fixed: false, props: {} });
+      const comp = { id, type: 'psu', tx, tz, fixed: false, props: defaultProps('psu') };
+      state.components.push(comp);
       save(); rebuildAll(); syncToCpu();
       select({ kind: 'comp', id });
-      setStatus('Đã đặt Nguồn 5V lên bàn.');
+      setStatus('Đã đặt ' + compLabel(comp) + ' lên bàn.');
       return id;
     }
     const chk = canPlace(state, type, anchor, rot);
@@ -997,14 +1043,14 @@ function main() {
     return id;
   }
   function addWire(a, b) {
-    if (a === b) { setStatus('Hai đầu trùng nhau — chọn 2 lỗ khác nhau.'); return false; }
+    if (a === b) { setStatus('Hai đầu trùng nhau — chọn 2 điểm khác nhau.'); return false; }
     const dup = state.wires.some((w) =>
       (w.a === a && w.b === b) || (w.a === b && w.b === a));
-    if (dup) { setStatus('Đã có dây nối 2 lỗ này rồi.'); return false; }
+    if (dup) { setStatus('Đã có dây nối 2 điểm này rồi.'); return false; }
     const id = 'W' + (wireSeq++);
     state.wires.push({ id, a, b, color: wireColor });
     save(); rebuildWires(); syncToCpu();
-    setStatus('Đã nối dây ' + (typeof a === 'string' ? a : 'cọc nguồn') + ' ↔ ' + (typeof b === 'string' ? b : 'cọc nguồn') + '.');
+    setStatus('Đã nối dây ' + holeName(a) + ' ↔ ' + holeName(b) + '.');
     return true;
   }
 
@@ -1072,6 +1118,17 @@ function main() {
     if (!hits.length) return null;
     const u = hits[0].object.userData;
     return u && u.wireId && u.wireEnd ? { wireId: u.wireId, end: u.wireEnd } : null;
+  }
+  // Cọc nguồn (+/−) của khối nguồn: điểm thả hợp lệ cho đầu dây
+  // (cả kéo đầu dây vào nguồn lẫn đi dây mới bắt đầu/kết thúc ở nguồn).
+  function pickPsuPost(e) {
+    const ndc = pointerNdc(e);
+    if (!ndc.inside || !psuHitMeshes.length) return null;
+    raycaster.setFromCamera(ndc, camera);
+    const hits = raycaster.intersectObjects(psuHitMeshes, false);
+    if (!hits.length) return null;
+    const u = hits[0].object.userData;
+    return u && u.psuPostId ? u.psuPostId : null;
   }
   function pickObject(e) {
     const ndc = pointerNdc(e);
@@ -1213,14 +1270,13 @@ function main() {
       }
     }
     if (wiringMode) {
-      const hole = pickHole(e);
+      const hole = pickHole(e) || pickPsuPost(e);
       if (!hole) { wireStart = null; startMarker.visible = false; return; }
       if (!wireStart) {
         wireStart = hole;
-        const p = holePos(hole, state.size);
-        startMarker.position.set(p.x, BOARD_TOP + 2, p.z);
-        startMarker.visible = true;
-        setStatus('Đã chọn lỗ bắt đầu ' + hole + ' — bấm lỗ kết thúc.');
+        const p = endpointPos(hole);
+        if (p) { startMarker.position.set(p.x, p.y + 2, p.z); startMarker.visible = true; }
+        setStatus('Đã chọn điểm bắt đầu ' + holeName(hole) + ' — bấm điểm kết thúc.');
       } else {
         const a = wireStart;
         wireStart = null;
@@ -1232,14 +1288,17 @@ function main() {
     if (placementMode) {
       if (placementMode === 'psu') {
         const pt = pickTablePoint(e);
-        if (pt && !(Math.abs(pt.x) < 145 && Math.abs(pt.z) < 64)) placeComponent('psu', null, 0, pt.x, pt.z);
-        else setStatus('Không đặt được nguồn ở đây (đè lên breadboard).');
+        if (pt && !(Math.abs(pt.x) < 145 && Math.abs(pt.z) < 64)) {
+          const id = placeComponent('psu', null, 0, pt.x, pt.z);
+          if (id) setPlacementMode(null); // đặt 1 lần thì thoát chế độ đặt
+        } else setStatus('Không đặt được nguồn ở đây (đè lên breadboard).');
         return;
       }
       const hole = pickHole(e);
       if (!hole) return;
-      // Đặt dính: thả xong vẫn giữ chế độ đặt để thả tiếp cái nữa.
-      placeComponent(placementMode, hole, placementRot);
+      // Đặt 1 lần: thả xong thì thoát chế độ đặt (muốn thả nữa thì chọn lại thẻ).
+      const id = placeComponent(placementMode, hole, placementRot);
+      if (id) setPlacementMode(null);
       return;
     }
     const hit = pickObject(e);
@@ -1272,7 +1331,7 @@ function main() {
   }
   function onCanvasPointerMove(e) {
     if (e.pointerType && e.pointerType !== 'mouse') return;
-    // Hover ở chế độ đặt dính: hiện ô sáng báo lỗ sắp đặt + góc xoay hiện tại.
+    // Hover ở chế độ đặt: hiện ô sáng báo lỗ sắp đặt + góc xoay hiện tại.
     if (!drag && placementMode && placementMode !== 'psu') {
       const hole = pickHole(e);
       if (!hole) { hideHighlight(); return; }
@@ -1288,16 +1347,19 @@ function main() {
       const fixedEnd = drag.end === 'a' ? w.b : w.a;
       const fixedPos = endpointPos(fixedEnd);
       if (!fixedPos) return;
+      // Đích thả: lỗ breadboard/rail hoặc cọc nguồn (+/−).
       const hole = pickHole(e);
-      drag.hoverHole = hole;
+      const post = hole ? null : pickPsuPost(e);
+      const targetId = hole || post;
+      drag.hoverHole = targetId;
       // Đường dây tạm từ đầu cố định tới chuột.
       const ndc = pointerNdc(e);
       raycaster.setFromCamera(ndc, camera);
       const pt = new THREE.Vector3();
       let target = null;
-      if (hole) {
-        const hp = holePos(hole, state.size);
-        target = new THREE.Vector3(hp.x, BOARD_TOP + 2, hp.z);
+      if (targetId) {
+        const tp = endpointPos(targetId);
+        if (tp) target = new THREE.Vector3(tp.x, tp.y + 2, tp.z);
       } else if (raycaster.ray.intersectPlane(boardPlane(), pt)) {
         target = new THREE.Vector3(pt.x, BOARD_TOP + 2, pt.z);
       }
@@ -1305,11 +1367,11 @@ function main() {
         ghostLine.geometry.setFromPoints([new THREE.Vector3(fixedPos.x, fixedPos.y + 2, fixedPos.z), target]);
         ghostLine.visible = true;
       } else ghostLine.visible = false;
-      // Chấm tròn ở lỗ đang trỏ: xanh = cắm được, đỏ = không.
-      if (hole) {
-        const hp = holePos(hole, state.size);
-        const v = validateWireEnd(state, drag.wireId, drag.end, hole);
-        startMarker.position.set(hp.x, BOARD_TOP + 2, hp.z);
+      // Chấm tròn ở điểm đang trỏ: xanh = cắm được, đỏ = không.
+      if (targetId) {
+        const tp = endpointPos(targetId);
+        const v = validateWireEnd(state, drag.wireId, drag.end, targetId);
+        startMarker.position.set(tp.x, tp.y + 2, tp.z);
         startMarker.material.color.set(v.ok ? 0x059669 : 0xDC2626);
         startMarker.visible = true;
       } else startMarker.visible = false;
@@ -1361,11 +1423,11 @@ function main() {
       startMarker.visible = false;
       const w = state.wires.find((x) => x.id === d.wireId);
       if (!w) return;
-      if (!d.moved || !d.hoverHole) { setStatus('Kéo đầu dây tới lỗ khác để cắm lại.'); return; }
+      if (!d.moved || !d.hoverHole) { setStatus('Kéo đầu dây tới lỗ khác hoặc cọc nguồn để cắm lại.'); return; }
       const r = retargetWireEnd(state, d.wireId, d.end, d.hoverHole);
       if (r.ok) {
         save(); rebuildWires(); syncToCpu();
-        setStatus('Đã chuyển đầu dây sang lỗ ' + d.hoverHole + '.');
+        setStatus('Đã chuyển đầu dây sang ' + holeName(d.hoverHole) + '.');
       } else {
         setStatus(r.reason);
       }
@@ -1400,7 +1462,8 @@ function main() {
       if (!comp || !d.moved) return;
       if (d.valid) {
         comp.tx = d.tx; comp.tz = d.tz;
-        // Cập nhật đầu dây nguồn mặc định theo cọc mới
+        // Đầu dây nguồn mặc định dạng id cọc (PSU1.+/PSU1.-) tự theo vị trí
+        // nguồn mới; chỉ cập nhật đầu {x,y,z} cũ (state lưu trước khi có id cọc).
         for (const w of state.wires) {
           if (w.id === 'W6' && typeof w.a === 'object') w.a = { x: comp.tx - 12, y: 28, z: comp.tz + 42 };
           if (w.id === 'W7' && typeof w.a === 'object') w.a = { x: comp.tx + 12, y: 28, z: comp.tz + 42 };
@@ -1498,14 +1561,14 @@ function main() {
     state.wires = state.wires.filter((w) => ['W1', 'W2', 'W3', 'W4', 'W5', 'W6', 'W7'].includes(w.id));
     select(null);
     save(); rebuildAll(); syncToCpu();
-    setStatus('Đã dọn hết bàn (giữ chip PIC, nguồn 5V và dây nguồn).');
+    setStatus('Đã dọn hết bàn (giữ chip PIC, nguồn và dây nguồn).');
   });
   $('btnBenchDefault')?.addEventListener('click', () => {
     state = defaultBenchState(state.size);
     seq = 1; wireSeq = 100;
     select(null);
     save(); rebuildAll(); syncToCpu();
-    setStatus('Đã về bàn mặc định: chip PIC + nguồn 5V + dây nguồn.');
+    setStatus('Đã về bàn mặc định: chip PIC + nguồn + dây nguồn.');
   });
 
   // --- Phím tắt ---
@@ -1537,7 +1600,7 @@ function main() {
         }
       }
     } else if ((e.key === 'r' || e.key === 'R') && placementMode) {
-      // R xoay trong lúc đặt dính (không kéo).
+      // R xoay trong lúc đặt bằng bấm (không kéo).
       placementRot = (placementRot + 1) % 4;
       updateModeBanner();
     } else if ((e.key === 'Delete' || e.key === 'Backspace') && selected) {

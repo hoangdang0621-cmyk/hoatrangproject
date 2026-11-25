@@ -3,12 +3,12 @@
 Trang web là một bàn thí nghiệm 3D cho vi điều khiển PIC16F877A, chạy ngay
 trên trình duyệt. Trên bàn có sẵn breadboard đổi được kích thước (3 mẫu
 sẵn Mini 170 lỗ, Nửa 400 lỗ, Đầy đủ 830 lỗ, hoặc tự điền rộng × dài), chip
-PIC16F877A cắm sẵn vắt qua rãnh giữa, nguồn 5V đặt phía sau đã nối dây
+PIC16F877A cắm sẵn vắt qua rãnh giữa, nguồn đặt phía sau đã nối dây
 về rail. Linh kiện trên bàn nối vào chip thật — đổi dây trên bàn thì chip
 chạy theo dây mới.
 Trang này chỉ dùng trên máy tính. Trang chính của trang web là
 index.html (3 mục Lý thuyết, Bài tập, Thực hành); bấm Thực hành để vào
-bàn thực hành (bench.html).
+bàn thực hành (thuc-hanh/).
 
 Chip chạy sẵn chương trình nhấp nháy LED RB0: nối một LED (kèm điện trở
 nối tiếp) vào strip của chân RB0 thì LED nhấp nháy theo nhịp chip.
@@ -19,19 +19,21 @@ nối tiếp) vào strip của chân RB0 thì LED nhấp nháy theo nhịp chip.
    vào lỗ breadboard — chân cắm thẳng vào lỗ, breadboard chính là đế.
    Ô xanh là đặt được, ô đỏ là không (lỗ đã có chân, dưới thân chip,
    ngoài bàn). Bấm phím R trong lúc kéo để xoay linh kiện 90°.
-   Bấm vào khay (không kéo) rồi bấm vào lỗ cũng đặt được — và bấm 1 lần
-   thì giữ chế độ đặt (đặt dính): bấm liên tục nhiều lỗ để thả nhiều cái,
-   bấm lại đúng thẻ đó hoặc Esc để thoát. R vẫn xoay trong lúc đặt dính.
+   Bấm vào khay (không kéo) rồi bấm vào lỗ cũng đặt được — bấm 1 lần
+   thì đặt đúng 1 cái rồi tự thoát chế độ đặt; muốn thả cái nữa thì bấm
+   chọn lại thẻ đó. Bấm lại đúng thẻ đó hoặc Esc để thoát trước khi đặt.
+   R vẫn xoay trong lúc đặt bằng bấm.
 2. **Xoay bàn:** kéo chuột vào chỗ trống trên bàn để xoay 360°, cuộn
    chuột để zoom. Nút **3D** / **Từ trên** đổi góc nhìn.
 3. **Đi dây:** bấm **Dây dẫn** rồi bấm lỗ bắt đầu và lỗ kết thúc, dây
    hiện thành đường cong nối 2 lỗ. Chọn màu dây trong bảng 8 màu.
    Bấm chọn 1 dây thì dây highlight (sáng + dày hơn, 2 đầu hiện núm
-   tròn): kéo núm tròn tới lỗ khác để cắm lại đầu dây đó, hoặc nhập
-   địa chỉ lỗ cho từng đầu dây trong Inspector (vd `c12`, `T+5`).
+   tròn): kéo núm tròn tới lỗ khác hoặc cọc +/− của nguồn để cắm lại
+   đầu dây đó, hoặc nhập địa chỉ cho từng đầu dây trong Inspector
+   (vd `c12`, `T+5`, cọc nguồn `PSU1.+` / `PSU1.-`).
 4. **Chỉnh linh kiện:** bấm chọn linh kiện thì panel Inspector trượt từ
-   phải sang — đổi giá trị điện trở, màu LED, mức chiết áp (%), xem chân
-   nào nối đi đâu, xoá linh kiện/dây (hoặc phím Delete).
+   phải sang — đổi giá trị điện trở, màu LED, mức chiết áp (%), điện áp
+   nguồn (0–24V), xem chân nào nối đi đâu, xoá linh kiện/dây (hoặc phím Delete).
 5. **Kiểm tra:** panel bên trái liệt kê cảnh báo đấu nối trên bàn, bấm
    vào cảnh báo để chọn linh kiện liên quan.
 6. **Chọn size bo mạch:** nhấn chuột vào board (thân board hoặc lỗ
@@ -53,16 +55,18 @@ nối tiếp) vào strip của chân RB0 thì LED nhấp nháy theo nhịp chip.
 - **LCD 16x2:** 10 đầu RS/E/D0–D7. Nối đủ dây thì hiện chữ theo chương
   trình chạy trên chip.
 - **Còi buzzer:** 2 đầu. Còi kêu khi chân + ra mức 1.
-- **Nguồn 5V:** đặt lên mặt bàn, cọc + (đỏ) và − (đen) nối vào rail
-  trên/dưới của breadboard.
+- **Nguồn:** nguồn chung đặt lên mặt bàn, cọc + (đỏ) và − (đen) nối
+  vào rail trên/dưới của breadboard. Bấm vào nguồn để mở Inspector và
+  đổi điện áp (0–24V, mặc định 5V); màn hình trên nguồn và nhãn nguồn
+  hiện đúng voltage hiện tại (vd Nguồn 12V).
 - **Dây dẫn:** bấm 2 lỗ để nối, dây hiện thành đường cong màu.
 
 ## Breadboard
 
 Hàng a–z theo số hàng của board: nửa trên của mỗi cột (các hàng trên
 rãnh) nối với nhau thành một strip, nửa dưới nối với nhau thành một
-strip riêng; 2 rail +/− chạy suốt chiều dài (mọi lỗ rail + là
-+5V, mọi lỗ rail − là GND). Chip PIC16F877A luôn căn giữa board: cắm ở
+strip riêng; 2 rail +/− chạy suốt chiều dài (mọi lỗ rail + nối về cọc
++ của nguồn, mọi lỗ rail − nối về cọc − của nguồn). Chip PIC16F877A luôn căn giữa board: cắm ở
 cột 22–41 trên board 830, cột 6–25 trên board 400, cột 1–17 trên board
 Mini (chip DIP-40 rộng 20 cột nên trên board Mini thì 6 chân ngoài cùng
 MCLR/RD0/RD1/RD2/RD3/RB7 treo ngoài board, 34 chân còn lại cắm đúng lỗ).
@@ -89,7 +93,7 @@ Bấm vào một cảnh báo để chọn linh kiện liên quan.
 
 ## Bàn mặc định
 
-Bàn mặc định có chip PIC + nguồn 5V + dây nguồn VDD/VSS/MCLR về rail.
+Bàn mặc định có chip PIC + nguồn + dây nguồn VDD/VSS/MCLR về rail.
 Nút **Dọn hết bàn** giữ lại chip, nguồn và dây nguồn; nút **Về bàn mặc
 định** khôi phục toàn bộ. Trạng thái bàn tự lưu trên máy (localStorage),
 mở lại trang vẫn còn.
