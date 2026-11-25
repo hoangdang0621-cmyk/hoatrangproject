@@ -9,7 +9,7 @@ import {
   applyButtonToCpu, applyPotToCpu,
 } from './wiring.js?v=20261125r';
 import { defaultBenchState, benchToNetlist } from './bench-model.js?v=20261125ad';
-import { meterReadings } from './circuit-solver.js?v=20261125ad';
+import { meterReadings } from './circuit-solver.js?v=20261125ag';
 
 const cpu = createCPU();
 cpu.clockHz = 4000000;

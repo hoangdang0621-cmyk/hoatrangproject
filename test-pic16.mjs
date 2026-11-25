@@ -5,7 +5,7 @@ import { assemble, createCPU, parseIntelHex, exportHex, disassemble, ProgramRunn
 import { defaultNetlist, resolvePeripherals, checkWiring, ledStates, buzzerStates, applyButtonToCpu, applyPotToCpu, PIC_PINS } from './public/wiring.js';
 import { PITCH, SEGMENT_GAP_MM, rowZ, HOLE_RADIUS, HOLE_HEIGHT, HOLE_TOP_ABOVE_BOARD, holeCenterY, depthPrecisionAt, MAX_CAMERA_DISTANCE, SEGMENT_LINE_WIDTH_MM, segmentBoundaries, allHoles, stripKey, parseHole, holePos, holeId, rowLabel, rowIndexFromLabel, migrateOldHoleId, picLegs, picLegsForAnchor, picAnchor, legsFor, canPlace, buildBenchNets, benchToNetlist, defaultBenchState, sanitizeState, boardSize, picCol, picRows, picBodyDepth, picBodyDepthForRows, bodyDepth, pruneStateForSize, validateWireEnd, retargetWireEnd, togglePlacement, normalizeSize, holeCount, sizeLabel, sameSize, compLabel, nextComponentId, psuVolts, validatePsuVolts, parsePsuPost, psuPostPos, PSU_SCALE, PSU_POST_DX, PSU_POST_Y, PSU_POST_DZ, normalizeWireEnd, clampCamTarget, zoomTowardPoint, panTarget } from './public/bench-model.js';
 import { LABS, getLab, buildLabState } from './public/labs.js';
-import { buildSolverNets, solveLinear, solveCircuit, meterReadings, LED_FORWARD_VOLTS, LED_SERIES_OHMS, PIC_OUTPUT_VOLTS } from './public/circuit-solver.js';
+import { buildSolverNets, solveLinear, solveCircuit, meterReadings, formatVolts, formatAmps, formatCurrentDirection, LED_FORWARD_VOLTS, LED_SERIES_OHMS, PIC_OUTPUT_VOLTS } from './public/circuit-solver.js';
 
 // Các chương trình Assembly dùng để kiểm thử — inline tại đây (file
 // public/examples.js chứa các bài lab mẫu đã bị gỡ ngày 25/11/2026 nên test
@@ -2638,6 +2638,63 @@ const SLEEP_PROG = `    ORG 0
   // (v-j) Hằng số mô hình LED/PIC đúng như nhiệm vụ.
   check('(v-j) LED_FORWARD_VOLTS = 2.0, LED_SERIES_OHMS = 10, PIC_OUTPUT_VOLTS = 5',
     LED_FORWARD_VOLTS === 2.0 && LED_SERIES_OHMS === 10 && PIC_OUTPUT_VOLTS === 5, '');
+}
+
+// Nhóm (w): định dạng số đo cho màn hình 3D + Inspector (giai đoạn 2),
+// và điện áp từng chân vôn kế (vP/vN) trong meterReadings.
+{
+  check('(w-a) formatVolts: null -> "—", 5 -> "5.00 V", 0 -> "0.00 V", -2.5 -> "-2.50 V", Infinity -> "OL"',
+    formatVolts(null) === '—' && formatVolts(5) === '5.00 V' && formatVolts(0) === '0.00 V'
+    && formatVolts(-2.5) === '-2.50 V' && formatVolts(Infinity) === 'OL', '');
+  check('(w-b) formatAmps: 0.01304 -> "13.0 mA", 0 -> "0.0 mA", 1.2 -> "1.20 A", 1 -> "1.00 A", -0.5 -> "-500.0 mA", Infinity -> "OL", null -> "—"',
+    formatAmps(0.01304) === '13.0 mA' && formatAmps(0) === '0.0 mA' && formatAmps(1.2) === '1.20 A'
+    && formatAmps(1) === '1.00 A' && formatAmps(-0.5) === '-500.0 mA'
+    && formatAmps(Infinity) === 'OL' && formatAmps(null) === '—', '');
+  check('(w-c) formatCurrentDirection: 0.013 -> "A → B", -0.013 -> "B → A", 0 -> "Không có dòng", Infinity -> "OL", null -> "—"',
+    formatCurrentDirection(0.013) === 'A → B' && formatCurrentDirection(-0.013) === 'B → A'
+    && formatCurrentDirection(0) === 'Không có dòng' && formatCurrentDirection(Infinity) === 'OL'
+    && formatCurrentDirection(null) === '—', '');
+  check('(w-d) meterReadings vôn kế qua PSU: vP = 5, vN = 0, volts = 5',
+    (() => {
+      const st = defaultBenchState(830);
+      st.components.push({ id: 'VM0', type: 'voltmeter', anchor: 'a10', rot: 0, props: {} });
+      st.wires.push({ id: 'T-W1', a: 'b10', b: 'T+10', color: '#DC2626' });
+      st.wires.push({ id: 'T-W2', a: 'b14', b: 'T-10', color: '#0F172A' });
+      const r = meterReadings(st, createCPU()).voltmeters[0];
+      return r.volts === 5 && r.vP === 5 && r.vN === 0;
+    })(), '');
+  check('(w-e) meterReadings vôn kế Lab 1 qua R (RB0=1): vP ≈ 5V, vN ≈ 2.13V, volts ≈ 2.87V',
+    (() => {
+      const { state } = buildLabState(LABS[0]);
+      state.components.push({ id: 'VM0', type: 'voltmeter', anchor: 'g45', rot: 0, props: {} });
+      const cpu = createCPU();
+      cpu.writeFile(0x03, 0x20); cpu.writeFile(0x06, 0x00);
+      cpu.writeFile(0x03, 0x00); cpu.writeFile(0x06, 0x01);
+      const r = meterReadings(state, cpu).voltmeters[0];
+      const approx = (v, t, tol) => typeof v === 'number' && Math.abs(v - t) <= tol;
+      return approx(r.vP, 5, 0.05) && approx(r.vN, 2.13, 0.2) && approx(r.volts, 2.87, 0.2);
+    })(), '');
+  check('(w-f) meterReadings vôn kế 1 chân floating: vP = 5, vN = null, volts = null',
+    (() => {
+      const st = defaultBenchState(830);
+      st.components.push({ id: 'VM0', type: 'voltmeter', anchor: 'a10', rot: 0, props: {} });
+      st.wires.push({ id: 'T-W3', a: 'b10', b: 'T+10', color: '#DC2626' });
+      const r = meterReadings(st, createCPU()).voltmeters[0];
+      return r.vP === 5 && r.vN === null && r.volts === null;
+    })(), '');
+  check('(w-g) ampe kế đấu tắt trực tiếp qua PSU: dòng Infinity (hiển thị OL), vôn kế qua PSU cùng lúc vẫn đọc 5V (PSU không bị loại)',
+    (() => {
+      const st = defaultBenchState(830);
+      st.components.push({ id: 'AM0', type: 'ammeter', anchor: 'a10', rot: 0, props: {} });
+      st.components.push({ id: 'VM0', type: 'voltmeter', anchor: 'a20', rot: 0, props: {} });
+      st.wires.push({ id: 'T-W4', a: 'b10', b: 'T+10', color: '#DC2626' });
+      st.wires.push({ id: 'T-W5', a: 'b14', b: 'T-10', color: '#0F172A' });
+      st.wires.push({ id: 'T-W6', a: 'b20', b: 'T+20', color: '#DC2626' });
+      st.wires.push({ id: 'T-W7', a: 'b24', b: 'T-20', color: '#0F172A' });
+      const r = meterReadings(st, createCPU());
+      return r.ammeters[0].amps === Infinity && formatAmps(r.ammeters[0].amps) === 'OL'
+        && r.voltmeters[0].volts === 5 && r.voltmeters[0].vP === 5 && r.voltmeters[0].vN === 0;
+    })(), '');
 }
 
 console.log(`\nKết quả: ${pass} pass, ${fail} fail`);

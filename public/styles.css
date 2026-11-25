@@ -232,6 +232,9 @@ button { cursor: pointer; }
 }
 .bench-insp-body { padding: 14px 16px; display: flex; flex-direction: column; gap: 8px; }
 .bench-insp-label { font-weight: 600; font-size: 0.9rem; }
+.bench-meter-val { font-family: "Fira Code", monospace; font-size: 1.6rem; font-weight: 700; background: #0F172A; padding: 8px 12px; border-radius: 8px; text-align: center; }
+.bench-meter-val.vm { color: #7DD3FC; }
+.bench-meter-val.am { color: #FBBF24; }
 .bench-insp-sub { font-weight: 500; color: var(--color-muted-foreground); margin-top: 4px; }
 /* Popup Bo mạch: 3 mẫu sẵn + tự điền số cột / rail nguồn. */
 .bench-board-presets { display: grid; gap: 8px; margin: 6px 0 12px; }

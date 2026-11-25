@@ -18,7 +18,7 @@ import {
 } from './bench-model.js?v=20261125ad';
 import { checkWiring, SIGNAL_COLORS } from './wiring.js?v=20261125r';
 import { assemble } from './pic16.js?v=20261125af';
-import { formatVolts, formatAmps } from './circuit-solver.js?v=20261125ad';
+import { formatVolts, formatAmps, formatCurrentDirection } from './circuit-solver.js?v=20261125ag';
 import { LABS, getLab, buildLabState } from './labs.js?v=20261125ad';
 
 const $ = (id) => document.getElementById(id);
@@ -144,7 +144,7 @@ function main() {
   function compIdFromWarning(w) {
     for (const id of [...(w.compIds || []), ...(w.terminalIds || [])]) {
       if (id.startsWith('PIC.')) return 'PIC1';
-      const m = id.match(/^(LED\d+|BTN\d+|POT\d+|LCD\d+|BUZ\d+)/);
+      const m = id.match(/^(LED\d+|BTN\d+|POT\d+|LCD\d+|BUZ\d+|VM\d+|AM\d+)/);
       if (m && state.components.some((c) => c.id === m[1])) return m[1];
     }
     return null;
@@ -654,6 +654,27 @@ D2
         const soundOn = comp.props?.sound !== false;
         body = `<label class="bench-insp-row"><input type="checkbox" id="inspBuzzerSound"${soundOn ? ' checked' : ''}> Phát tiếng khi còi kêu</label>
           <p class="sub">Còi kêu khi chân + ra mức 1 (chân PIC mức cao hoặc nối thẳng nguồn 0–10V) và chân − về GND.</p>`;
+      } else if (comp.type === 'voltmeter') {
+        const b = bridge();
+        const r = b && typeof b.getMeterReadings === 'function'
+          ? (b.getMeterReadings().voltmeters || []).find((v) => v.id === comp.id) : null;
+        body = `<label class="bench-insp-label">Số đo</label>
+          <div class="bench-meter-val vm" id="inspMeterVal">${r ? formatVolts(r.volts) : '—'}</div>
+          <div class="bench-conns">
+            <div class="bench-conn"><span>Chân P</span><span id="inspMeterVP">${r ? formatVolts(r.vP) : '—'}</span></div>
+            <div class="bench-conn"><span>Chân N</span><span id="inspMeterVN">${r ? formatVolts(r.vN) : '—'}</span></div>
+          </div>
+          <p class="sub">Vôn kế đo hiệu điện áp giữa 2 chân (P − N). Trở kháng vô cùng nên không ảnh hưởng mạch. Chân nào chưa nối tới nguồn thì hiện "—". Số đo cập nhật live khi mạch hoặc chân PIC đổi trạng thái.</p>`;
+      } else if (comp.type === 'ammeter') {
+        const b = bridge();
+        const r = b && typeof b.getMeterReadings === 'function'
+          ? (b.getMeterReadings().ammeters || []).find((a) => a.id === comp.id) : null;
+        body = `<label class="bench-insp-label">Số đo</label>
+          <div class="bench-meter-val am" id="inspMeterVal">${r ? formatAmps(r.amps) : '—'}</div>
+          <div class="bench-conns">
+            <div class="bench-conn"><span>Chiều dòng</span><span id="inspMeterDir">${r ? formatCurrentDirection(r.amps) : '—'}</span></div>
+          </div>
+          <p class="sub">Ampe kế đo dòng chạy qua nó (nối tiếp, 0Ω nên không ảnh hưởng mạch). Dòng dương chạy từ chân A sang B. Chập nguồn thì hiện "OL". Số đo cập nhật live khi mạch hoặc chân PIC đổi trạng thái.</p>`;
       } else if (comp.type === 'pic') {
         const conns = legsFor(comp, state.size).map((l) => {
           const d = describeTerminal(state, l.term, pressedIds());
@@ -676,7 +697,11 @@ D2
           <button type="button" class="btn btn-accent btn-small" data-act="apply-psu">Áp dụng</button>
           <p class="sub">Nguồn chung, điều chỉnh được 0–24V (mặc định 5V). Cọc + (đỏ) và − (đen) nối vào rail trên/dưới của breadboard. Điện áp chỉ là giá trị danh định, không mô phỏng analog.</p>`;
       }
-      const conns = comp.type !== 'pic' && comp.type !== 'psu'
+      // Mục nối: vôn kế/ampe kế không đưa chân vào netlist CPU (describeTerminal
+      // không thấy chân của chúng) nên bỏ qua — thông tin nối đã nằm trong
+      // mục số đo ở trên (áp từng chân / chiều dòng).
+      const isMeter = comp.type === 'voltmeter' || comp.type === 'ammeter';
+      const conns = comp.type !== 'pic' && comp.type !== 'psu' && !isMeter
         ? `<div class="bench-conns">${legsFor(comp, state.size).map((l) => {
           const term = comp.id + '.' + l.term;
           const d = describeTerminal(state, term, pressedIds());
@@ -2046,8 +2071,44 @@ D2
           }
           setBuzzerSound(anyBuzz);
         }
+        if (typeof b.getMeterReadings === 'function') {
+          let readings = null;
+          try { readings = b.getMeterReadings(); } catch { readings = null; }
+          if (readings) {
+            const byId = new Map();
+            for (const v of readings.voltmeters || []) byId.set(v.id, { kind: 'voltmeter', text: formatVolts(v.volts), data: v });
+            for (const a of readings.ammeters || []) byId.set(a.id, { kind: 'ammeter', text: formatAmps(a.amps), data: a });
+            for (const [id, t] of meterTexs) {
+              const r = byId.get(id);
+              const text = r ? r.text : '—';
+              if (text === t.last) continue;
+              t.last = text;
+              drawMeterTexture(t, text);
+            }
+            updateInspectorMeter(byId);
+          }
+        }
       } catch { /* bridge chưa sẵn: bỏ qua lần này */ }
     }, 150);
+  }
+  // Inspector đang mở trên 1 đồng hồ thì cập nhật số đo live (chỉ đổi
+  // text của các ô đã có, không render lại toàn bộ Inspector).
+  function updateInspectorMeter(byId) {
+    if (!selected || selected.kind !== 'comp') return;
+    const comp = state.components.find((c) => c.id === selected.id);
+    if (!comp || (comp.type !== 'voltmeter' && comp.type !== 'ammeter')) return;
+    const r = byId.get(comp.id);
+    const valEl = inspectorEl.querySelector('#inspMeterVal');
+    if (valEl) valEl.textContent = r ? r.text : '—';
+    if (comp.type === 'voltmeter') {
+      const vpEl = inspectorEl.querySelector('#inspMeterVP');
+      const vnEl = inspectorEl.querySelector('#inspMeterVN');
+      if (vpEl) vpEl.textContent = r ? formatVolts(r.data.vP) : '—';
+      if (vnEl) vnEl.textContent = r ? formatVolts(r.data.vN) : '—';
+    } else {
+      const dirEl = inspectorEl.querySelector('#inspMeterDir');
+      if (dirEl) dirEl.textContent = r ? formatCurrentDirection(r.data.amps) : '—';
+    }
   }
 
   // --- Nút chế độ xem / dọn bàn ---

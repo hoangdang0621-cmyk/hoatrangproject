@@ -186,6 +186,22 @@ export function solveCircuit(state, cpu, pressedIds = []) {
     return true;
   };
 
+  // Nguồn PSU TRƯỚC (ưu tiên khi trùng cặp node), rồi chân PIC output,
+  // sau đó mới tới các nhánh linh kiện. Thứ tự này quan trọng: ampe kế là
+  // nguồn 0V, nếu đăng ký trước PSU thì nó chiếm cặp node (RAIL+/RAIL-)
+  // và làm PSU bị loại (mạch mất nguồn, vôn kế đọc 0V, ampe kế đọc 0
+  // thay vì OL). PSU đăng ký trước thì ampe kế đấu tắt qua PSU bị đánh
+  // dấu chập (dòng Infinity -> hiển thị OL), PSU vẫn giữ 5V.
+  if (psu) addVSource(nets.railPlus, nets.railMinus, psuV, psu.id, 'psu');
+  for (const pin of PIC_PINS) {
+    if (pin.port === null) continue;
+    if (cpu.pinDirection(pin.port, pin.bit) !== 'out') continue; // input: trở kháng cao
+    const node = nets.nodeOfPicPin(pin.id);
+    if (!node) continue;
+    const level = cpu.pinLevel(pin.port, pin.bit);
+    addVSource(node, nets.railMinus, level ? PIC_OUTPUT_VOLTS : 0, 'PIC.' + pin.id, 'picpin');
+  }
+
   for (const comp of state.components) {
     if (comp.type === 'resistor') {
       const n1 = nets.nodeOfTerm(comp.id, 'L1');
@@ -208,16 +224,6 @@ export function solveCircuit(state, cpu, pressedIds = []) {
       if (nA === nB) { shorted.add(comp.id); continue; }
       addVSource(nA, nB, 0, comp.id, 'ammeter');
     }
-  }
-  // Nguồn PSU trước (ưu tiên khi trùng cặp node), rồi chân PIC output.
-  if (psu) addVSource(nets.railPlus, nets.railMinus, psuV, psu.id, 'psu');
-  for (const pin of PIC_PINS) {
-    if (pin.port === null) continue;
-    if (cpu.pinDirection(pin.port, pin.bit) !== 'out') continue; // input: trở kháng cao
-    const node = nets.nodeOfPicPin(pin.id);
-    if (!node) continue;
-    const level = cpu.pinLevel(pin.port, pin.bit);
-    addVSource(node, nets.railMinus, level ? PIC_OUTPUT_VOLTS : 0, 'PIC.' + pin.id, 'picpin');
   }
 
   // Node nào có đường về GND (qua nhánh dẫn hoặc nguồn áp) thì điện áp
@@ -307,6 +313,35 @@ export function solveCircuit(state, cpu, pressedIds = []) {
 }
 
 // ---------------------------------------------------------------------------
+// Định dạng số đo để hiển thị (màn hình 3D + Inspector). Tách riêng thành
+// hàm thuần để test được ở Node.
+// - Vôn kế: null (chân floating) -> "—"; không hữu hạn -> "OL"; còn lại
+//   "5.00 V" (2 số lẻ).
+// - Ampe kế: không hữu hạn (chập nguồn) -> "OL"; |dòng| >= 1A -> "1.20 A";
+//   còn lại đổi ra mA, 1 số lẻ ("13.0 mA", "0.0 mA", "-500.0 mA").
+// ---------------------------------------------------------------------------
+export function formatVolts(volts) {
+  if (volts === null || volts === undefined) return '—';
+  if (!Number.isFinite(volts)) return 'OL';
+  return volts.toFixed(2) + ' V';
+}
+export function formatAmps(amps) {
+  if (amps === null || amps === undefined) return '—';
+  if (!Number.isFinite(amps)) return 'OL';
+  if (Math.abs(amps) >= 1) return amps.toFixed(2) + ' A';
+  return (amps * 1000).toFixed(1) + ' mA';
+}
+// Chiều dòng qua ampe kế: dương = chạy từ chân A sang B, âm = ngược lại,
+// 0 = không có dòng, không hữu hạn = OL (chập nguồn).
+export function formatCurrentDirection(amps) {
+  if (amps === null || amps === undefined) return '—';
+  if (!Number.isFinite(amps)) return 'OL';
+  if (amps > 0) return 'A → B';
+  if (amps < 0) return 'B → A';
+  return 'Không có dòng';
+}
+
+// ---------------------------------------------------------------------------
 // Số đo của mọi đồng hồ trên bàn.
 // Trả về { voltmeters: [{id, volts}], ammeters: [{id, amps}] }.
 // - Vôn kế: volts = V(chân P) − V(chân N); null nếu 1 trong 2 chân floating
@@ -324,18 +359,22 @@ export function meterReadings(state, cpu, pressedIds = []) {
     if (comp.type === 'voltmeter') {
       const nP = nets.nodeOfTerm(comp.id, 'P');
       const nN = nets.nodeOfTerm(comp.id, 'N');
-      let volts;
+      let volts, vP = null, vN = null;
       if (!nP || !nN) {
         volts = null; // chân rơi ngoài board
       } else if (nP === nN) {
         volts = 0; // 2 chân cùng 1 net
+        const v = nodeVoltage.get(nP);
+        vP = vN = (v === null || v === undefined) ? null : v;
       } else {
-        const vP = nodeVoltage.get(nP);
-        const vN = nodeVoltage.get(nN);
-        volts = (vP === null || vP === undefined || vN === null || vN === undefined)
-          ? null : vP - vN;
+        const p = nodeVoltage.get(nP);
+        const n = nodeVoltage.get(nN);
+        vP = (p === null || p === undefined) ? null : p;
+        vN = (n === null || n === undefined) ? null : n;
+        volts = (vP === null || vN === null) ? null : vP - vN;
       }
-      voltmeters.push({ id: comp.id, volts });
+      // vP/vN: điện áp từng chân (null nếu floating) — Inspector hiện riêng.
+      voltmeters.push({ id: comp.id, volts, vP, vN });
     } else if (comp.type === 'ammeter') {
       ammeters.push({ id: comp.id, amps: branchCurrent.get(comp.id) ?? 0 });
     }
