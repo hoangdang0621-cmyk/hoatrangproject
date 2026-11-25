@@ -282,7 +282,6 @@ function main() {
           <input class="input bench-insp-hole" id="inspWireA" type="text" value="${esc(endVal(w.a))}"${endHint(w.a)} autocomplete="off" spellcheck="false">
           <label class="bench-insp-label" for="inspWireB">Đầu B — địa chỉ lỗ</label>
           <input class="input bench-insp-hole" id="inspWireB" type="text" value="${esc(endVal(w.b))}"${endHint(w.b)} autocomplete="off" spellcheck="false">
-          <p class="sub">Địa chỉ lỗ: board ≤26 hàng thì chữ hàng a–z + số cột (vd c12, h29, k5); board &gt;26 hàng thì chữ hàng + số khối + số cột (vd c112 = hàng c1 cột 12, b25 = hàng b2 cột 5). Hoặc rail T+/T−/B+/B− + số (vd T+5). Hoặc cọc nguồn: PSU1.+ / PSU1.- (cọc + nối về rail +, cọc − nối về rail −). Gõ xong bấm Áp dụng hoặc Enter. Để trống 1 ô thì giữ nguyên đầu đó.</p>
           <p class="bench-insp-err" id="inspWireErr" role="alert">${esc(wireAddrError)}</p>
           <button type="button" class="btn btn-accent btn-small" data-act="apply-wire">Áp dụng</button>
           <label class="bench-insp-label">Màu dây</label>
