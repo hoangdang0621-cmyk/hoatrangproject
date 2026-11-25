@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Mô phỏng PIC16F877A — HoaTrang Lab</title>
+<meta name="description" content="Mô phỏng vi điều khiển PIC16F877A ngay trên trình duyệt: soạn Assembly, chạy từng lệnh, LED, nút nhấn, LCD 16x2, ADC, UART.">
+<link rel="stylesheet" href="styles.css?v=20261125a">
+</head>
+<body>
+<header class="site-header">
+  <div class="wrap">
+    <h1>Mô phỏng PIC16F877A</h1>
+    <p>Soạn Assembly, nạp và chạy vi điều khiển ngay trên trình duyệt — không cần cài đặt.</p>
+    <span class="chip">PIC16F877A · 8K x 14-bit · 4 MHz</span>
+  </div>
+</header>
+
+<div class="toolbar" role="toolbar" aria-label="Điều khiển mô phỏng">
+  <div class="wrap">
+    <button class="btn btn-primary" id="btnAssemble" type="button">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M8 9l-4 3 4 3M16 9l4 3-4 3M13 5l-2 14"/></svg>
+      Dịch &amp; Nạp
+    </button>
+    <button class="btn btn-accent" id="btnRun" type="button">
+      <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M8 5v14l11-7z"/></svg>
+      Chạy tất cả
+    </button>
+    <button class="btn" id="btnPause" type="button" disabled>
+      <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M6 5h4v14H6zM14 5h4v14h-4z"/></svg>
+      Tạm dừng
+    </button>
+    <button class="btn" id="btnStep" type="button">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
+      Chạy từng lệnh
+    </button>
+    <button class="btn btn-danger-outline" id="btnReset" type="button">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M3 12a9 9 0 1 0 3-6.7M3 4v5h5"/></svg>
+      Reset tất cả
+    </button>
+    <div class="seg" role="group" aria-label="Tốc độ chạy">
+      <button type="button" data-speed="0.1" aria-pressed="false">0.1x</button>
+      <button type="button" data-speed="0.5" aria-pressed="false">0.5x</button>
+      <button type="button" data-speed="1" aria-pressed="true">1x</button>
+      <button type="button" data-speed="max" aria-pressed="false">Tối đa</button>
+    </div>
+    <label class="row" style="gap:6px">Xung nhịp
+      <select class="select" id="clockSel" aria-label="Tần số xung nhịp">
+        <option value="1000000">1 MHz</option>
+        <option value="4000000" selected>4 MHz</option>
+        <option value="8000000">8 MHz</option>
+        <option value="20000000">20 MHz</option>
+      </select>
+    </label>
+    <div class="statusbar" id="statusbar">
+      <span class="dot" aria-hidden="true"></span>
+      <span id="statusText">Sẵn sàng</span>
+      <span>PC <b id="statPc">0x000</b></span>
+      <span>Chu kỳ <b id="statCycles">0</b></span>
+      <span>Thời gian <b id="statTime">0 µs</b></span>
+    </div>
+  </div>
+</div>
+
+<main class="workspace">
+  <div class="col-left">
+    <section class="card" aria-labelledby="editorTitle">
+      <div class="card-head">
+        <h2 id="editorTitle">Soạn thảo Assembly</h2>
+        <label class="row" style="gap:6px">Ví dụ mẫu
+          <select class="select" id="exampleSel" aria-label="Chọn ví dụ mẫu"></select>
+        </label>
+      </div>
+      <p class="sub">Bấm vào số dòng để đặt/bỏ breakpoint. Phím tắt: Ctrl+Enter = Dịch &amp; Nạp.</p>
+      <div class="editor-wrap">
+        <div class="gutter" id="gutter" aria-hidden="true"></div>
+        <textarea id="editor" spellcheck="false" aria-label="Trình soạn thảo Assembly"></textarea>
+      </div>
+      <div class="errors" id="errors" aria-live="polite"></div>
+      <div class="row" style="margin-top:12px">
+        <button class="btn btn-outline btn-small" id="btnLoadHex" type="button">Nạp file .hex</button>
+        <input type="file" id="hexFile" accept=".hex,.ihx" hidden>
+        <button class="btn btn-outline btn-small" id="btnDownloadAsm" type="button">Tải xuống .asm</button>
+        <button class="btn btn-outline btn-small" id="btnDownloadHex" type="button">Tải xuống .hex</button>
+      </div>
+
+      <div class="lab" aria-labelledby="labTitle">
+        <h3 id="labTitle">Bài học</h3>
+        <p class="step-count" id="labStepCount"></p>
+        <p id="labStepText"></p>
+        <ol id="labSteps"></ol>
+        <div class="row">
+          <button class="btn btn-small" id="labPrev" type="button">← Bước trước</button>
+          <button class="btn btn-small" id="labNext" type="button">Bước tiếp →</button>
+        </div>
+      </div>
+    </section>
+
+    <section class="card" aria-labelledby="listingTitle">
+      <h2 id="listingTitle">Listing — Disassembly</h2>
+      <p class="sub">Dòng đang chạy được tô vàng. Bấm vào một dòng để nhảy tới dòng code tương ứng.</p>
+      <div class="listing scroll-x"><table id="listingTable">
+        <thead><tr><th>Địa chỉ</th><th>Mã máy</th><th>Lệnh</th><th>Nguồn</th></tr></thead>
+        <tbody id="listingBody"></tbody>
+      </table></div>
+    </section>
+
+    <section class="card" aria-labelledby="logicTitle">
+      <h2 id="logicTitle">Logic Analyzer</h2>
+      <p class="sub">Dạng sóng 4 chân theo thời gian mô phỏng. Chọn chân để theo dõi, tần số và duty ước lượng theo chân đầu tiên.</p>
+      <div class="la-controls">
+        <label>Kênh 1 <select class="select la-pin" id="laPin0"></select></label>
+        <label>Kênh 2 <select class="select la-pin" id="laPin1"></select></label>
+        <label>Kênh 3 <select class="select la-pin" id="laPin2"></select></label>
+        <label>Kênh 4 <select class="select la-pin" id="laPin3"></select></label>
+      </div>
+      <canvas id="logicCanvas" width="800" height="180" aria-label="Dạng sóng logic 4 kênh"></canvas>
+      <p class="la-info" id="laInfo">Chưa có dữ liệu — bấm Chạy tất cả để ghi sóng.</p>
+      <div class="row"><button class="btn btn-small" id="laClear" type="button">Xoá sóng</button></div>
+    </section>
+  </div>
+
+  <div class="col-right">
+    <section class="card" aria-labelledby="boardTitle">
+      <h2 id="boardTitle">Board mô phỏng</h2>
+      <p class="sub">Đấu dây như kit PIC phổ biến: LED trên PORTB, nút nhấn RC0–RC3, LCD data PORTD (RS=RE0, E=RE1), chiết áp AN0, UART RC6/TX – RC7/RX.</p>
+      <p class="board-label">LED — PORTB</p>
+      <div class="leds" id="leds"></div>
+      <p class="board-label">Nút nhấn — PORTC (nhấn giữ = mức 0)</p>
+      <div class="push-btns" id="pushBtns"></div>
+      <p class="board-label">Chiết áp AN0</p>
+      <input type="range" id="pot" min="0" max="5" step="0.05" value="0" aria-label="Chiết áp AN0, 0 đến 5 volt">
+      <p class="pot-read" id="potValue">0.00 V · ADC ≈ 0</p>
+      <p class="board-label">LCD 16x2</p>
+      <div class="lcd-screen" aria-label="Màn hình LCD 16x2"><pre id="lcdLine0">                </pre><pre id="lcdLine1">                </pre></div>
+      <p class="board-label">Terminal UART — 9600 baud</p>
+      <div class="uart-out" id="uartOut" aria-live="polite"></div>
+      <div class="uart-row">
+        <input class="input" id="uartIn" placeholder="Gõ ký tự gửi vào CPU (RX)..." aria-label="Ký tự gửi vào CPU qua UART">
+        <button class="btn btn-primary" id="uartSend" type="button">Gửi</button>
+      </div>
+    </section>
+
+    <section class="card" aria-labelledby="regTitle">
+      <h2 id="regTitle">Thanh ghi</h2>
+      <div class="reg-grid" id="regGrid"></div>
+      <div class="flags" id="statusFlags" aria-label="Các cờ STATUS"></div>
+      <div class="flags" id="intconFlags" aria-label="Các cờ INTCON"></div>
+    </section>
+
+    <section class="card" aria-labelledby="ramTitle">
+      <h2 id="ramTitle">RAM — Bank 0 (0x20–0x7F)</h2>
+      <div class="scroll-x"><table class="data" id="ramTable"></table></div>
+    </section>
+
+    <section class="card" aria-labelledby="gpioTitle">
+      <h2 id="gpioTitle">GPIO Inspector</h2>
+      <p class="sub">Hướng theo TRISx. Giá trị Z nghĩa là chân đang là ngõ vào (trở kháng cao); cột Mức vào cho biết mức logic ngoài đang tác động.</p>
+      <div class="gpio-grid" id="gpioGrid"></div>
+    </section>
+  </div>
+</main>
+
+<footer class="site-footer">
+  <p>HoaTrang Lab — Mô phỏng PIC16F877A chạy hoàn toàn trên trình duyệt, không gửi code đi đâu. Hỗ trợ 35 lệnh Assembly, TMR0/1/2, ADC 10-bit, USART, LCD HD44780.</p>
+</footer>
+
+<script type="module" src="app.js?v=20261125a"></script>
+</body>
+</html>
