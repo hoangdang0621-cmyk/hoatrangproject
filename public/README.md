@@ -40,6 +40,12 @@ theo nhịp chip.
   luôn, breakpoint không áp dụng cho chương trình .hex). Bấm vào phần
   code thì panel trái tự rộng lên 40%, bấm ra ngoài thì tự về 20%.
   Code và breakpoint tự lưu trên máy, mở lại trang vẫn còn.
+- **Bài Lab:** tab **Bài Lab** cạnh tab **Nạp viết code** — list các
+  bài lab mẫu, bấm **Mở lab** để nạp mạch của bài đó lên bàn (thay mạch
+  hiện tại; chip PIC, nguồn và dây nguồn mặc định vẫn giữ nguyên). Lab 1
+  **Điều khiển LED**: LED nối RB0 qua điện trở 220Ω, cathode về GND —
+  mở lab rồi sang tab **Nạp viết code** bấm **Nạp & chạy** thì LED nhấp
+  nháy theo nhịp chip.
 - **Chọn size bo mạch:** nhấn vào board (thân board hoặc lỗ trống) để
   mở popup **Bo mạch** bên phải: bấm 1 trong 3 mẫu sẵn để áp dụng ngay,
   hoặc tự điền rộng (số cột 5–100) × dài (số hàng 5–100, bội số của 5) + chọn có rail

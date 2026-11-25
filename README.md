@@ -13,7 +13,8 @@ bàn thực hành (thuc-hanh/).
 Chip đứng yên khi mở trang (chưa nạp chương trình nào). Tab **Nạp viết
 code** bên trái mở sẵn code mẫu nhấp nháy LED RB0: nối một LED (kèm điện
 trở nối tiếp) vào strip của chân RB0, rồi bấm **Nạp & chạy** thì LED
-nhấp nháy theo nhịp chip.
+nhấp nháy theo nhịp chip. Hoặc mở tab **Bài Lab** bấm **Mở lab** ở bài
+**Điều khiển LED** để có sẵn mạch đó trên bàn.
 
 ## Dùng nhanh
 
@@ -56,6 +57,12 @@ nhấp nháy theo nhịp chip.
    dụng. Đổi size thì chip tự căn lại giữa board, linh kiện/dây còn trên
    board mới được giữ nguyên, cái ngoài board bị gỡ (có ghi chú ở dòng
    trạng thái).
+7. **Bài Lab:** tab **Bài Lab** cạnh tab **Nạp viết code** — list các
+   bài lab mẫu, bấm **Mở lab** để nạp mạch của bài đó lên bàn (thay mạch
+   hiện tại; chip PIC, nguồn và dây nguồn mặc định vẫn giữ nguyên). Lab
+   1 **Điều khiển LED**: LED nối RB0 qua điện trở 220Ω, cathode về GND
+   — mở lab rồi sang tab **Nạp viết code** bấm **Nạp & chạy** thì LED
+   nhấp nháy theo nhịp chip.
 
 ## Khay linh kiện
 

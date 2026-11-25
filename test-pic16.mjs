@@ -4,6 +4,7 @@ import { readFileSync } from 'node:fs';
 import { assemble, createCPU, parseIntelHex, exportHex, disassemble, ProgramRunner } from './public/pic16.js';
 import { defaultNetlist, resolvePeripherals, checkWiring, ledStates, buzzerStates, applyButtonToCpu, applyPotToCpu, PIC_PINS } from './public/wiring.js';
 import { PITCH, HOLE_RADIUS, HOLE_HEIGHT, HOLE_TOP_ABOVE_BOARD, holeCenterY, depthPrecisionAt, MAX_CAMERA_DISTANCE, SEGMENT_LINE_WIDTH_MM, segmentBoundaries, allHoles, stripKey, parseHole, holePos, holeId, rowLabel, rowIndexFromLabel, migrateOldHoleId, picLegs, legsFor, canPlace, buildBenchNets, benchToNetlist, defaultBenchState, sanitizeState, boardSize, picCol, picRows, picBodyDepth, bodyDepth, pruneStateForSize, validateWireEnd, retargetWireEnd, togglePlacement, normalizeSize, holeCount, sizeLabel, sameSize, compLabel, psuVolts, validatePsuVolts, parsePsuPost, psuPostPos, normalizeWireEnd, clampCamTarget, zoomTowardPoint, panTarget } from './public/bench-model.js';
+import { LABS, getLab, buildLabState } from './public/labs.js';
 
 // Các chương trình Assembly dùng để kiểm thử — inline tại đây (file
 // public/examples.js chứa các bài lab mẫu đã bị gỡ ngày 25/11/2026 nên test
@@ -2171,6 +2172,93 @@ const SLEEP_PROG = `    ORG 0
     })(), '');
   check('(p-c) PSU không có chân dạng lỗ: legsFor trả []',
     legsFor({ type: 'psu' }, 830).length === 0, '');
+}
+
+// ===========================================================================
+// (q) TAB "BÀI LAB" + LAB 1 "ĐIỀU KHIỂN LED" (round 25/11): LED nối RB0
+// qua điện trở 220Ω, cathode về GND. Mở tab Bài Lab, bấm Mở lab thì mạch
+// lên bàn; sang tab code bấm Nạp & chạy thì LED nhấp nháy theo nhịp chip.
+// Hiển thị tab là DOM nên không test bằng Node — Điệp check bằng trình
+// duyệt thật.
+// ===========================================================================
+// (q-a) Chỉ có đúng Lab 1, đủ dữ liệu: 1 điện trở 220Ω + 1 LED + 3 dây
+{
+  const lab = LABS[0];
+  check('(q-a) LABS chỉ có đúng 1 lab: Điều khiển LED, board mặc định 830',
+    LABS.length === 1 && lab.id === 'led-blink' && lab.title === 'Điều khiển LED' && lab.size === 830
+    && getLab('led-blink') === lab && getLab('khong-co') === null, JSON.stringify(LABS.map((l) => l.id)));
+  check('(q-a) Lab 1 có đúng 1 điện trở 220Ω (R0 @i45) + 1 LED đỏ (LED0 @i52)',
+    lab.components.length === 2
+    && lab.components[0].id === 'R0' && lab.components[0].type === 'resistor' && lab.components[0].anchor === 'i45' && lab.components[0].props.value === 220
+    && lab.components[1].id === 'LED0' && lab.components[1].type === 'led' && lab.components[1].anchor === 'i52' && lab.components[1].props.color === '#DC2626', JSON.stringify(lab.components));
+  check('(q-a) Lab 1 có đúng 3 dây: RB0->điện trở, điện trở->anode LED, cathode LED->GND',
+    lab.wires.length === 3
+    && lab.wires[0].a === 'h29' && lab.wires[0].b === 'i45'
+    && lab.wires[1].a === 'i49' && lab.wires[1].b === 'i52'
+    && lab.wires[2].a === 'i53' && lab.wires[2].b === 'B-50', JSON.stringify(lab.wires));
+}
+// (q-b) buildLabState cho ra state hợp lệ: chip + nguồn + dây nguồn + R0 + LED0 + 3 dây lab
+{
+  const r = buildLabState(LABS[0]);
+  check('(q-b) buildLabState Lab 1 ok: PIC1 + PSU1 + R0 + LED0, dây W1-W7 + 3 dây lab',
+    r.ok && r.state.components.map((c) => c.id).join(',') === 'PIC1,PSU1,R0,LED0'
+    && r.state.wires.map((w) => w.id).join(',') === 'W1,W2,W3,W4,W5,W6,W7,LAB1-W1,LAB1-W2,LAB1-W3',
+    r.ok ? JSON.stringify({ comps: r.state.components.map((c) => c.id), wires: r.state.wires.map((w) => w.id) }) : r.reason);
+  check('(q-b) đầu dây RB0 trong lab trùng đúng lỗ chân RB0 tính bằng picLegs (không hardcode sai)',
+    r.ok && LABS[0].wires[0].a === picLegs(830).find((l) => l.term === 'PIC.RB0').hole, LABS[0].wires[0].a);
+  check('(q-b) state lab qua sanitizeState vẫn giữ nguyên R0/LED0 + 3 dây lab',
+    r.ok && (() => {
+      const s2 = sanitizeState(JSON.parse(JSON.stringify(r.state)));
+      return s2.components.some((c) => c.id === 'R0') && s2.components.some((c) => c.id === 'LED0')
+        && s2.wires.filter((w) => w.id.startsWith('LAB1-')).length === 3;
+    })(), '');
+  check('(q-b) buildLabState từ chối lab hỏng: linh kiện đặt chồng chip / dây đầu sai',
+    buildLabState({ ...LABS[0], components: [{ id: 'R0', type: 'resistor', anchor: 'b25', rot: 0, props: { value: 220 } }] }).ok === false
+    && buildLabState({ ...LABS[0], wires: [{ id: 'X1', a: 'h29', b: 'zz99', color: '#DC2626' }] }).ok === false, '');
+}
+// (q-c) Mạch hợp lệ qua netlist: LED0 nối RB0 qua điện trở về GND, không cảnh báo thiếu điện trở
+{
+  const { state } = buildLabState(LABS[0]);
+  const nl = benchToNetlist(state);
+  const mapping = resolvePeripherals(nl);
+  const led = mapping.leds.find((l) => l.id === 'LED0');
+  check('(q-c) LED0 nối đúng: anode là chân RB0 (pin 33), cathode về GND, có điện trở nối tiếp',
+    led && led.pin && led.pin.id === 'RB0' && led.pin.num === 33 && led.gnd === true && led.hasResistor === true,
+    JSON.stringify(led));
+  const warns = checkWiring(nl, null);
+  check('(q-c) checkWiring không cảnh báo gì cho mạch lab (kể cả "LED không có điện trở")',
+    warns.length === 0, JSON.stringify(warns.map((w) => w.message)));
+}
+// (q-d) LED sáng khi RB0 mức cao, tắt khi RB0 mức thấp (CPU lái trực tiếp)
+{
+  const { state } = buildLabState(LABS[0]);
+  const mapping = resolvePeripherals(benchToNetlist(state));
+  const cpu = createCPU();
+  cpu.setWiring(mapping);
+  cpu.writeFile(0x03, 0x20); // bank1: RP0=1
+  cpu.writeFile(0x06, 0x00); // TRISB = 0 (ngõ ra)
+  cpu.writeFile(0x03, 0x00); // về bank0
+  cpu.writeFile(0x06, 0x01); // PORTB = 0x01 -> RB0=1
+  check('(q-d) RB0=1 (ngõ ra): LED0 SÁNG',
+    ledStates(cpu, mapping).find((s) => s.id === 'LED0').on === true, '');
+  cpu.writeFile(0x06, 0x00); // PORTB = 0x00 -> RB0=0
+  check('(q-d) RB0=0 (ngõ ra): LED0 TẮT',
+    ledStates(cpu, mapping).find((s) => s.id === 'LED0').on === false, '');
+}
+// (q-e) Chạy chương trình blink mẫu: LED nhấp nháy theo nhịp RB0
+{
+  const { state } = buildLabState(LABS[0]);
+  const mapping = resolvePeripherals(benchToNetlist(state));
+  const r = assemble(EXAMPLES.find((e) => e.id === 'blink').code);
+  const cpu = createCPU();
+  cpu.setWiring(mapping);
+  cpu.loadProgram(r.program);
+  runUntil(cpu, 100000);
+  const onHigh = ledStates(cpu, mapping).find((s) => s.id === 'LED0').on;
+  runUntil(cpu, 300000);
+  const onLow = ledStates(cpu, mapping).find((s) => s.id === 'LED0').on;
+  check('(q-e) chương trình blink: sau 100k chu kỳ (RB0=1) LED SÁNG, sau 300k chu kỳ (RB0=0) LED TẮT',
+    r.errors.length === 0 && onHigh === true && onLow === false, `onHigh=${onHigh} onLow=${onLow} PORTB=${cpu.readPort(1).toString(16)}`);
 }
 
 console.log(`\nKết quả: ${pass} pass, ${fail} fail`);

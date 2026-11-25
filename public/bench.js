@@ -18,6 +18,7 @@ import {
 } from './bench-model.js?v=20261125t';
 import { checkWiring, SIGNAL_COLORS } from './wiring.js?v=20261125r';
 import { assemble } from './pic16.js?v=20261125q';
+import { LABS, getLab, buildLabState } from './labs.js?v=20261125u';
 
 const $ = (id) => document.getElementById(id);
 const benchView = $('benchView');
@@ -209,6 +210,8 @@ function main() {
   // --- Tab "Nạp viết code": editor hợp ngữ + nạp file .hex + breakpoint ---
   const codeTabEl = $('benchTabCode');
   const compTabEl = $('benchTabComponents');
+  const labsTabEl = $('benchTabLabs');
+  const labListEl = $('benchLabList');
   const codeInput = $('benchCodeInput');
   const codeGutter = $('benchCodeGutter');
   const codeStatusEl = $('benchCodeStatus');
@@ -257,9 +260,11 @@ D2
     });
     if (compTabEl) compTabEl.hidden = tab !== 'components';
     if (codeTabEl) codeTabEl.hidden = tab !== 'code';
+    if (labsTabEl) labsTabEl.hidden = tab !== 'labs';
     // Chuyển tab thì panel về 20%; chỉ bấm vào phần code mới to lên 40%.
     setCodeWide(false);
     if (tab === 'code') initCodeTab();
+    if (tab === 'labs') renderLabList();
   }
   document.querySelectorAll('.bench-mini-tab').forEach((b) =>
     b.addEventListener('click', () => setSideTab(b.dataset.sideTab || 'components')));
@@ -273,6 +278,42 @@ D2
     if (sideTab !== 'code' || !codeTabEl) return;
     setCodeWide(codeTabEl.contains(e.target));
   });
+
+  // --- Tab "Bài Lab": list bài lab mẫu, bấm "Mở lab" để nạp mạch lên bàn ---
+  // Chỉ nạp mạch (linh kiện + dây), không động vào code trong editor.
+  function renderLabList() {
+    if (!labListEl) return;
+    labListEl.innerHTML = LABS.map((lab) => `
+      <div class="bench-lab">
+        <strong>${esc(lab.title)}</strong>
+        <p class="sub">${esc(lab.desc)}</p>
+        <button type="button" class="btn btn-small" data-lab="${esc(lab.id)}">Mở lab</button>
+      </div>`).join('') || '<p class="sub">Chưa có bài lab nào.</p>';
+    labListEl.querySelectorAll('[data-lab]').forEach((btn) =>
+      btn.addEventListener('click', () => openLab(btn.dataset.lab)));
+  }
+  function openLab(labId) {
+    const lab = getLab(labId);
+    if (!lab) { setStatus('Không tìm thấy bài lab.'); return; }
+    const r = buildLabState(lab);
+    if (!r.ok) { setStatus('Không mở được lab: ' + r.reason); return; }
+    const sizeChanged = !sameSize(state.size, r.state.size);
+    state = r.state;
+    seq = 1; wireSeq = 100;
+    state.components.forEach((c) => {
+      const n = parseInt(String(c.id).replace(/^[A-Z]+/, ''), 10);
+      if (!isNaN(n) && n >= seq) seq = n + 1;
+    });
+    state.wires.forEach((w) => {
+      const n = parseInt(String(w.id).replace(/^W/, ''), 10);
+      if (!isNaN(n) && n >= wireSeq) wireSeq = n + 1;
+    });
+    select(null);
+    save();
+    if (sizeChanged) { rebuildBoard(); updateSizeUI(); }
+    rebuildAll(); syncToCpu();
+    setStatus(`Đã mở lab ${lab.title} — mạch đã lên bàn. Sang tab "Nạp viết code" bấm Nạp & chạy để chạy chương trình.`);
+  }
 
   function loadSavedCode() {
     try {
