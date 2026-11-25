@@ -28,7 +28,8 @@ như trên board thật: LED, nút nhấn, LCD, ADC, UART, thanh ghi, ngắt và
 
 ## Dùng board
 
-Board đấu dây như kit PIC phổ biến, mọi chân đều nối sẵn với chip:
+Board đấu dây như kit PIC phổ biến, mọi chân đều nối sẵn với chip
+(đổi dây được ở tab Đấu nối — xem mục bên dưới):
 
 - **8 LED trên PORTB (RB0–RB7):** sáng khi chân là output (`TRISB = 0`)
   và mức ra là 1. Muốn LED nhấp nháy thì viết code đảo bit PORTB.
@@ -43,6 +44,52 @@ Board đấu dây như kit PIC phổ biến, mọi chân đều nối sẵn vớ
 - **Terminal UART:** chip gửi ký tự qua `TXREG` (chân RC6/TX) thì hiện
   trong terminal; gõ ký tự vào terminal để gửi vào `RCREG` (chân RC7/RX),
   mặc định baud 9600 ở 4 MHz.
+
+## Đấu nối breadboard
+
+Tab **Đấu nối (Breadboard)** cho thấy đúng sơ đồ dây của board: chip
+PIC16F877A (DIP-40) ở giữa, thanh +5V (đỏ) bên trái, thanh GND (đen) bên
+phải, VDD/VSS/MCLR đã nối sẵn nguồn. Mọi linh kiện trên board đều là linh
+kiện trên breadboard — đổi dây ở đây thì board và code chạy theo dây mới.
+
+- **Kéo dây:** kéo-thả chuột từ một đầu nối (chấm tròn) tới đầu nối khác,
+  hoặc bấm lần lượt 2 đầu nối (dùng được trên điện thoại). Dây đỏ = +5V,
+  dây đen = GND, dây màu = tín hiệu.
+- **Xoá dây:** bấm vào dây để chọn rồi bấm **Xoá dây đã chọn** (hoặc phím
+  Delete).
+- **Thêm linh kiện:** bấm nút trong khay linh kiện — LED (kèm sẵn điện trở
+  220Ω), nút nhấn, chiết áp, LCD 16x2, còi buzzer. Mỗi linh kiện có các
+  đầu nối riêng: LED 2 đầu (A/K), nút 2 đầu, chiết áp 3 đầu (VCC/Wiper/
+  GND), LCD 10 đầu (RS/E/D0–D7), còi 2 đầu.
+- **Xoá linh kiện:** bấm chọn linh kiện đã thêm rồi bấm **Xoá linh kiện**.
+  Linh kiện của mạch mẫu không xoá được, chỉ xoá/sửa dây của nó.
+- **Về mạch mẫu:** nút **Về mạch mẫu** khôi phục đấu nối mặc định (LED
+  RB0–RB7, nút RC0–RC3, LCD PORTD/RE0/RE1, chiết áp AN0). Đấu nối tự lưu
+  trên máy (localStorage), mở lại trang vẫn còn.
+- **Còi buzzer:** nối chân + vào một chân digital; còi kêu khi chân đó ra
+  mức 1. Tiếng bíp (WebAudio) mặc định tắt, bấm **Bật tiếng còi** trên
+  board để nghe.
+
+### Mạch mẫu mặc định
+
+8 LED RB0–RB7 (mỗi LED kèm R 220Ω, cathode về GND), 4 nút RC0–RC3 (đầu
+còn lại về GND, active-low), chiết áp VCC–RA0 (AN0)–GND, LCD RS=RE0,
+E=RE1, D0–D7=RD0–RD7. Các lab mẫu chạy đúng với mạch này.
+
+### Cảnh báo thường gặp (panel "Kiểm tra")
+
+- **Nối tắt +5V–GND:** dây nối cả 2 thanh nguồn — sẽ chập nguồn, gỡ ngay.
+- **LED không có điện trở:** LED nối thẳng chân PIC mà không qua điện trở
+  hạn dòng, dễ cháy LED.
+- **LCD chưa nối đủ dây:** thiếu RS, E hoặc D0–D7 — LCD không hiện chữ
+  cho tới khi nối đủ.
+- **Hai chân output nối trực tiếp:** 2 chân cùng là ngõ ra (TRIS=0) nối
+  nhau, có thể hỏng chân.
+- **Chân PIC nối 2 nguồn tín hiệu:** 2 linh kiện cùng lái một chân, mức
+  logic xung đột.
+- **Đầu nối chưa nối dây:** đầu nối của linh kiện còn bỏ trống.
+
+Bấm vào một cảnh báo để tô sáng dây/linh kiện liên quan.
 
 ## Các bài lab mẫu
 

@@ -417,6 +417,7 @@ export class PIC16F877A {
     this.program = new Uint16Array(8192);
     this.config = 0x3fff;
     this.lcd = new LCD();
+    this.wiring = null; // cấu hình ngoại vi từ netlist breadboard (wiring.js); null = đấu cứng cũ
     this.analogVolts = [0, 0, 0, 0, 0, 0, 0, 0]; // AN0..AN7 (V)
     this.txLog = [];        // mã ký tự đã phát qua TX
     this.onTx = null;       // callback(code) khi CPU phát 1 ký tự
@@ -550,7 +551,7 @@ export class PIC16F877A {
         const i = PORT_NAMES.indexOf(name);
         const mask = (1 << PORT_BITS[i]) - 1;
         this.portLatch[i] = value & mask;
-        if (name === 'PORTE') this.lcdClock(value);
+        this.lcdTick(); // LCD chốt theo cạnh lên của E — chân E có thể đã đổi dây
         return;
       }
       case 'TRISA': case 'TRISB': case 'TRISC': case 'TRISD': case 'TRISE': {
@@ -582,12 +583,38 @@ export class PIC16F877A {
     }
   }
 
-  // Xung E của LCD: phát hiện cạnh lên của RE1, chốt lệnh/dữ liệu theo RS=RE0
-  lcdClock(porteValue) {
-    const e = (porteValue >> 1) & 1;
+  // Cấu hình ngoại vi từ netlist breadboard (resolvePeripherals trong wiring.js).
+  // Gọi sau mỗi lần đổi dây; reset/loadProgram không xoá wiring.
+  setWiring(mapping) {
+    this.wiring = mapping || null;
+    const w = this.wiring && this.wiring.lcd;
+    if (w && w.e) this.prevE = this.pinLevel(w.e.port, w.e.bit);
+    else if (!w) this.prevE = (this.portLatch[4] >> 1) & 1;
+    else this.prevE = 0;
+  }
+
+  // Xung E của LCD: phát hiện cạnh lên của E, chốt lệnh/dữ liệu theo RS.
+  // Có wiring: RS/E/D0–D7 đọc từ chân PIC đã nối dây (bất kỳ PORT nào).
+  // Không wiring: giữ hành vi cũ (data PORTD, RS=RE0, E=RE1).
+  // Wiring LCD chưa đủ dây: không chốt gì (LCD hiện "chưa nối đủ dây" ở UI).
+  lcdTick() {
+    const w = this.wiring && this.wiring.lcd;
+    let rs, e, data;
+    if (w && w.complete) {
+      const bit = (pin) => (pin ? this.pinLevel(pin.port, pin.bit) : 0);
+      rs = bit(w.rs); e = bit(w.e);
+      data = 0;
+      for (let i = 0; i < 8; i++) data |= bit(w.d[i]) << i;
+    } else if (w) {
+      const bit = (pin) => (pin ? this.pinLevel(pin.port, pin.bit) : 0);
+      this.prevE = bit(w.e); // đồng bộ để khỏi bắt cạnh giả khi nối lại dây
+      return;
+    } else {
+      rs = this.portLatch[4] & 1;
+      e = (this.portLatch[4] >> 1) & 1;
+      data = this.portLatch[3];
+    }
     if (this.prevE === 0 && e === 1) {
-      const rs = porteValue & 1;
-      const data = this.portLatch[3]; // PORTD
       if (rs) this.lcd.writeData(data); else this.lcd.command(data);
       if (this.onLcd) this.onLcd();
     }

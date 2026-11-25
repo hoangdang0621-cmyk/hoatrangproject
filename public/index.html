@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Mô phỏng PIC16F877A — HoaTrang Lab</title>
 <meta name="description" content="Mô phỏng vi điều khiển PIC16F877A ngay trên trình duyệt: soạn Assembly, chạy từng lệnh, LED, nút nhấn, LCD 16x2, ADC, UART.">
-<link rel="stylesheet" href="styles.css?v=20261125a">
+<link rel="stylesheet" href="styles.css?v=20261125b">
 </head>
 <body>
 <header class="site-header">
@@ -59,6 +59,13 @@
       <span>Chu kỳ <b id="statCycles">0</b></span>
       <span>Thời gian <b id="statTime">0 µs</b></span>
     </div>
+  </div>
+</div>
+
+<div class="view-tabs" role="tablist" aria-label="Chế độ xem">
+  <div class="wrap">
+    <button type="button" id="viewBoardBtn" class="view-tab active" role="tab" aria-selected="true">Board &amp; Giám sát</button>
+    <button type="button" id="viewBreadBtn" class="view-tab" role="tab" aria-selected="false">Đấu nối (Breadboard)</button>
   </div>
 </div>
 
@@ -123,16 +130,17 @@
   <div class="col-right">
     <section class="card" aria-labelledby="boardTitle">
       <h2 id="boardTitle">Board mô phỏng</h2>
-      <p class="sub">Đấu dây như kit PIC phổ biến: LED trên PORTB, nút nhấn RC0–RC3, LCD data PORTD (RS=RE0, E=RE1), chiết áp AN0, UART RC6/TX – RC7/RX.</p>
-      <p class="board-label">LED — PORTB</p>
+      <p class="sub">Đấu nối mặc định như kit PIC phổ biến, nhưng có thể đổi dây ở tab Đấu nối (Breadboard): LED, nút nhấn, chiết áp, LCD và còi hiển thị theo đúng dây đã nối.</p>
+      <p class="board-label">LED</p>
       <div class="leds" id="leds"></div>
-      <p class="board-label">Nút nhấn — PORTC (nhấn giữ = mức 0)</p>
+      <p class="board-label">Nút nhấn (nhấn giữ = mức 0)</p>
       <div class="push-btns" id="pushBtns"></div>
-      <p class="board-label">Chiết áp AN0</p>
-      <input type="range" id="pot" min="0" max="5" step="0.05" value="0" aria-label="Chiết áp AN0, 0 đến 5 volt">
-      <p class="pot-read" id="potValue">0.00 V · ADC ≈ 0</p>
+      <div id="pots"></div>
       <p class="board-label">LCD 16x2</p>
       <div class="lcd-screen" aria-label="Màn hình LCD 16x2"><pre id="lcdLine0">                </pre><pre id="lcdLine1">                </pre></div>
+      <p class="lcd-status" id="lcdStatus" hidden></p>
+      <p class="board-label">Còi buzzer</p>
+      <div id="buzzerRow"></div>
       <p class="board-label">Terminal UART — 9600 baud</p>
       <div class="uart-out" id="uartOut" aria-live="polite"></div>
       <div class="uart-row">
@@ -161,10 +169,43 @@
   </div>
 </main>
 
+<section class="breadboard-view" id="breadboardView" hidden>
+  <div class="bb-layout">
+    <div class="card bb-side">
+      <h2>Khay linh kiện</h2>
+      <p class="sub">Bấm để thêm linh kiện vào breadboard, rồi kéo dây từ các đầu nối của nó.</p>
+      <div class="palette">
+        <button type="button" class="btn btn-outline btn-small" data-add="led">+ LED (kèm R 220Ω)</button>
+        <button type="button" class="btn btn-outline btn-small" data-add="button">+ Nút nhấn</button>
+        <button type="button" class="btn btn-outline btn-small" data-add="pot">+ Chiết áp</button>
+        <button type="button" class="btn btn-outline btn-small" data-add="lcd">+ LCD 16x2</button>
+        <button type="button" class="btn btn-outline btn-small" data-add="buzzer">+ Còi buzzer</button>
+      </div>
+      <h2 class="bb-side-h">Thao tác</h2>
+      <div class="row">
+        <button type="button" class="btn btn-small" id="btnResetWiring">Về mạch mẫu</button>
+        <button type="button" class="btn btn-small" id="btnDeleteWire" disabled>Xoá dây đã chọn</button>
+        <button type="button" class="btn btn-small" id="btnDeleteComp" disabled>Xoá linh kiện</button>
+      </div>
+      <p class="sub" id="bbStatus">Kéo từ một đầu nối tới đầu nối khác để đi dây, hoặc bấm lần lượt 2 đầu nối (dùng được trên điện thoại).</p>
+    </div>
+    <div class="card bb-canvas-card">
+      <h2>Breadboard — nhìn từ trên</h2>
+      <p class="sub">Chấm tròn là đầu nối. Dây đỏ = +5V, dây đen = GND, dây màu = tín hiệu. Bấm vào dây để chọn rồi xoá. Đấu nối tự lưu trên máy này.</p>
+      <div class="bb-scroll"><svg id="bbSvg" viewBox="0 0 1000 780" role="application" aria-label="Breadboard kéo dây"></svg></div>
+    </div>
+    <div class="card bb-side">
+      <h2>Kiểm tra</h2>
+      <p class="sub">Cảnh báo đấu nối (kiểu Ohmimic). Bấm vào một cảnh báo để tô sáng dây/linh kiện liên quan.</p>
+      <ul class="checks" id="checksList"></ul>
+    </div>
+  </div>
+</section>
+
 <footer class="site-footer">
   <p>HoaTrang Lab — Mô phỏng PIC16F877A chạy hoàn toàn trên trình duyệt, không gửi code đi đâu. Hỗ trợ 35 lệnh Assembly, TMR0/1/2, ADC 10-bit, USART, LCD HD44780.</p>
 </footer>
 
-<script type="module" src="app.js?v=20261125a"></script>
+<script type="module" src="app.js?v=20261125b"></script>
 </body>
 </html>
