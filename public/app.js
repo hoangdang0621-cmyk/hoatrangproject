@@ -5,11 +5,11 @@
 // chạy/tạm dừng/chạy từng lệnh/breakpoint.
 import { createCPU, ProgramRunner, cyclesForElapsedMs } from './pic16.js?v=20261125ax';
 import {
-  resolvePeripherals, ledStates, buzzerStates,
+  resolvePeripherals, ledStates, buzzerStates, sevenSegStates,
   applyButtonToCpu, applyPotToCpu,
-} from './wiring.js?v=20261125r';
-import { defaultBenchState, benchToNetlist } from './bench-model.js?v=20261125aw';
-import { meterReadings, scopeVoltages, pushScopeSample, SCOPE_MAX_SAMPLES } from './circuit-solver.js?v=20261125aw';
+} from './wiring.js?v=20261125ba';
+import { defaultBenchState, benchToNetlist, crystalFreq } from './bench-model.js?v=20261125ba';
+import { meterReadings, scopeVoltages, pushScopeSample, SCOPE_MAX_SAMPLES } from './circuit-solver.js?v=20261125ba';
 import { compileC } from './c-compiler.js?v=20261125ax';
 
 const cpu = createCPU();
@@ -72,6 +72,9 @@ setInterval(() => {
 // gọi solver được; bench.js truyền 2 tham số này ở syncToCpu().
 let benchStateForMeters = null;
 let pressedIdsForMeters = [];
+// Tần số thạch anh trên bàn (Hz) — xung nhịp thật cho CPU. null khi
+// chưa có thạch anh (xem applyBenchNetlist + loadC).
+let benchCrystalFreq = null;
 // Bộ nhớ vòng của đồng hồ hiện sóng: id scope -> mảng mẫu [ch1, ch2]
 // (mỗi mẫu là [volt CH1, volt CH2], null = kênh floating). Lấy mẫu mỗi
 // nhịp 50ms (20 mẫu/giây), giữ tối đa SCOPE_MAX_SAMPLES mẫu = 12 giây.
@@ -98,10 +101,21 @@ window.HoaTrangBenchBridge = {
     mapping = resolvePeripherals(nl);
     cpu.setWiring(mapping);
     applyAllPots();
-    if (st) { benchStateForMeters = st; pressedIdsForMeters = pressed || []; }
+    if (st) {
+      benchStateForMeters = st; pressedIdsForMeters = pressed || [];
+      // Xung nhịp lấy từ thạch anh trên bàn (tần số của thạch anh đầu
+      // tiên, null nếu chưa có). Đổi/thêm/bớt thạch anh thì lần nạp
+      // chương trình sau mới áp dụng tần số mới.
+      benchCrystalFreq = crystalFreq(st);
+    }
   },
   getLedStates: () => ledStates(cpu, mapping),
   getBuzzerStates: () => buzzerStates(cpu, mapping),
+  // LED 7 thanh: đoạn nào đang sáng (để bench.js vẽ màn hình 3D và
+  // Inspector hiện "Đang sáng: a, b, c"). Tần số thạch anh hiện tại
+  // (Hz, null nếu chưa có thạch anh) — để bench.js hiện cảnh báo.
+  getSevenSegStates: () => sevenSegStates(cpu, mapping),
+  getCrystalFreq: () => benchCrystalFreq,
   getMeterReadings: () => {
     if (!benchStateForMeters) return { voltmeters: [], ammeters: [] };
     try { return meterReadings(benchStateForMeters, cpu, pressedIdsForMeters); }
@@ -123,25 +137,41 @@ window.HoaTrangBenchBridge = {
   // theo dòng C, nhưng runner.loadAsm tự set map theo dòng HỢP NGỮ đã
   // sinh — nên BẮT BUỘC ghi đè lại bằng map dòng C, không thì breakpoint
   // và dòng hiện tại sẽ chỉ sai dòng. Lỗi thì không nạp gì.
-  // clockHz PHẢI theo _XTAL_FREQ của code vừa dịch (r.xtalFreq): vòng
-  // delay sinh theo tần số đó, runner nhịp theo cpu.clockHz — lệch nhau
-  // thì delay sai giờ thực (vd code 20MHz mà clockHz còn 4MHz thì
-  // __delay_ms(250) chạy thành 1,25 giây). File .hex không mang tần số
-  // nên loadHex trả clockHz về 4MHz như trước đây.
+  // XUNG NHỊP lấy từ THẠCH ANH trên bàn (benchCrystalFreq), không phải
+  // từ _XTAL_FREQ của code: _XTAL_FREQ chỉ dùng để sinh vòng delay
+  // (__delay_ms) — chip thật cũng vậy, tần số dao động do thạch anh
+  // quyết định. Không có thạch anh thì chip không có xung: chương
+  // trình vẫn nạp vào CPU (để xem code) nhưng clockHz = 0 nên runner
+  // không chạy chu kỳ nào (cyclesForElapsedMs = 0) — phải thêm thạch
+  // anh (nối OSC1/OSC2) rồi bấm Nạp & chạy lại. Trả thêm noCrystal để
+  // bench.js hiện đúng thông báo, và xtalFreq (từ code) để bench.js
+  // cảnh báo khi thạch anh lệch với _XTAL_FREQ (delay sẽ sai tỉ lệ).
+  // File .hex không mang tần số nên trước đây loadHex trả clockHz về
+  // 4MHz; giờ cũng lấy từ thạch anh trên bàn (không có thì 0).
   loadC(source) {
     const r = compileC(source);
     if (!r.ok) return { ok: false, errors: r.errors };
-    cpu.clockHz = r.xtalFreq;
+    const noCrystal = !(benchCrystalFreq && benchCrystalFreq > 0);
+    cpu.clockHz = noCrystal ? 0 : benchCrystalFreq;
     const loaded = runner.loadAsm(r.asm);
     if (!loaded.ok) return { ok: false, errors: loaded.errors };
     runner.lineToAddr = r.lineToAddr;
     runner.addrToLine = new Map([...r.lineToAddr].map(([l, a]) => [a, l]));
     applyAllPots();
-    return { ok: true, lineToAddr: r.lineToAddr };
+    return { ok: true, lineToAddr: r.lineToAddr, noCrystal, xtalFreq: r.xtalFreq };
   },
   // Chỉ dịch C, không nạp gì (để bench.js dùng cho gutter/breakpoint).
   compileCOnly(source) { return compileC(source); },
-  loadHex(text) { const r = runner.loadHex(text); if (r.ok) { cpu.clockHz = 4000000; applyAllPots(); } return r; },
+  loadHex(text) {
+    const r = runner.loadHex(text);
+    if (r.ok) {
+      const noCrystal = !(benchCrystalFreq && benchCrystalFreq > 0);
+      cpu.clockHz = noCrystal ? 0 : benchCrystalFreq;
+      applyAllPots();
+      return { ...r, noCrystal };
+    }
+    return r;
+  },
   runProgram: () => runner.run(),
   pauseProgram: () => runner.pause(),
   stepProgram: () => runner.stepOnce(),

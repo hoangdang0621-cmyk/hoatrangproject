@@ -68,6 +68,11 @@ export const COMPONENT_DEFS = {
   pot: { name: 'Chiết áp', terms: ['VCC', 'W', 'GND'], termLabels: { VCC: '+5V', W: 'Wiper', GND: 'GND' } },
   lcd: { name: 'LCD 16x2', terms: ['RS', 'E', 'D0', 'D1', 'D2', 'D3', 'D4', 'D5', 'D6', 'D7'], termLabels: { RS: 'RS', E: 'E', D0: 'D0', D1: 'D1', D2: 'D2', D3: 'D3', D4: 'D4', D5: 'D5', D6: 'D6', D7: 'D7' } },
   buzzer: { name: 'Còi buzzer', terms: ['P', 'N'], termLabels: { P: 'Chân +', N: 'Chân −' } },
+  // LED 7 thanh: 8 đoạn (a–g + dp) + 1 chân chung COM. Thứ tự khớp
+  // LEG_LAYOUTS trong bench-model.js (hàng trên a/b/c/d/dp, hàng dưới
+  // e/f/g/COM). Chân chung loại 'cathode' (chung về GND, đoạn sáng khi
+  // mức 1) hoặc 'anode' (chung về VCC, đoạn sáng khi mức 0).
+  sevenseg: { name: 'LED 7 thanh', terms: ['a', 'b', 'c', 'd', 'dp', 'e', 'f', 'g', 'COM'], termLabels: { a: 'Đoạn a', b: 'Đoạn b', c: 'Đoạn c', d: 'Đoạn d', dp: 'Chấm thập phân', e: 'Đoạn e', f: 'Đoạn f', g: 'Đoạn g', COM: 'Chân chung' } },
 };
 
 export function componentTerminals(comp) {
@@ -248,7 +253,24 @@ export function resolvePeripherals(netlist) {
     // (cùng quy tắc LED nối VCC).
     vccP: psuLedOn && hasTerm(c.id + '.P', 'VCC'),
   }));
-  return { leds, buttons, pots, lcd, buzzers, nets: netsOut, netOf };
+  // LED 7 thanh: mỗi đoạn ghi lại chân PIC trong net của nó (nếu có) và
+  // net đó có VCC/GND không; chân chung COM cũng vậy. Trạng thái sáng/
+  // tắt của từng đoạn tính ở sevenSegStates (cần mức chân của CPU).
+  const sevensegs = netlist.components.filter((c) => c.kind === 'sevenseg').map((c) => {
+    const termInfo = (t) => ({
+      pin: picPinInNet(c.id + '.' + t),
+      vcc: hasTerm(c.id + '.' + t, 'VCC'),
+      gnd: hasTerm(c.id + '.' + t, 'GND'),
+    });
+    const seg = {};
+    for (const t of SEVEN_SEG_TERMS) seg[t] = termInfo(t);
+    return {
+      id: c.id, label: c.label,
+      common: c.common === 'anode' ? 'anode' : 'cathode',
+      seg, com: termInfo('COM'),
+    };
+  });
+  return { leds, buttons, pots, lcd, buzzers, sevensegs, nets: netsOut, netOf, psuLedOn };
 }
 
 // Mức logic của một net (dùng cho LED/còi): VCC=1, GND=0, chân PIC -> mức chân đó
@@ -283,6 +305,44 @@ export function ledStates(cpu, mapping) {
       on = anodeHigh && cathLow;
     }
     return { id: led.id, on };
+  });
+}
+
+// LED 7 thanh: 8 đoạn (a–g + dp). Trả [{id, common, on: {a, b, c, d,
+// e, f, g, dp}}] — on[t] = đoạn t đang sáng.
+// - Chung cathode: đoạn sáng khi net của đoạn ở mức 1 (chân PIC output
+//   mức 1 hoặc VCC với 0 < volts ≤ 10) và net chân chung ở mức 0 (GND
+//   hoặc chân PIC output mức 0).
+// - Chung anode: ngược lại — đoạn sáng khi net của đoạn ở mức 0 và net
+//   chân chung ở mức 1.
+// Net thả nổi (không nối nguồn/chân output) thì đoạn tắt.
+export const SEVEN_SEG_TERMS = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'dp'];
+export function sevenSegStates(cpu, mapping) {
+  const psuLedOn = mapping.psuLedOn !== false;
+  // Mức logic của 1 đầu nối (đã ghi trong mapping.sevensegs): VCC
+  // (chỉ khi 0 < volts ≤ 10) = 1, GND = 0, chân PIC output = mức chân,
+  // còn lại null (thả nổi / chân input).
+  const levelOf = (info) => {
+    if (!info) return null;
+    if (info.vcc && psuLedOn) return 1;
+    if (info.gnd) return 0;
+    if (info.pin) {
+      if (cpu.pinDirection(info.pin.port, info.pin.bit) !== 'out') return null;
+      return cpu.pinLevel(info.pin.port, info.pin.bit);
+    }
+    return null;
+  };
+  return (mapping.sevensegs || []).map((seg) => {
+    const comLevel = levelOf(seg.com);
+    const on = {};
+    for (const t of SEVEN_SEG_TERMS) {
+      const sLevel = levelOf(seg.seg[t]);
+      let lit = false;
+      if (seg.common === 'cathode') lit = sLevel === 1 && comLevel === 0;
+      else lit = sLevel === 0 && comLevel === 1;
+      on[t] = lit;
+    }
+    return { id: seg.id, common: seg.common, on };
   });
 }
 

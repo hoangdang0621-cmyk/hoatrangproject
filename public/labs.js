@@ -4,13 +4,13 @@
 // Thêm lab mới chỉ cần thêm 1 phần tử vào mảng LABS.
 // Lỗ chân RB0 (h29), vị trí điện trở/LED và dây nối đã tính bằng legsFor /
 // canPlace trên board mặc định 830 và kiểm chứng bằng netlist (test q).
-import { defaultBenchState, defaultProps, canPlace, parseHole, parsePsuPost } from './bench-model.js?v=20261125aw';
+import { defaultBenchState, defaultProps, canPlace, parseHole, parsePsuPost } from './bench-model.js?v=20261125ba';
 
 export const LABS = [
   {
     id: 'led-blink',
     title: 'Điều khiển LED',
-    desc: 'LED nối vào chân RB0 của PIC qua điện trở 220Ω, cathode về GND. Sang tab "Nạp viết code" bấm Nạp & chạy để xem LED nhấp nháy theo nhịp chip.',
+    desc: 'LED nối vào chân RB0 của PIC qua điện trở 220Ω, cathode về GND. Thạch anh 4MHz nối OSC1 (chân 13) – OSC2 (chân 14), mỗi chân thạch anh có 1 tụ gốm 22pF về GND.',
     code: `#include <xc.h>
 #define _XTAL_FREQ 4000000
 
@@ -27,18 +27,33 @@ void main() {
     components: [
       { id: 'R0', type: 'resistor', anchor: 'i45', rot: 0, props: { value: 220 } },
       { id: 'LED0', type: 'led', anchor: 'i52', rot: 0, props: { color: '#DC2626' } },
+      // Mạch dao động thạch anh: thạch anh 4MHz nối 2 chân OSC (b34/b35,
+      // hàng a là hàng duy nhất còn trống trong 2 strip OSC vì thân chip
+      // phủ hàng b–h); 2 tụ gốm 22pF ở hàng i, CỘT 10–20 (ngoài cột chip
+      // 22–41: strip hàng i trong cột chip đã chứa chân PIC — nối strip
+      // đó về GND sẽ chập chân PIC, vd i30 là strip VDD h30). Mỗi tụ
+      // 1 chân về strip OSC (qua dây) và 1 chân về GND (qua dây).
+      // Tụ/thạch anh hở mạch với DC nên không ảnh hưởng netlist — xung
+      // nhịp lấy từ crystalFreq(state).
+      { id: 'X0', type: 'crystal', anchor: 'a34', rot: 0, props: { freq: 4000000 } },
+      { id: 'C0', type: 'capacitor', anchor: 'i10', rot: 0, props: { value: 22 } },
+      { id: 'C1', type: 'capacitor', anchor: 'i16', rot: 0, props: { value: 22 } },
     ],
     // Quy tắc dây lab: cắm vào lỗ kề trong cùng đoạn strip (5 hàng), KHÔNG cắm trùng lỗ chân linh kiện.
     wires: [
       { id: 'LAB1-W1', a: 'i29', b: 'j45', color: '#DC2626' }, // RB0 (strip h29) -> chân điện trở (strip i45)
       { id: 'LAB1-W2', a: 'j49', b: 'j52', color: '#DC2626' }, // điện trở (strip i49) -> anode LED (strip i52)
       { id: 'LAB1-W3', a: 'j53', b: 'B-50', color: '#0F172A' }, // cathode LED (strip i53) -> GND (rail -)
+      { id: 'LAB1-W4', a: 'j14', b: 'c34', color: '#059669' }, // tụ C0 (strip i14) -> OSC1 (strip a34/b34, lỗ c34 dưới thân chip như dây LCD Lab 2)
+      { id: 'LAB1-W5', a: 'j10', b: 'B-10', color: '#0F172A' }, // tụ C0 (strip i10) -> GND (rail -)
+      { id: 'LAB1-W6', a: 'j20', b: 'c35', color: '#059669' }, // tụ C1 (strip i20) -> OSC2 (strip a35/b35, lỗ c35 dưới thân chip)
+      { id: 'LAB1-W7', a: 'j16', b: 'B-16', color: '#0F172A' }, // tụ C1 (strip i16) -> GND (rail -)
     ],
   },
   {
     id: 'led-lcd',
     title: 'Điều khiển LED + LCD',
-    desc: 'LCD 16x2 chế độ 8-bit đấu sẵn: RS→RE0 (chân 8), E→RE1 (chân 9), D0→RD0 (chân 19), D1→RD1 (chân 20), D2→RD2 (chân 21), D3→RD3 (chân 22), D4→RD4 (chân 27), D5→RD5 (chân 28), D6→RD6 (chân 29), D7→RD7 (chân 30). LED xanh lá → RB1 (chân 34) qua điện trở 220Ω, cathode về GND.',
+    desc: 'LCD 16x2 chế độ 8-bit đấu sẵn: RS→RE0 (chân 8), E→RE1 (chân 9), D0→RD0 (chân 19), D1→RD1 (chân 20), D2→RD2 (chân 21), D3→RD3 (chân 22), D4→RD4 (chân 27), D5→RD5 (chân 28), D6→RD6 (chân 29), D7→RD7 (chân 30). LED xanh lá → RB1 (chân 34) qua điện trở 220Ω, cathode về GND. Thạch anh 4MHz nối OSC1 (chân 13) – OSC2 (chân 14), mỗi chân thạch anh có 1 tụ gốm 22pF về GND.',
     code: `#include <xc.h>
 #define _XTAL_FREQ 4000000
 
@@ -88,6 +103,15 @@ void main() {
       { id: 'R1', type: 'resistor', anchor: 's45', rot: 0, props: { value: 220 } },
       { id: 'LED1', type: 'led', anchor: 's52', rot: 0, props: { color: '#059669' } }, // xanh lá trong bảng màu (dropdown hiện đúng "Xanh lá")
       { id: 'LCD1', type: 'lcd', anchor: 'a77', rot: 0, props: {} },
+      // Mạch dao động thạch anh: thạch anh 4MHz nối 2 chân OSC (g53/g54,
+      // hàng f là hàng duy nhất còn trống trong 2 strip OSC vì thân chip
+      // phủ hàng g–m); 2 tụ gốm 22pF ở hàng n, CỘT 30–40 (ngoài cột chip
+      // 41–60: strip hàng n trong cột chip đã chứa chân PIC — nối strip
+      // đó về GND sẽ chập chân PIC, vd n44 là strip RB4 m44). Mỗi tụ
+      // 1 chân về strip OSC (qua dây) và 1 chân về GND (qua dây).
+      { id: 'X0', type: 'crystal', anchor: 'f53', rot: 0, props: { freq: 4000000 } },
+      { id: 'C0', type: 'capacitor', anchor: 'n30', rot: 0, props: { value: 22 } },
+      { id: 'C1', type: 'capacitor', anchor: 'n36', rot: 0, props: { value: 22 } },
     ],
     // Quy tắc dây lab: cắm vào lỗ kề trong cùng đoạn strip (5 hàng), KHÔNG cắm trùng lỗ chân linh kiện.
     // Bố cục board 100×20: PIC neo g41 (cột 41–60, hàng g/m); LCD neo a77
@@ -110,6 +134,10 @@ void main() {
       { id: 'LAB2-W11', a: 'b84', b: 'k53', color: '#2563EB' }, // LCD.D5 (strip a84) -> RD5 (strip m53)
       { id: 'LAB2-W12', a: 'b85', b: 'k52', color: '#2563EB' }, // LCD.D6 (strip a85) -> RD6 (strip m52)
       { id: 'LAB2-W13', a: 'b86', b: 'k51', color: '#2563EB' }, // LCD.D7 (strip a86) -> RD7 (strip m51)
+      { id: 'LAB2-W14', a: 'o34', b: 'h53', color: '#059669' }, // tụ C0 (strip n34) -> OSC1 (strip f53/g53, lỗ h53 dưới thân chip)
+      { id: 'LAB2-W15', a: 'o30', b: 'B-30', color: '#0F172A' }, // tụ C0 (strip n30) -> GND (rail -)
+      { id: 'LAB2-W16', a: 'o40', b: 'h54', color: '#059669' }, // tụ C1 (strip n40) -> OSC2 (strip f54/g54, lỗ h54 dưới thân chip)
+      { id: 'LAB2-W17', a: 'o36', b: 'B-36', color: '#0F172A' }, // tụ C1 (strip n36) -> GND (rail -)
     ],
   },
 ];

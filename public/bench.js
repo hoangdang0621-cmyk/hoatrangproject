@@ -15,11 +15,11 @@ import {
   normalizeSize, holeCount, sizeLabel, sameSize,
   psuVolts, validatePsuVolts, parsePsuPost, psuPostPos, PSU_SCALE, PSU_POST_DX, PSU_POST_Y, PSU_POST_DZ,
   parseScopePost, scopePostPos, SCOPE_POST_DX, SCOPE_POST_Y, SCOPE_POST_DZ, SCOPE_DEFAULT_TX, SCOPE_DEFAULT_TZ,
-  clampCamTarget, zoomTowardPoint, panTarget, meterMode,
-} from './bench-model.js?v=20261125aw';
-import { checkWiring, SIGNAL_COLORS } from './wiring.js?v=20261125r';
-import { formatVolts, formatAmps, formatCurrentDirection } from './circuit-solver.js?v=20261125aw';
-import { LABS, getLab, buildLabState } from './labs.js?v=20261125az';
+  clampCamTarget, zoomTowardPoint, panTarget, meterMode, crystalFreq,
+} from './bench-model.js?v=20261125ba';
+import { checkWiring, SIGNAL_COLORS, SEVEN_SEG_TERMS } from './wiring.js?v=20261125ba';
+import { formatVolts, formatAmps, formatCurrentDirection, sevenSegDigit } from './circuit-solver.js?v=20261125ba';
+import { LABS, getLab, buildLabState } from './labs.js?v=20261125ba';
 
 const $ = (id) => document.getElementById(id);
 const benchView = $('benchView');
@@ -85,6 +85,7 @@ function main() {
   const psuHitMeshes = [];        // núm bắt vô hình ở 2 cọc nguồn (để kéo đầu dây vào)
   const scopeHitMeshes = [];      // núm bắt vô hình ở 3 cọc hiện sóng (để kéo đầu dây vào)
   const ledMats = new Map();      // compId -> material phát sáng LED
+  const segMats = new Map();      // compId -> {a,b,c,d,e,f,g,dp: material phát sáng từng đoạn LED 7 thanh}
   const lcdTexs = new Map();      // compId -> {canvas, ctx, tex, last}
   const meterTexs = new Map();    // compId -> {canvas, ctx, tex, last, kind}
   const scopeTexs = new Map();    // compId -> {canvas, ctx, tex, last}
@@ -132,14 +133,38 @@ function main() {
     const netlist = benchToNetlist(state, pressedIds());
     const b = bridge();
     const warns = checkWiring(netlist, b && typeof b.getTris === 'function' ? b.getTris() : null);
-    if (!warns.length) {
+    // Cảnh báo thạch anh (đứng trước các cảnh báo đấu nối): không có
+    // thạch anh thì chip không có xung, chương trình không chạy được.
+    // Không gắn linh kiện nào nên bấm vào không chọn gì (xem
+    // compIdFromWarning — trả null cho cảnh báo này).
+    const extra = [];
+    const cf = crystalFreq(state);
+    if (cf === null || cf === undefined) {
+      extra.push({
+        id: 'no-crystal', kind: 'warn',
+        message: 'Chưa có thạch anh — chip không có xung, chương trình không chạy được.',
+        compIds: [], terminalIds: [],
+      });
+    } else if (lastCodeXtalFreq && cf !== lastCodeXtalFreq) {
+      // Thạch anh trên bàn lệch với _XTAL_FREQ của code vừa nạp: xung
+      // nhịp thật theo thạch anh, vòng delay sinh theo _XTAL_FREQ nên
+      // delay sẽ sai tỉ lệ (vd thạch anh 4MHz mà code 20MHz thì delay
+      // thực dài gấp 5 lần).
+      extra.push({
+        id: 'xtal-mismatch', kind: 'warn',
+        message: `Thạch anh trên bàn là ${cf / 1e6} MHz nhưng code dùng _XTAL_FREQ ${lastCodeXtalFreq / 1e6} MHz — delay sẽ sai tỉ lệ.`,
+        compIds: [], terminalIds: [],
+      });
+    }
+    const all = [...extra, ...warns];
+    if (!all.length) {
       checksEl.innerHTML = '<li class="check-ok">Mạch ổn — không phát hiện vấn đề đấu nối.</li>';
       return;
     }
-    checksEl.innerHTML = warns.map((w, i) =>
+    checksEl.innerHTML = all.map((w, i) =>
       `<li><button type="button" class="check-item ${w.kind === 'short' ? 'check-short' : 'check-warn'}" data-warn="${i}">${esc(w.message)}</button></li>`).join('');
     checksEl.querySelectorAll('.check-item').forEach((btn) => btn.addEventListener('click', () => {
-      const w = warns[Number(btn.dataset.warn)];
+      const w = all[Number(btn.dataset.warn)];
       const compId = compIdFromWarning(w);
       if (compId) select({ kind: 'comp', id: compId });
     }));
@@ -147,7 +172,7 @@ function main() {
   function compIdFromWarning(w) {
     for (const id of [...(w.compIds || []), ...(w.terminalIds || [])]) {
       if (id.startsWith('PIC.')) return 'PIC1';
-      const m = id.match(/^(LED\d+|BTN\d+|POT\d+|LCD\d+|BUZ\d+|VM\d+|AM\d+|MM\d+|OSC\d+)/);
+      const m = id.match(/^(LED\d+|BTN\d+|POT\d+|LCD\d+|BUZ\d+|VM\d+|AM\d+|MM\d+|OSC\d+|SEG\d+)/);
       if (m && state.components.some((c) => c.id === m[1])) return m[1];
     }
     return null;
@@ -157,6 +182,9 @@ function main() {
   const PALETTE = [
     { type: 'led', name: 'LED', hint: 'Kéo vào lỗ breadboard', svg: '<svg viewBox="0 0 48 64"><line x1="18" y1="34" x2="18" y2="62" stroke="#94A3B8" stroke-width="3"/><line x1="30" y1="34" x2="30" y2="62" stroke="#94A3B8" stroke-width="3"/><circle cx="24" cy="22" r="14" fill="#DC2626" stroke="#991B1B" stroke-width="2"/><circle cx="20" cy="18" r="4" fill="#FCA5A5"/></svg>' },
     { type: 'resistor', name: 'Điện trở 220Ω', hint: 'Kéo vào lỗ breadboard', svg: '<svg viewBox="0 0 76 30"><line x1="0" y1="15" x2="14" y2="15" stroke="#94A3B8" stroke-width="3"/><line x1="62" y1="15" x2="76" y2="15" stroke="#94A3B8" stroke-width="3"/><rect x="14" y="7" width="48" height="16" rx="8" fill="#D9A066" stroke="#92400E" stroke-width="1.5"/><rect x="26" y="7" width="4" height="16" fill="#DC2626"/><rect x="34" y="7" width="4" height="16" fill="#DC2626"/><rect x="42" y="7" width="4" height="16" fill="#92400E"/></svg>' },
+    { type: 'capacitor', name: 'Tụ gốm', hint: 'Kéo vào lỗ breadboard — tụ nạp cho thạch anh (22pF)', svg: '<svg viewBox="0 0 48 56"><circle cx="24" cy="18" r="13" fill="#D9A066" stroke="#92400E" stroke-width="2"/><circle cx="24" cy="18" r="5" fill="#B45309"/><line x1="14" y1="29" x2="14" y2="54" stroke="#94A3B8" stroke-width="3"/><line x1="34" y1="29" x2="34" y2="54" stroke="#94A3B8" stroke-width="3"/></svg>' },
+    { type: 'crystal', name: 'Thạch anh', hint: 'Kéo vào lỗ breadboard — nối 2 chân OSC1/OSC2 của PIC', svg: '<svg viewBox="0 0 76 30"><rect x="14" y="7" width="48" height="16" rx="8" fill="#CBD5E1" stroke="#64748B" stroke-width="1.5"/><line x1="24" y1="15" x2="52" y2="15" stroke="#64748B" stroke-width="1.5"/><line x1="30" y1="23" x2="30" y2="30" stroke="#94A3B8" stroke-width="3"/><line x1="46" y1="23" x2="46" y2="30" stroke="#94A3B8" stroke-width="3"/></svg>' },
+    { type: 'sevenseg', name: 'LED 7 thanh', hint: 'Kéo vào lỗ breadboard — nối các đoạn tới chân PORT, chân chung về VCC/GND', svg: '<svg viewBox="0 0 48 64"><rect x="6" y="6" width="36" height="52" rx="4" fill="#1F2937" stroke="#0F172A" stroke-width="2"/><g stroke="#EF4444" stroke-width="3" stroke-linecap="round"><line x1="14" y1="14" x2="34" y2="14"/><line x1="14" y1="32" x2="34" y2="32"/><line x1="14" y1="50" x2="34" y2="50"/><line x1="14" y1="18" x2="14" y2="28"/><line x1="34" y1="18" x2="34" y2="28"/><line x1="14" y1="36" x2="14" y2="46"/><line x1="34" y1="36" x2="34" y2="46"/></g><circle cx="40" cy="50" r="2" fill="#EF4444"/></svg>' },
     { type: 'multimeter', name: 'Đồng hồ đo', hint: 'Kéo vào lỗ breadboard — chọn đo áp (V) hay đo dòng (A) trong popup', svg: '<svg viewBox="0 0 76 44"><rect x="6" y="4" width="64" height="28" rx="4" fill="#1E3A5F" stroke="#0F172A" stroke-width="2"/><rect x="12" y="10" width="52" height="16" rx="2" fill="#0F172A"/><text x="38" y="22" text-anchor="middle" font-family="Fira Code, monospace" font-size="10" fill="#7DD3FC">5.00 V</text><line x1="22" y1="32" x2="22" y2="42" stroke="#94A3B8" stroke-width="3"/><line x1="54" y1="32" x2="54" y2="42" stroke="#94A3B8" stroke-width="3"/></svg>' },
     { type: 'oscilloscope', name: 'Đồng hồ hiện sóng', hint: 'Kéo thả lên mặt bàn — nối dây vào cọc CH1/CH2/GND', svg: '<svg viewBox="0 0 76 44"><rect x="6" y="4" width="64" height="28" rx="4" fill="#1E3A5F" stroke="#0F172A" stroke-width="2"/><rect x="12" y="10" width="52" height="16" rx="2" fill="#0F172A"/><path d="M14 21 V15 H22 V21 H30 V15 H38 V21 H46 V15 H54 V21" fill="none" stroke="#7DD3FC" stroke-width="1.5"/><path d="M14 24 L20 19 L26 24 L32 19 L38 24 L44 19 L50 24" fill="none" stroke="#FBBF24" stroke-width="1.5"/><circle cx="22" cy="30" r="2" fill="#7DD3FC"/><circle cx="38" cy="30" r="2" fill="#FBBF24"/><circle cx="54" cy="30" r="2" fill="#0F172A" stroke="#94A3B8" stroke-width="1"/><line x1="22" y1="32" x2="22" y2="42" stroke="#94A3B8" stroke-width="3"/><line x1="38" y1="32" x2="38" y2="42" stroke="#94A3B8" stroke-width="3"/><line x1="54" y1="32" x2="54" y2="42" stroke="#94A3B8" stroke-width="3"/></svg>' },
     { type: 'button', name: 'Nút nhấn', hint: 'Kéo vào lỗ breadboard', svg: '<svg viewBox="0 0 56 56"><rect x="6" y="6" width="44" height="44" rx="6" fill="#FFFFFF" stroke="#1E3A5F" stroke-width="2"/><circle cx="28" cy="28" r="11" fill="#F1F3F5" stroke="#1E3A5F" stroke-width="2"/></svg>' },
@@ -247,6 +275,13 @@ void main() {
   let codeLoaded = false;            // đã nạp chương trình từ editor chưa
   let codeStatusSig = '';
   let codeSaveTimer = null;
+  // _XTAL_FREQ của code vừa nạp thành công (để renderChecks cảnh báo khi
+  // thạch anh trên bàn lệch với code) + cờ lần nạp gần nhất thiếu thạch
+  // anh (chip không có xung nên chương trình nạp rồi vẫn không chạy).
+  // File .hex không mang tần số nên nạp .hex thì xóa _XTAL_FREQ đã lưu.
+  let lastCodeXtalFreq = null;
+  let lastLoadNoCrystal = false;
+  const NO_CRYSTAL_MSG = 'Chưa có thạch anh trên bàn — chip không có xung, chương trình không chạy được. Thêm thạch anh (nối OSC1/OSC2) rồi nạp lại.';
 
   function setCodeWide(on) { benchView.classList.toggle('code-wide', on); }
   function setSideTab(tab) {
@@ -381,14 +416,18 @@ void main() {
     const b = bridge();
     if (!b || typeof b.getRunStatus !== 'function') return;
     const st = b.getRunStatus();
-    const sig = [st.state, st.pauseReason, st.pc, st.line, st.hexMode].join('|');
+    const sig = [st.state, st.pauseReason, st.pc, st.line, st.hexMode, lastLoadNoCrystal].join('|');
     if (!force && sig === codeStatusSig) return;
     codeStatusSig = sig;
     let curLine = null;
     if (!st.hasProgram) {
       setCodeStatus('Chưa nạp chương trình.');
     } else if (st.state === 'running') {
-      setCodeStatus(st.hexMode ? 'Đang chạy chương trình .hex…' : 'Đang chạy…');
+      // Chương trình nạp rồi nhưng không có thạch anh: runner vẫn ở trạng
+      // thái 'running' mà không chạy chu kỳ nào (clockHz = 0) — hiện
+      // cảnh báo thiếu thạch anh thay cho 'Đang chạy…' để không tưởng
+      // là chương trình đang chạy.
+      setCodeStatus(lastLoadNoCrystal ? NO_CRYSTAL_MSG : (st.hexMode ? 'Đang chạy chương trình .hex…' : 'Đang chạy…'), lastLoadNoCrystal);
     } else if (st.state === 'paused' && st.pauseReason === 'breakpoint') {
       curLine = st.line;
       setCodeStatus(`Dừng ở breakpoint dòng ${st.line ?? '?'} (địa chỉ 0x${st.pc.toString(16).toUpperCase()}). Bấm Chạy tiếp để chạy tiếp.`);
@@ -464,8 +503,13 @@ void main() {
       pruneBreakpoints();
       pushBreakpointsToCpu();
       codeLoaded = true;
+      // Ghi nhớ _XTAL_FREQ + tình trạng thiếu thạch anh của lần nạp này
+      // (renderChecks + refreshCodeStatus dùng để cảnh báo).
+      lastCodeXtalFreq = typeof r.xtalFreq === 'number' ? r.xtalFreq : null;
+      lastLoadNoCrystal = !!r.noCrystal;
+      renderChecks();
       const run = b.runProgram();
-      if (run.ok) setCodeStatus('Đang chạy…');
+      if (run.ok) setCodeStatus(r.noCrystal ? NO_CRYSTAL_MSG : 'Đang chạy…', !!r.noCrystal);
       else setCodeStatus(run.error, true);
       refreshCodeStatus(true);
     });
@@ -507,10 +551,17 @@ void main() {
       const r = b.loadHex(text);
       if (!r.ok) { setCodeStatus(codeErrorText(r.errors), true); return; }
       codeLoaded = false;
+      // File .hex không mang tần số: xóa _XTAL_FREQ của lần nạp C trước
+      // (không còn cơ sở cảnh báo lệch tần số), nhưng vẫn ghi nhớ tình
+      // trạng thiếu thạch anh của lần nạp này.
+      lastCodeXtalFreq = null;
+      lastLoadNoCrystal = !!r.noCrystal;
+      renderChecks();
       const run = b.runProgram();
       setCodeStatus(run.ok
-        ? `Đã nạp file ${f.name}: ${r.words} word — đang chạy. Breakpoint không áp dụng cho chương trình .hex.`
-        : run.error, !run.ok);
+        ? (r.noCrystal ? NO_CRYSTAL_MSG
+          : `Đã nạp file ${f.name}: ${r.words} word — đang chạy. Breakpoint không áp dụng cho chương trình .hex.`)
+        : run.error, !run.ok || !!r.noCrystal);
       refreshCodeStatus(true);
     });
     setInterval(refreshCodeStatus, 150);
@@ -545,6 +596,12 @@ void main() {
       ? state.components.find((c) => c.id === selected.id) : null;
     if (selComp && selComp.type !== 'psu' && selComp.type !== 'oscilloscope' && selComp.type !== 'pic') showHighlightForComp(selComp.id);
     else hideHighlight();
+  }
+  // Chuỗi đoạn đang sáng của 1 LED 7 thanh ('a, b, c' / 'Không đoạn nào sáng')
+  // — dùng chung cho popup Inspector lúc mở và vòng poll cập nhật live.
+  function segOnText(on) {
+    const list = SEVEN_SEG_TERMS.filter((t) => on && on[t]);
+    return list.length ? list.join(', ') : 'Không đoạn nào sáng';
   }
   function renderInspector() {
     if (!inspectorEl) return;
@@ -651,6 +708,34 @@ void main() {
         body = `<label class="bench-insp-label" for="inspResVal">Giá trị điện trở (Ω)</label>
           <input class="input" id="inspResVal" type="number" min="1" max="10000000" step="1" value="${comp.props?.value ?? 220}">
           <p class="sub">Điện trở nối 2 strip của nó — dùng nối tiếp với LED để hạn dòng.</p>`;
+      } else if (comp.type === 'capacitor') {
+        body = `<label class="bench-insp-label" for="inspCapVal">Giá trị tụ (pF)</label>
+          <input class="input" id="inspCapVal" type="number" min="1" step="1" value="${comp.props?.value ?? 22}">
+          <p class="sub">Tụ gốm hở mạch với DC — chỉ làm tụ nạp cho mạch dao động thạch anh, không ảnh hưởng dòng DC.</p>`;
+      } else if (comp.type === 'crystal') {
+        const freq = comp.props?.freq ?? 4000000;
+        body = `<label class="bench-insp-label" for="inspXtalFreq">Tần số thạch anh</label>
+          <select class="select" id="inspXtalFreq">${[4000000, 8000000, 20000000].map((f) => `<option value="${f}"${freq === f ? ' selected' : ''}>${f / 1e6} MHz</option>`).join('')}</select>
+          <p class="sub">Xung nhịp của chip lấy từ thạch anh này. Không có thạch anh thì chip không chạy.</p>`;
+      } else if (comp.type === 'sevenseg') {
+        // Số đang hiện lấy từ bridge ngay lúc mở popup; vòng poll cập
+        // nhật live 2 ô này (xem updateInspectorSeg), không vẽ lại popup.
+        const b = bridge();
+        const segs = b && typeof b.getSevenSegStates === 'function' ? b.getSevenSegStates() : null;
+        const s = segs ? segs.find((x) => x.id === comp.id) : null;
+        const digit = s ? sevenSegDigit(s.on) : null;
+        const common = comp.props?.common === 'anode' ? 'anode' : 'cathode';
+        body = `<label class="bench-insp-label" for="inspSegCommon">Chân chung</label>
+          <select class="select" id="inspSegCommon">
+            <option value="cathode"${common === 'cathode' ? ' selected' : ''}>Chung cathode (đoạn sáng khi mức 1, chung về GND)</option>
+            <option value="anode"${common === 'anode' ? ' selected' : ''}>Chung anode (đoạn sáng khi mức 0, chung về VCC)</option>
+          </select>
+          <label class="bench-insp-label">Đang hiện</label>
+          <div class="bench-conns">
+            <div class="bench-conn"><span>Đang sáng</span><span id="inspSegOn">${esc(segOnText(s ? s.on : null))}</span></div>
+            <div class="bench-conn"><span>Hiện số</span><span id="inspSegDigit">${digit === null ? '—' : esc(digit)}</span></div>
+          </div>
+          <p class="sub">Mỗi đoạn là 1 LED nối về chân chung: đoạn sáng khi đoạn và chân chung ở mức ngược nhau (xem chế độ chân chung ở trên). Số cập nhật live khi mạch hoặc chân PIC đổi trạng thái.</p>`;
       } else if (comp.type === 'led') {
         // Ô chọn màu luôn hiện đúng màu thật của LED: nếu màu hiện tại
         // không nằm trong bảng màu (vd LED Lab 2 cũ màu #16A34A, hoặc
@@ -797,6 +882,30 @@ void main() {
           save(); rebuildAll(); renderInspector();
           setStatus('Đã đổi ' + compLabel(comp) + ' thành ' + v + 'Ω.');
         } else { resInput.value = comp.props?.value ?? 220; }
+      });
+      const capInput = inspectorEl.querySelector('#inspCapVal');
+      if (capInput) capInput.addEventListener('change', () => {
+        const v = Math.round(Number(capInput.value));
+        if (v >= 1) {
+          comp.props = { ...(comp.props || {}), value: v };
+          save(); syncToCpu(); renderInspector();
+          setStatus('Đã đổi ' + compLabel(comp) + ' thành ' + v + 'pF.');
+        } else { capInput.value = comp.props?.value ?? 22; }
+      });
+      const xtalSel = inspectorEl.querySelector('#inspXtalFreq');
+      if (xtalSel) xtalSel.addEventListener('change', () => {
+        const f = Number(xtalSel.value);
+        if (![4000000, 8000000, 20000000].includes(f)) { xtalSel.value = comp.props?.freq ?? 4000000; return; }
+        comp.props = { ...(comp.props || {}), freq: f };
+        save(); syncToCpu(); renderInspector();
+        setStatus('Đã đổi ' + compLabel(comp) + ' thành ' + (f / 1e6) + ' MHz — nạp lại chương trình để áp dụng xung mới.');
+      });
+      const segSel = inspectorEl.querySelector('#inspSegCommon');
+      if (segSel) segSel.addEventListener('change', () => {
+        const common = segSel.value === 'anode' ? 'anode' : 'cathode';
+        comp.props = { ...(comp.props || {}), common };
+        save(); syncToCpu(); renderInspector();
+        setStatus('Đã đổi ' + compLabel(comp) + ' sang chung ' + common + '.');
       });
       const ledSel = inspectorEl.querySelector('#inspLedColor');
       if (ledSel) ledSel.addEventListener('change', () => {
@@ -1481,6 +1590,77 @@ void main() {
       dotB.rotation.x = Math.PI / 2;
       dotB.position.set(8.89, 11, 6.15);
       g.add(dotB);
+    } else if (comp.type === 'capacitor') {
+      // Tụ gốm: đĩa tròn đứng trên cạnh giữa 2 chân (như bánh xe nhỏ),
+      // màu nâu vàng gốm. Chân đã vẽ ở vòng legOffsets phía trên.
+      const disc = new THREE.Mesh(new THREE.CylinderGeometry(3, 3, 1.5, 24), stdMat(0xD9A066));
+      disc.rotation.x = Math.PI / 2;
+      disc.position.set(5.08, 8, 0);
+      disc.castShadow = true;
+      g.add(disc);
+    } else if (comp.type === 'crystal') {
+      // Thạch anh HC-49/U: vỏ kim loại bạc nằm ngang dọc theo cột, dài
+      // 11mm, đường kính 4,5mm, ôm trên 2 chân cách nhau 1 cột. Chân đã
+      // vẽ ở vòng legOffsets phía trên.
+      const can = new THREE.Mesh(new THREE.CylinderGeometry(2.25, 2.25, 11, 16), stdMat(0xCBD5E1, { metalness: 0.8, roughness: 0.3 }));
+      can.rotation.z = Math.PI / 2;
+      can.position.set(1.27, 8, 0);
+      can.castShadow = true;
+      g.add(can);
+    } else if (comp.type === 'sevenseg') {
+      // LED 7 thanh: thân chữ nhật tối, mặt trên có 7 đoạn + chấm thập
+      // phân, mỗi đoạn là 1 mesh riêng với material phát sáng riêng để
+      // vòng poll bật/tắt từng đoạn (như LED). Vị trí thân + đoạn tính
+      // từ chính offs của chân (cùng khung local với vòng legOffsets
+      // phía trên) nên thân luôn ôm đúng 2 hàng chân ở mọi góc xoay;
+      // chân cao 7mm, đáy thân ở y=6 nên chân vẫn lộ 6mm dưới thân
+      // (như đồng hồ đo chui 1mm vào thân).
+      const zOf = (dr) => rowZ(anchorR + dr, compRows) - rowZ(anchorR, compRows);
+      const posOf = (o) => ({ x: o.dc * PITCH, z: zOf(o.dr) });
+      const xs = offs.map((o) => o.dc * PITCH), zs = offs.map((o) => zOf(o.dr));
+      const cx = (Math.min(...xs) + Math.max(...xs)) / 2;
+      const cz = (Math.min(...zs) + Math.max(...zs)) / 2;
+      const body = new THREE.Mesh(
+        new THREE.BoxGeometry(Math.max(...xs) - Math.min(...xs) + 2.5, 6, Math.max(...zs) - Math.min(...zs) + 2.5),
+        stdMat(0x1F2937, { roughness: 0.5 }));
+      body.position.set(cx, 9, cz);
+      body.castShadow = true;
+      g.add(body);
+      // Hướng đoạn: u = dọc hàng chân trên (a -> dp), v = từ hàng trên
+      // xuống hàng dưới (a -> e). Đoạn ngang dài theo u, đoạn dọc dài
+      // theo v; góc xoay của mesh tính từ hướng đó nên đúng ở mọi rot.
+      const aOff = offs.find((o) => o.term === 'a');
+      const dpOff = offs.find((o) => o.term === 'dp');
+      const eOff = offs.find((o) => o.term === 'e');
+      const aPos = aOff ? posOf(aOff) : { x: 0, z: 0 };
+      const u = dpOff ? { x: posOf(dpOff).x - aPos.x, z: posOf(dpOff).z - aPos.z } : { x: 10.16, z: 0 };
+      const v = eOff ? { x: posOf(eOff).x - aPos.x, z: posOf(eOff).z - aPos.z } : { x: 0, z: 15.24 };
+      const segY = 12.35;
+      const mats = {};
+      const mkSeg = (term, fu, fv, len, dir) => {
+        const mat = new THREE.MeshStandardMaterial({ color: 0x7F1D1D, emissive: new THREE.Color(0xDC2626), emissiveIntensity: 0.12, roughness: 0.3 });
+        const m = new THREE.Mesh(new THREE.BoxGeometry(len, 0.6, 1.8), mat);
+        m.position.set(aPos.x + u.x * fu + v.x * fv, segY, aPos.z + u.z * fu + v.z * fv);
+        // Xoay mesh để cạnh dài (+x local) trùng hướng dir.
+        m.rotation.y = Math.atan2(-dir.z, dir.x);
+        g.add(m);
+        mats[term] = mat;
+      };
+      // a trên cùng, g giữa, d dưới cùng (ngang, dài theo u); f/b trên,
+      // e/c dưới (dọc, dài theo v); dp là chấm tròn góc dưới-phải.
+      mkSeg('a', 0.5, 0.1, 7, u);
+      mkSeg('g', 0.5, 0.5, 7, u);
+      mkSeg('d', 0.5, 0.9, 7, u);
+      mkSeg('f', 0.12, 0.3, 5, v);
+      mkSeg('b', 0.88, 0.3, 5, v);
+      mkSeg('e', 0.12, 0.7, 5, v);
+      mkSeg('c', 0.88, 0.7, 5, v);
+      const dpMat = new THREE.MeshStandardMaterial({ color: 0x7F1D1D, emissive: new THREE.Color(0xDC2626), emissiveIntensity: 0.12, roughness: 0.3 });
+      const dp = new THREE.Mesh(new THREE.CylinderGeometry(0.9, 0.9, 0.6, 12), dpMat);
+      dp.position.set(aPos.x + u.x * 1.0 + v.x * 0.88, segY, aPos.z + u.z * 1.0 + v.z * 0.88);
+      g.add(dp);
+      mats.dp = dpMat;
+      segMats.set(comp.id, mats);
     }
     return g;
   }
@@ -1681,7 +1861,7 @@ void main() {
     compMeshes.clear();
     psuHitMeshes.length = 0;
     scopeHitMeshes.length = 0;
-    ledMats.clear(); lcdTexs.clear(); meterTexs.clear(); scopeTexs.clear(); buzzerMats.clear(); btnTops.clear();
+    ledMats.clear(); lcdTexs.clear(); meterTexs.clear(); scopeTexs.clear(); buzzerMats.clear(); btnTops.clear(); segMats.clear();
     for (const comp of state.components) {
       const g = buildComponentMesh(comp);
       compRoot.add(g);
@@ -2397,6 +2577,23 @@ void main() {
             updateInspectorScope(byId);
           }
         }
+        if (typeof b.getSevenSegStates === 'function') {
+          let segStates = null;
+          try { segStates = b.getSevenSegStates(); } catch { segStates = null; }
+          if (segStates) {
+            // Đoạn nào sáng thì phát sáng đỏ mạnh, đoạn tắt thì tối lại
+            // (như LED: emissiveIntensity 1.8 khi sáng, 0.12 khi tắt).
+            for (const s of segStates) {
+              const mats = segMats.get(s.id);
+              if (!mats) continue;
+              for (const t of SEVEN_SEG_TERMS) {
+                const m = mats[t];
+                if (m) m.emissiveIntensity = s.on && s.on[t] ? 1.8 : 0.12;
+              }
+            }
+            updateInspectorSeg(segStates);
+          }
+        }
       } catch { /* bridge chưa sẵn: bỏ qua lần này */ }
     }, 150);
   }
@@ -2433,6 +2630,22 @@ void main() {
     const ch2El = inspectorEl.querySelector('#inspScopeCH2');
     if (ch1El) ch1El.textContent = formatVolts(last[0]);
     if (ch2El) ch2El.textContent = formatVolts(last[1]);
+  }
+  // Inspector đang mở trên 1 LED 7 thanh thì cập nhật readout live (chỉ
+  // đổi text 2 ô "Đang sáng" / "Hiện số" đã có, không render lại
+  // Inspector). Không có trạng thái (vd chưa nối CPU) thì hiện "—".
+  function updateInspectorSeg(segStates) {
+    if (!selected || selected.kind !== 'comp') return;
+    const comp = state.components.find((c) => c.id === selected.id);
+    if (!comp || comp.type !== 'sevenseg') return;
+    const s = (segStates || []).find((x) => x.id === comp.id);
+    const onEl = inspectorEl.querySelector('#inspSegOn');
+    const digitEl = inspectorEl.querySelector('#inspSegDigit');
+    if (onEl) onEl.textContent = s ? segOnText(s.on) : '—';
+    if (digitEl) {
+      const digit = s ? sevenSegDigit(s.on) : null;
+      digitEl.textContent = digit === null ? '—' : digit;
+    }
   }
 
   // --- Nút chế độ xem / dọn bàn ---

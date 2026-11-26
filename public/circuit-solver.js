@@ -15,8 +15,8 @@
 import {
   DEFAULT_SIZE, legsFor, stripKey, parseHole, parsePsuPost, parseScopePost, psuVolts,
   benchToNetlist, normalizeWireEnd, meterMode,
-} from './bench-model.js?v=20261125aw';
-import { resolvePeripherals, ledStates, PIC_PINS } from './wiring.js?v=20261125r';
+} from './bench-model.js?v=20261125ba';
+import { resolvePeripherals, ledStates, sevenSegStates, SEVEN_SEG_TERMS, PIC_PINS } from './wiring.js?v=20261125ba';
 
 export const LED_FORWARD_VOLTS = 2.0;  // sụt áp thuận LED khi sáng
 export const LED_SERIES_OHMS = 10;     // điện trở nối tiếp trong mô hình LED
@@ -169,6 +169,14 @@ export function solveCircuit(state, cpu, pressedIds = []) {
   // (2V + 10Ω); LED tắt là hở mạch.
   const mapping = resolvePeripherals(benchToNetlist(state, pressedIds));
   const ledOn = new Map(ledStates(cpu, mapping).map((s) => [s.id, s.on]));
+  // Đoạn nào của LED 7 thanh đang sáng (theo sevenSegStates): mỗi đoạn
+  // sáng là 1 nhánh LED (2V + 10Ω) giữa node của đoạn và node chân chung.
+  const segOn = new Map();
+  for (const s of sevenSegStates(cpu, mapping)) {
+    for (const [t, lit] of Object.entries(s.on)) {
+      if (lit) segOn.set(s.id + '.' + t, true);
+    }
+  }
   const psu = state.components.find((c) => c.type === 'psu');
   const psuV = psuVolts(psu);
 
@@ -230,6 +238,24 @@ export function solveCircuit(state, cpu, pressedIds = []) {
       const aux = 'AUX:LED:' + comp.id;
       conductances.push({ nodeA: nA, nodeB: aux, g: 1 / LED_SERIES_OHMS, key: comp.id, kind: 'led' });
       addVSource(aux, nK, LED_FORWARD_VOLTS, comp.id, 'led');
+    } else if (comp.type === 'sevenseg') {
+      // 8 đoạn, mỗi đoạn sáng là 1 nhánh LED (2V + 10Ω) giữa node của
+      // đoạn và node chân chung. Chung cathode: dòng chạy từ đoạn
+      // (anode) về COM (cathode); chung anode: từ COM (anode) về đoạn
+      // (cathode). Đoạn tắt là hở mạch (không có nhánh).
+      const common = comp.props?.common === 'anode' ? 'anode' : 'cathode';
+      const nCom = nets.nodeOfTerm(comp.id, 'COM');
+      if (!nCom) continue; // chân chung chưa nối: không đoạn nào sáng được
+      for (const t of SEVEN_SEG_TERMS) {
+        if (!segOn.get(comp.id + '.' + t)) continue;
+        const nSeg = nets.nodeOfTerm(comp.id, t);
+        if (!nSeg || nSeg === nCom) continue;
+        const aux = 'AUX:SEG:' + comp.id + '.' + t;
+        const nodeP = common === 'cathode' ? nSeg : nCom;
+        const nodeN = common === 'cathode' ? nCom : nSeg;
+        conductances.push({ nodeA: nodeP, nodeB: aux, g: 1 / LED_SERIES_OHMS, key: comp.id + '.' + t, kind: 'led' });
+        addVSource(aux, nodeN, LED_FORWARD_VOLTS, comp.id + '.' + t, 'led');
+      }
     } else if (comp.type === 'multimeter' && meterMode(comp) === 'A') {
       // Chế độ A: nguồn áp 0V giữa 2 chân P/N (dòng đo P -> N). Chế độ V
       // không có nhánh (trở kháng vô cùng). kind 'ammeter' giữ nguyên để
@@ -441,6 +467,44 @@ export function scopeVoltages(state, cpu, pressedIds = []) {
     out.push({ id: comp.id, ch1: readCh('CH1'), ch2: readCh('CH2') });
   }
   return out;
+}
+
+// ---------------------------------------------------------------------------
+// Trạng thái đoạn của mọi LED 7 thanh trên bàn: [{id, common, on: {a, b,
+// c, d, e, f, g, dp}}] (xem sevenSegStates trong wiring.js). Dùng cho
+// màn hình 3D (đoạn nào sáng thì phát sáng) và Inspector (hiện "Đang
+// sáng: a, b, c" / số đang hiện). Không cần solver MNA: trạng thái đoạn
+// tính từ mức logic của net (chân PIC output / VCC / GND), như ledStates.
+// ---------------------------------------------------------------------------
+export function sevenSegReadings(state, cpu, pressedIds = []) {
+  const mapping = resolvePeripherals(benchToNetlist(state, pressedIds));
+  return sevenSegStates(cpu, mapping);
+}
+
+// Chuyển trạng thái đoạn đang sáng thành chữ số đang hiện (nếu khớp mẫu
+// 7 đoạn chuẩn): a–g theo bảng mã; dp không tính vào số. Trả '0'–'9',
+// 'A'–'F' khi khớp, null khi không phải số/chữ hex (vd chỉ sáng vài đoạn
+// rời). Hàm thuần để test được ở Node và để Inspector hiện gọn.
+export function sevenSegDigit(on) {
+  if (!on) return null;
+  const key = ['a', 'b', 'c', 'd', 'e', 'f', 'g'].filter((t) => on[t]).sort().join('');
+  if (key === 'abcdef') return '0';
+  if (key === 'bc') return '1';
+  if (key === 'abdeg') return '2';
+  if (key === 'abcdg') return '3';
+  if (key === 'bcfg') return '4';
+  if (key === 'acdfg') return '5';
+  if (key === 'acdefg') return '6';
+  if (key === 'abc') return '7';
+  if (key === 'abcdefg') return '8';
+  if (key === 'abcdfg') return '9';
+  if (key === 'abcefg') return 'A';
+  if (key === 'cdefg') return 'b';
+  if (key === 'adef') return 'C';
+  if (key === 'bcdeg') return 'd';
+  if (key === 'adefg') return 'E';
+  if (key === 'aefg') return 'F';
+  return null;
 }
 
 

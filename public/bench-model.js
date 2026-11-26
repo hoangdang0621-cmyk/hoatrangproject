@@ -331,6 +331,27 @@ export const LEG_LAYOUTS = {
   // Mode 'A' (đo dòng): 0Ω, nối 2 strip như dây (xem buildBenchNets),
   // dòng đo từ P sang N. Mode nằm trong props.mode ('V' mặc định).
   multimeter: [{ term: 'P', dc: 0, dr: 0 }, { term: 'N', dc: 4, dr: 0 }],
+  // Tụ gốm: 2 chân như điện trở (cách 4 cột). Hở mạch với DC — không
+  // nối 2 strip trong netlist (xem buildBenchNets), chỉ là tụ nạp cho
+  // mạch dao động thạch anh.
+  capacitor: [{ term: 'L1', dc: 0, dr: 0 }, { term: 'L2', dc: 4, dr: 0 }],
+  // Thạch anh: 2 chân OSC1/OSC2, cách nhau 1 cột (nối 2 chân OSC kề
+  // nhau của PIC). Hở mạch với DC như tụ gốm; tần số của nó là xung
+  // nhịp cho CPU (xem crystalFreq).
+  crystal: [{ term: 'OSC1', dc: 0, dr: 0 }, { term: 'OSC2', dc: 1, dr: 0 }],
+  // LED 7 thanh: gói DIP 2 hàng chân (như chip PIC nhưng nhỏ hơn).
+  // Hàng trên (dr 0): a, b, c, d, dp. Hàng dưới (dr 5): e, f, g, COM
+  // (chân chung). 2 hàng CÁCH NHAU 5 HÀNG (khác đoạn strip) để chân
+  // hàng trên và hàng dưới cùng cột không bị nối tắt qua strip (vd chân
+  // a ở a10 và chân e ở f10 phải khác strip). Mỗi đoạn là 1 LED nối về
+  // chân chung (xem solver).
+  sevenseg: [
+    { term: 'a', dc: 0, dr: 0 }, { term: 'b', dc: 1, dr: 0 },
+    { term: 'c', dc: 2, dr: 0 }, { term: 'd', dc: 3, dr: 0 },
+    { term: 'dp', dc: 4, dr: 0 },
+    { term: 'e', dc: 0, dr: 5 }, { term: 'f', dc: 1, dr: 5 },
+    { term: 'g', dc: 2, dr: 5 }, { term: 'COM', dc: 3, dr: 5 },
+  ],
   // Đồng hồ hiện sóng KHÔNG còn trong bảng chân: nó là linh kiện NGOÀI
   // BÀN (như khối nguồn), ngồi trên mặt bàn, nối dây vào 3 cọc CH1/CH2/GND
   // ở mặt trước thân máy (xem parseScopePost/scopePostPos ở dưới). Trở
@@ -541,7 +562,10 @@ export function buildBenchNets(state, pressedIds = []) {
     if (comp.type === 'multimeter') continue;
     // Đồng hồ hiện sóng cũng là quan sát thụ động (trở kháng vô cùng):
     // không thêm terminal vào netlist (như multimeter chế độ V).
-    if (comp.type === 'oscilloscope') continue;
+    // Tụ gốm và thạch anh cũng vậy: hở mạch với DC, không nối 2 strip
+    // của nó trong netlist (chúng chỉ là tụ nạp / nguồn xung cho mạch
+    // dao động, không phải nhánh dẫn).
+    if (comp.type === 'oscilloscope' || comp.type === 'capacitor' || comp.type === 'crystal') continue;
     for (const leg of legs) {
       const key = leg.hole ? stripKey(leg.hole, size) : null;
       if (!key) continue;
@@ -721,7 +745,7 @@ export function scopePostPos(state, id) {
 // hardcode ở đây, không lấy từ bảng chân nữa).
 export const SCOPE_LEG_DC_OLD = { CH1: 0, CH2: 2, GND: 4 };
 
-const KIND_LABEL = { led: 'LED', button: 'Nút', pot: 'Chiết áp', lcd: 'LCD', buzzer: 'Còi', multimeter: 'Đồng hồ đo', oscilloscope: 'Đồng hồ hiện sóng' };
+const KIND_LABEL = { led: 'LED', button: 'Nút', pot: 'Chiết áp', lcd: 'LCD', buzzer: 'Còi', multimeter: 'Đồng hồ đo', oscilloscope: 'Đồng hồ hiện sóng', capacitor: 'Tụ gốm', crystal: 'Thạch anh', sevenseg: 'LED 7 thanh' };
 export function compLabel(comp) {
   const n = comp.id.replace(/^[A-Z]+/, '');
   if (comp.type === 'pic') return 'PIC16F877A';
@@ -738,12 +762,18 @@ export function benchToNetlist(state, pressedIds = []) {
     // không đưa vào netlist (tránh componentTerminals trong wiring.js
     // thiếu định nghĩa cho loại này). Đồng hồ đo ở chế độ A vẫn nối mạch
     // qua buildBenchNets (nối 2 strip như dây); chế độ V và hiện sóng
-    // không nối gì.
-    if (comp.type === 'pic' || comp.type === 'psu' || comp.type === 'resistor' || comp.type === 'multimeter' || comp.type === 'oscilloscope') continue;
+    // không nối gì. Tụ gốm và thạch anh cũng không đưa vào netlist (hở
+    // mạch với DC); xung nhịp lấy từ crystalFreq(state), không qua netlist.
+    if (comp.type === 'pic' || comp.type === 'psu' || comp.type === 'resistor' || comp.type === 'multimeter' || comp.type === 'oscilloscope' || comp.type === 'capacitor' || comp.type === 'crystal') continue;
     const c = {
       id: comp.id, kind: comp.type, label: compLabel(comp),
       x: 0, y: 0, fixed: !!comp.fixed,
     };
+    if (comp.type === 'sevenseg') {
+      // Chân chung của LED 7 thanh: 'cathode' (đoạn sáng khi mức 1,
+      // chung về GND) hoặc 'anode' (đoạn sáng khi mức 0, chung về VCC).
+      c.common = comp.props?.common === 'anode' ? 'anode' : 'cathode';
+    }
     if (comp.type === 'led') {
       // LED có điện trở nối tiếp nếu net của anode chứa strip của 1 điện trở,
       // hoặc điện trở nằm sau 1 công tắc (nút bấm) đang mở: anode nối 1 đầu
@@ -782,7 +812,7 @@ export function benchToNetlist(state, pressedIds = []) {
 // ---------------------------------------------------------------------------
 // Id linh kiện mới (khớp mẫu wiring.js: LED0, BTN0, POT0, LCD0, BUZ0, R0).
 // ---------------------------------------------------------------------------
-const ID_PREFIX = { led: 'LED', resistor: 'R', button: 'BTN', pot: 'POT', lcd: 'LCD', buzzer: 'BUZ', psu: 'PSU', multimeter: 'MM', oscilloscope: 'OSC' };
+const ID_PREFIX = { led: 'LED', resistor: 'R', button: 'BTN', pot: 'POT', lcd: 'LCD', buzzer: 'BUZ', psu: 'PSU', multimeter: 'MM', oscilloscope: 'OSC', capacitor: 'C', crystal: 'X', sevenseg: 'SEG' };
 export function nextComponentId(state, type) {
   const pre = ID_PREFIX[type] || 'C';
   let n = -1;
@@ -799,7 +829,41 @@ export function defaultProps(type) {
   if (type === 'pot') return { pct: 0 };
   if (type === 'psu') return { volts: PSU_VOLTS_DEFAULT };
   if (type === 'multimeter') return { mode: 'V' };
+  if (type === 'capacitor') return { value: 22 }; // pF (tụ nạp thạch anh)
+  if (type === 'crystal') return { freq: 4000000 }; // Hz
+  if (type === 'sevenseg') return { common: 'cathode' }; // 'cathode' | 'anode'
   return {};
+}
+
+// ---------------------------------------------------------------------------
+// Thạch anh: tần số dao động (Hz) của thạch anh đầu tiên trên bàn, hoặc
+// null nếu không có thạch anh. Đây là xung nhịp thật cho CPU — không có
+// thạch anh thì chip không có xung, chương trình không chạy (xem app.js
+// loadC). _XTAL_FREQ trong code C chỉ dùng để sinh vòng delay, không phải
+// xung nhịp.
+// ---------------------------------------------------------------------------
+export const CRYSTAL_FREQS = [4000000, 8000000, 20000000]; // 4 / 8 / 20 MHz
+export function crystalFreq(state) {
+  const x = (state.components || []).find((c) => c.type === 'crystal');
+  if (!x) return null;
+  const f = Number(x.props?.freq);
+  return Number.isFinite(f) && f > 0 ? f : null;
+}
+// Chuẩn hóa props của 3 loại mới khi đọc state đã lưu: tụ phải là số
+// pF dương, thạch anh phải là 1 trong 3 tần số cho phép, LED 7 thanh
+// common chỉ nhận 'cathode'/'anode'. Loại khác giữ nguyên props.
+export function cleanNewProps(type, props) {
+  const p = { ...defaultProps(type), ...(props || {}) };
+  if (type === 'capacitor') {
+    const v = Number(p.value);
+    p.value = Number.isFinite(v) && v > 0 ? v : 22;
+  } else if (type === 'crystal') {
+    const f = Number(p.freq);
+    p.freq = CRYSTAL_FREQS.includes(f) ? f : 4000000;
+  } else if (type === 'sevenseg') {
+    p.common = p.common === 'anode' ? 'anode' : 'cathode';
+  }
+  return p;
 }
 
 // Trạng thái bàn mặc định theo size: chip PIC cắm sẵn (căn giữa board),
@@ -921,7 +985,13 @@ export function sanitizeState(raw) {
     if (!LEG_LAYOUTS[type] || !parseHole(anchor, size)) continue;
     const chk = canPlace({ size, components }, type, anchor, c.rot || 0);
     if (!chk.ok) continue;
-    components.push({ id: c.id, type, anchor, rot: c.rot || 0, props: Object.keys(props).length ? props : defaultProps(type) });
+    // Tụ/thạch anh/LED 7 thanh: chuẩn hóa props (tụ pF dương, thạch
+    // anh đúng 1 trong 3 tần số, common chỉ cathode/anode); loại khác
+    // giữ nguyên props đã lưu (thiếu thì lấy mặc định).
+    const finalProps = (type === 'capacitor' || type === 'crystal' || type === 'sevenseg')
+      ? cleanNewProps(type, props)
+      : (Object.keys(props).length ? props : defaultProps(type));
+    components.push({ id: c.id, type, anchor, rot: c.rot || 0, props: finalProps });
   }
   if (!components.some((c) => c.type === 'pic')) {
     components.unshift({ id: 'PIC1', type: 'pic', anchor: picAnchor(size), rot: 0, fixed: true, props: {} });
@@ -1018,7 +1088,10 @@ export function pruneStateForSize(state, newSize) {
     if (!LEG_LAYOUTS[type] || !parseHole(comp.anchor, size)) { removed.components.push(comp.id); continue; }
     const chk = canPlace(probe, type, comp.anchor, comp.rot || 0);
     if (!chk.ok) { removed.components.push(comp.id); continue; }
-    keptComponents.push({ id: comp.id, type, anchor: comp.anchor, rot: comp.rot || 0, props: Object.keys(props).length ? props : defaultProps(type) });
+    const finalProps = (type === 'capacitor' || type === 'crystal' || type === 'sevenseg')
+      ? cleanNewProps(type, props)
+      : (Object.keys(props).length ? props : defaultProps(type));
+    keptComponents.push({ id: comp.id, type, anchor: comp.anchor, rot: comp.rot || 0, props: finalProps });
   }
   const keptWires = [];
   const seen = new Set();
