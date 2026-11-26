@@ -118,5 +118,5 @@ window.HoaTrangBenchBridge = {
   pauseProgram: () => runner.pause(),
   stepProgram: () => runner.stepOnce(),
   setBreakpointLines: (lines) => runner.setBreakpointLines(lines),
-  getRunStatus: () => runner.getStatus(),
+  getRunStatus: () => ({ ...runner.getStatus(), cycles: cpu.cycles }),
 };

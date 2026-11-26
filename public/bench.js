@@ -376,6 +376,24 @@ void main() {
     const b = bridge();
     if (!b || typeof b.getRunStatus !== 'function') return;
     const st = b.getRunStatus();
+    // DEBUG tạm (gỡ sau khi sửa xong lỗi "Nạp & chạy không chạy"): hiện số
+    // chu kỳ CPU + nội dung LCD + trạng thái LED để biết CPU có đang chạy
+    // thật không mà không cần mở DevTools. Cập nhật mỗi lần hẹn giờ.
+    const dbgEl = $('benchCodeDebug');
+    if (dbgEl) {
+      let lcdTxt = '?', lcdOk = '?', ledTxt = '?';
+      try {
+        if (typeof b.getLcd === 'function') {
+          const lcd = b.getLcd();
+          lcdTxt = JSON.stringify(lcd.lines);
+          lcdOk = lcd.complete ? 'du-day' : 'THIEU-DAY';
+        }
+        if (typeof b.getLedStates === 'function') {
+          ledTxt = b.getLedStates().map((s) => `${s.id}:${s.on ? 'SANG' : 'tat'}`).join(' ') || 'khong-co-led';
+        }
+      } catch {}
+      dbgEl.textContent = `DEBUG tạm: state=${st.state} cycles=${st.cycles ?? '?'} pc=0x${(st.pc ?? 0).toString(16).toUpperCase()} LCD[${lcdOk}]=${lcdTxt} LED ${ledTxt}`;
+    }
     const sig = [st.state, st.pauseReason, st.pc, st.line, st.hexMode].join('|');
     if (!force && sig === codeStatusSig) return;
     codeStatusSig = sig;
