@@ -3491,7 +3491,7 @@ function measureOnHalf(cpu, isOn) {
 
 // (aa-a) Lab 1 C: compile ok, LED0 SÁNG rồi TẮT, nửa chu kỳ ~500000 (±20%)
 {
-  check('(aa-a) C_VERSION = 20261125ao', C_VERSION === '20261125ao', String(C_VERSION));
+  check('(aa-a) C_VERSION = 20261125ap', C_VERSION === '20261125ap', String(C_VERSION));
   const { r, cpu, mapping } = runLabC(0, LAB1_C, 100000);
   const led0 = () => ledStates(cpu, mapping).find((s) => s.id === 'LED0').on;
   check('(aa-a) Lab 1 C: compileC ok, 0 lỗi, có program',
@@ -3610,8 +3610,8 @@ function measureOnHalf(cpu, isOn) {
   check('(aa-e) __delay_ms với biến: báo cần hằng số, không sinh program',
     !eDelayVar.ok && eDelayVar.program === null && eDelayVar.errors.some((e) => e.message.includes('hằng số')),
     JSON.stringify(eDelayVar.errors));
-  const ePtr = compileC(`int *p;\nvoid main(){ TRISB = 0; PORTB = 1; }`);
-  check('(aa-e) con trỏ: báo "chưa hỗ trợ con trỏ", không sinh program',
+  const ePtr = compileC(`char **p;\nvoid main(){ TRISB = 0; PORTB = 1; }`);
+  check('(aa-e) con trỏ nhiều cấp (**p): báo "chưa hỗ trợ con trỏ", không sinh program',
     !ePtr.ok && ePtr.program === null && ePtr.errors.some((e) => e.message.includes('chưa hỗ trợ con trỏ')),
     JSON.stringify(ePtr.errors));
 }
@@ -3714,6 +3714,370 @@ void main(){
   check('(ab-d) code mẫu Lab 1 không chứa hợp ngữ cũ: "BSF PORTB", "BANKSEL", "ORG 0"',
     !LABS[0].code.includes('BSF PORTB') && !LABS[0].code.includes('BANKSEL') && !LABS[0].code.includes('ORG 0'),
     LABS[0].code.split('\n').slice(0, 3).join(' / '));
+}
+
+// ===========================================================================
+// (ac) CON TRỎ 1 CẤP (v=20261125ap): tham số con trỏ, *p, &x, p[i], p+n,
+// p++, p--, p+=, so sánh, p-q, cast con trỏ; lỗi **p, p->x, mảng con trỏ.
+// Mọi test chạy trên CPU thật, assert giá trị RAM đọc lại qua PORTB/PORTD.
+// ===========================================================================
+// (ac-a) Tham số con trỏ + pattern[i]; truyền mảng vào con trỏ (decay);
+// &a[i] + *p ghi
+{
+  const tGet = runC(`unsigned char getAt(unsigned char *p, unsigned char i){ return p[i]; }\nvoid main(){ TRISB = 0; unsigned char a[4] = {10, 20, 30, 40}; PORTB = getAt(a, 2); }`, 5000);
+  check('(ac-a) tham số con trỏ + p[i]: getAt(a,2)=30 (mảng truyền vào decay thành địa chỉ)',
+    tGet.r.ok && tGet.cpu.readPort(1) === 30,
+    JSON.stringify(tGet.r.errors) + ` B=${tGet.cpu.readPort(1)}`);
+  const tSum = runC(`const unsigned char pat[8] = {1, 2, 3, 4, 5, 6, 7, 8};\nunsigned char sum(unsigned char *p){ unsigned char s = 0; unsigned char i; for (i = 0; i < 8; i++) s += p[i]; return s; }\nvoid main(){ TRISB = 0; PORTB = sum(pat); }`, 5000);
+  check('(ac-a) vòng lặp pattern[i] kiểu LCD_CreateChar: sum(1..8)=36',
+    tSum.r.ok && tSum.cpu.readPort(1) === 36,
+    JSON.stringify(tSum.r.errors) + ` B=${tSum.cpu.readPort(1)}`);
+  const tPut = runC(`void put(unsigned char *p, unsigned char v){ *p = v; }\nvoid main(){ TRISB = 0; unsigned char a[3]; put(&a[1], 0x5A); PORTB = a[1]; }`, 5000);
+  check('(ac-a) &a[1] + *p ghi: a[1]=0x5A',
+    tPut.r.ok && tPut.cpu.readPort(1) === 0x5A,
+    JSON.stringify(tPut.r.errors) + ` B=${tPut.cpu.readPort(1)}`);
+}
+// (ac-b) *p đọc/ghi: char* và int* (int* đọc/ghi đủ 2 byte little-endian)
+{
+  const tInt = runC(`void main(){ TRISB = 0; TRISD = 0; int x = 0x1234; int *p = &x; *p = 0x5678; PORTB = x; PORTD = x >> 8; }`, 5000);
+  check('(ac-b) int* ghi: *p=0x5678 -> x=0x5678 (PORTB=0x78, PORTD=0x56)',
+    tInt.r.ok && tInt.cpu.readPort(1) === 0x78 && tInt.cpu.readPort(3) === 0x56,
+    JSON.stringify(tInt.r.errors) + ` B=${tInt.cpu.readPort(1)} D=${tInt.cpu.readPort(3)}`);
+  const tIntR = runC(`void main(){ TRISB = 0; TRISD = 0; int x = 0x1234; int *p = &x; PORTB = *p; PORTD = *p >> 8; }`, 5000);
+  check('(ac-b) int* đọc: *p=0x1234 -> PORTB=0x34, PORTD=0x12',
+    tIntR.r.ok && tIntR.cpu.readPort(1) === 0x34 && tIntR.cpu.readPort(3) === 0x12,
+    JSON.stringify(tIntR.r.errors) + ` B=${tIntR.cpu.readPort(1)} D=${tIntR.cpu.readPort(3)}`);
+  const tChar = runC(`void main(){ TRISB = 0; unsigned char c = 0; unsigned char *q = &c; *q = 0xA5; PORTB = c; }`, 5000);
+  check('(ac-b) char* ghi: *q=0xA5 -> c=0xA5',
+    tChar.r.ok && tChar.cpu.readPort(1) === 0xA5,
+    JSON.stringify(tChar.r.errors) + ` B=${tChar.cpu.readPort(1)}`);
+  const tCharR = runC(`void main(){ TRISB = 0; unsigned char c = 0x3C; unsigned char *q = &c; PORTB = *q; }`, 5000);
+  check('(ac-b) char* đọc: c=0x3C -> *q=0x3C',
+    tCharR.r.ok && tCharR.cpu.readPort(1) === 0x3C,
+    JSON.stringify(tCharR.r.errors) + ` B=${tCharR.cpu.readPort(1)}`);
+}
+// (ac-c) p+i (char* nhảy 1, int* nhảy 2); p++/p-- (int* nhảy 2 byte); p+=
+{
+  const tPc = runC(`void main(){ TRISB = 0; unsigned char a[4] = {11, 22, 33, 44}; unsigned char *p = a; PORTB = *(p + 2); }`, 5000);
+  check('(ac-c) char* + 2 nhảy 2 byte: *(p+2)=33',
+    tPc.r.ok && tPc.cpu.readPort(1) === 33,
+    JSON.stringify(tPc.r.errors) + ` B=${tPc.cpu.readPort(1)}`);
+  const tPi = runC(`void main(){ TRISB = 0; TRISD = 0; int b[3] = {0x1111, 0x2222, 0x3333}; int *q = b; int v = *(q + 1); PORTB = v; PORTD = v >> 8; }`, 5000);
+  check('(ac-c) int* + 1 nhảy 2 byte: *(q+1)=0x2222 (PORTB=0x22, PORTD=0x22)',
+    tPi.r.ok && tPi.cpu.readPort(1) === 0x22 && tPi.cpu.readPort(3) === 0x22,
+    JSON.stringify(tPi.r.errors) + ` B=${tPi.cpu.readPort(1)} D=${tPi.cpu.readPort(3)}`);
+  const tPp = runC(`void main(){ TRISB = 0; unsigned char a[3] = {7, 8, 9}; unsigned char *p = a; p++; PORTB = *p; }`, 5000);
+  check('(ac-c) char* p++ nhảy 1: *p=8',
+    tPp.r.ok && tPp.cpu.readPort(1) === 8,
+    JSON.stringify(tPp.r.errors) + ` B=${tPp.cpu.readPort(1)}`);
+  const tIp = runC(`void main(){ TRISB = 0; int b[3] = {100, 200, 300}; int *q = b; q++; PORTB = *q; }`, 5000);
+  check('(ac-c) int* q++ nhảy 2 byte: *q=200',
+    tIp.r.ok && tIp.cpu.readPort(1) === 200,
+    JSON.stringify(tIp.r.errors) + ` B=${tIp.cpu.readPort(1)}`);
+  const tIm = runC(`void main(){ TRISB = 0; int b[3] = {100, 200, 300}; int *q = b; q++; q--; PORTB = *q; }`, 5000);
+  check('(ac-c) int* q++ rồi q-- về chỗ cũ: *q=100',
+    tIm.r.ok && tIm.cpu.readPort(1) === 100,
+    JSON.stringify(tIm.r.errors) + ` B=${tIm.cpu.readPort(1)}`);
+  const tPa = runC(`void main(){ TRISB = 0; TRISD = 0; int b[3] = {100, 200, 300}; int *q = b; q += 2; PORTB = *q; PORTD = *q >> 8; }`, 5000);
+  check('(ac-c) int* q+=2 nhảy 4 byte: *q=300 (PORTB=44, PORTD=1)',
+    tPa.r.ok && tPa.cpu.readPort(1) === 44 && tPa.cpu.readPort(3) === 1,
+    JSON.stringify(tPa.r.errors) + ` B=${tPa.cpu.readPort(1)} D=${tPa.cpu.readPort(3)}`);
+  const tIdx = runC(`void main(){ TRISB = 0; int b[3] = {100, 200, 300}; int *q = b; PORTB = q[2]; }`, 5000);
+  check('(ac-c) q[2] với con trỏ int: 300 -> PORTB=44 (byte thấp)',
+    tIdx.r.ok && tIdx.cpu.readPort(1) === 44,
+    JSON.stringify(tIdx.r.errors) + ` B=${tIdx.cpu.readPort(1)}`);
+}
+// (ac-d) &x, &arr[0], &arr[1], cast tới con trỏ
+{
+  const tAx = runC(`void main(){ TRISB = 0; TRISD = 0; int x = 0x3456; int *p = &x; PORTB = *p; PORTD = *p >> 8; }`, 5000);
+  check('(ac-d) &x: p=&x, *p=0x3456 (PORTB=0x56, PORTD=0x34)',
+    tAx.r.ok && tAx.cpu.readPort(1) === 0x56 && tAx.cpu.readPort(3) === 0x34,
+    JSON.stringify(tAx.r.errors) + ` B=${tAx.cpu.readPort(1)} D=${tAx.cpu.readPort(3)}`);
+  const tA0 = runC(`void main(){ TRISB = 0; unsigned char a[2] = {0xAB, 0xCD}; unsigned char *q = &a[0]; PORTB = *q; }`, 5000);
+  check('(ac-d) &a[0]: *q=0xAB',
+    tA0.r.ok && tA0.cpu.readPort(1) === 0xAB,
+    JSON.stringify(tA0.r.errors) + ` B=${tA0.cpu.readPort(1)}`);
+  const tA1 = runC(`void main(){ TRISB = 0; unsigned char a[2] = {0xAB, 0xCD}; unsigned char *q = &a[1]; PORTB = *q; }`, 5000);
+  check('(ac-d) &a[1]: *q=0xCD',
+    tA1.r.ok && tA1.cpu.readPort(1) === 0xCD,
+    JSON.stringify(tA1.r.errors) + ` B=${tA1.cpu.readPort(1)}`);
+  const tCast = runC(`void main(){ TRISB = 0; unsigned char a[3] = {9, 8, 7}; unsigned char *p; p = (unsigned char *)a; PORTB = *p; }`, 5000);
+  check('(ac-d) cast (unsigned char *)a: *p=9',
+    tCast.r.ok && tCast.cpu.readPort(1) === 9,
+    JSON.stringify(tCast.r.errors) + ` B=${tCast.cpu.readPort(1)}`);
+  const tRet = runC(`unsigned char *first(unsigned char *a){ return a; }\nvoid main(){ TRISB = 0; unsigned char a[2] = {0x77, 0x66}; PORTB = *first(a); }`, 5000);
+  check('(ac-d) hàm trả con trỏ: *first(a)=0x77',
+    tRet.r.ok && tRet.cpu.readPort(1) === 0x77,
+    JSON.stringify(tRet.r.errors) + ` B=${tRet.cpu.readPort(1)}`);
+}
+// (ac-e) So sánh con trỏ (==, !=, <) và p - q (chia theo elemWidth)
+{
+  const tCmp = runC(`void main(){ TRISB = 0; TRISC = 0; TRISD = 0; unsigned char a[4] = {1, 2, 3, 4}; unsigned char *p = a; unsigned char *q = a + 2; PORTB = (p == q); PORTC = (p != q); PORTD = (p < q); }`, 5000);
+  check('(ac-e) so sánh con trỏ: p==q -> 0, p!=q -> 1, p<q -> 1',
+    tCmp.r.ok && tCmp.cpu.readPort(1) === 0 && tCmp.cpu.readPort(2) === 1 && tCmp.cpu.readPort(3) === 1,
+    JSON.stringify(tCmp.r.errors) + ` B=${tCmp.cpu.readPort(1)} C=${tCmp.cpu.readPort(2)} D=${tCmp.cpu.readPort(3)}`);
+  const tDq = runC(`void main(){ TRISB = 0; unsigned char a[4] = {1, 2, 3, 4}; unsigned char *p = a; unsigned char *q = a + 2; int d = q - p; PORTB = d; }`, 5000);
+  check('(ac-e) char* q-p = 2 (hiệu số phần tử)',
+    tDq.r.ok && tDq.cpu.readPort(1) === 2,
+    JSON.stringify(tDq.r.errors) + ` B=${tDq.cpu.readPort(1)}`);
+  const tDi = runC(`void main(){ TRISB = 0; int b[4] = {0, 0, 0, 0}; int *x = b; int *y = b + 3; int d = y - x; PORTB = d; }`, 5000);
+  check('(ac-e) int* y-x = 3 (hiệu byte 6 chia 2)',
+    tDi.r.ok && tDi.cpu.readPort(1) === 3,
+    JSON.stringify(tDi.r.errors) + ` B=${tDi.cpu.readPort(1)}`);
+  const tIf = runC(`void main(){ TRISB = 0; unsigned char a[2] = {5, 6}; unsigned char *p = a; if (p) PORTB = *p; }`, 5000);
+  check('(ac-e) if (p): con trỏ khác 0 là đúng -> PORTB=5',
+    tIf.r.ok && tIf.cpu.readPort(1) === 5,
+    JSON.stringify(tIf.r.errors) + ` B=${tIf.cpu.readPort(1)}`);
+}
+// (ac-f) Lỗi con trỏ: **p, p->x, mảng con trỏ, *biến-thường, &bit
+{
+  const eMulti = compileC(`char **p;\nvoid main(){ TRISB = 0; PORTB = 1; }`);
+  check('(ac-f) **p: báo "chưa hỗ trợ con trỏ nhiều cấp", không sinh program',
+    !eMulti.ok && eMulti.program === null && eMulti.errors.some((e) => e.message.includes('chưa hỗ trợ con trỏ nhiều cấp')),
+    JSON.stringify(eMulti.errors));
+  const eArrow = compileC(`int *p;\nvoid main(){ TRISB = 0; p->x = 1; }`);
+  check('(ac-f) p->x: báo "chưa hỗ trợ p->x", không sinh program',
+    !eArrow.ok && eArrow.program === null && eArrow.errors.some((e) => e.message.includes('p->x')),
+    JSON.stringify(eArrow.errors));
+  const eArrPtr = compileC(`char *a[3];\nvoid main(){ TRISB = 0; PORTB = 1; }`);
+  check('(ac-f) mảng con trỏ char *a[3]: báo "chưa hỗ trợ mảng con trỏ", không sinh program',
+    !eArrPtr.ok && eArrPtr.program === null && eArrPtr.errors.some((e) => e.message.includes('chưa hỗ trợ mảng con trỏ')),
+    JSON.stringify(eArrPtr.errors));
+  const eDeref = compileC(`void main(){ int x = 5; *x = 1; }`);
+  check('(ac-f) *x với x là int (không phải con trỏ): báo "không phải con trỏ", không sinh program',
+    !eDeref.ok && eDeref.program === null && eDeref.errors.some((e) => e.message.includes('không phải con trỏ')),
+    JSON.stringify(eDeref.errors));
+  const eAddrBit = compileC(`void main(){ int *p; p = &RB0; }`);
+  check('(ac-f) &RB0: báo "không lấy địa chỉ của bit", không sinh program',
+    !eAddrBit.ok && eAddrBit.program === null && eAddrBit.errors.some((e) => e.message.includes('không lấy địa chỉ của bit')),
+    JSON.stringify(eAddrBit.errors));
+}
+// (ac-g) Code thật của Điệp (/tmp/diep-lcd-scroll.c): LCD cuộn "Hello Diep"
+// (ký tự tự tạo Đ=0, ệ=1) + LED RB1 nháy mỗi bước, chạy trên board led-lcd.
+// Chuỗi kỳ vọng tính bằng code từ message (mã 0/1 hiện thành ' ' vì LCD
+// chưa mô phỏng CGRAM — xem ghi chú trong báo cáo).
+{
+  let diepSrc = null;
+  try { diepSrc = readFileSync('/tmp/diep-lcd-scroll.c', 'utf8'); } catch (e) { diepSrc = null; }
+  check('(ac-g) đọc được /tmp/diep-lcd-scroll.c', typeof diepSrc === 'string' && diepSrc.length > 0,
+    diepSrc === null ? 'không đọc được file' : `dài ${diepSrc.length} ký tự`);
+  if (diepSrc) {
+    const r = compileC(diepSrc);
+    check('(ac-g) code Điệp compileC ok, 0 lỗi',
+      r.ok && r.errors.length === 0 && r.program !== null, JSON.stringify((r.errors || []).slice(0, 2)));
+    const { state } = buildLabState(getLab('led-lcd'));
+    const mapping = resolvePeripherals(benchToNetlist(state));
+    const cpu = createCPU();
+    cpu.setWiring(mapping);
+    if (r.ok && r.program) cpu.loadProgram(r.program);
+    const led1 = () => ledStates(cpu, mapping).find((s) => s.id === 'LED1').on;
+    const MSG = ['H', 'e', 'l', 'l', 'o', ' ', 0, 'i', 1, 'p'];
+    const expLine = (pos) => {
+      let s = '';
+      for (let col = 0; col < 16; col++) {
+        const ix = col - pos;
+        let ch = ' ';
+        if (ix >= 0 && ix < 10) { const m = MSG[ix]; ch = (typeof m === 'number') ? ' ' : m; }
+        s += ch;
+      }
+      return s;
+    };
+    // Lấy mẫu 11 bước cuộn (pos 15..5): mỗi khi dòng 1 đổi, đợi thêm
+    // 100k chu kỳ (ghi xong hàng + LED đã đổi) rồi ghi lại (line, led).
+    const samples = [];
+    let last = cpu.lcd.getLines()[0];
+    let guard = 0;
+    // 11 bước x ~1,26M chu kỳ/bước + khởi tạo ~0,4M: cần ~15M chu kỳ,
+    // tức ~750 lần chạy 20k chu kỳ — guard 1000 cho dư.
+    while (samples.length < 11 && guard++ < 1000) {
+      runUntil(cpu, cpu.cycles + 20000);
+      const l0 = cpu.lcd.getLines()[0];
+      if (l0 !== last) {
+        last = l0;
+        runUntil(cpu, cpu.cycles + 100000);
+        const cur = cpu.lcd.getLines()[0];
+        samples.push({ line: cur, led: led1() });
+        last = cur;
+      }
+    }
+    const expected = [15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5].map(expLine);
+    check('(ac-g) LCD cuộn đúng 11 bước liên tiếp pos=15..5 ("               H" -> "     Hello  i p ")',
+      r.ok && JSON.stringify(samples.map((s) => s.line)) === JSON.stringify(expected),
+      `got=${JSON.stringify(samples.map((s) => s.line))}`);
+    check('(ac-g) LED RB1 đổi trạng thái mỗi bước cuộn (xen kẽ SÁNG/TẮT)',
+      r.ok && samples.length === 11
+      && samples.every((s, i) => s.led === (i % 2 === 0)),
+      `leds=${samples.map((s) => (s.led ? 1 : 0)).join(',')}`);
+    check('(ac-g) dòng 2 LCD vẫn trống trong lúc cuộn',
+      r.ok && cpu.lcd.getLines()[1] === '                ',
+      `line1=${JSON.stringify(cpu.lcd.getLines()[1])}`);
+    check('(ac-g) mã ký tự tự tạo 0 (Đ) và 1 (ệ) có trong DDRAM thô ở bước pos=5 nhưng hiện thành khoảng trắng (CGRAM chưa mô phỏng)',
+      r.ok && samples.length === 11 && samples[10].line === expLine(5)
+      && cpu.lcd.ddram[11] === 0 && cpu.lcd.ddram[13] === 1,
+      `line=${JSON.stringify(samples.length ? samples[10].line : '')} ddram[11]=${cpu.lcd.ddram[11]} ddram[13]=${cpu.lcd.ddram[13]}`);
+  } else {
+    check('(ac-g) code Điệp compileC ok, 0 lỗi (bỏ qua: không đọc được file)', false, 'không đọc được /tmp/diep-lcd-scroll.c');
+  }
+}
+
+// (ad) DELAY ĐÚNG CHU KỲ Ở MỌI TẦN SỐ (v=20261125ap) — phát hiện sau vụ
+// con trỏ: parent đo __delay_ms(250)@20MHz bằng cách ĐẾM SỐ LẦN step()
+// được 831207 và tưởng delay ngắn 1,5 lần. Thực ra step() = 1 lệnh,
+// còn chu kỳ lệnh mới là đơn vị thời gian: GOTO/CALL tốn 2 chu kỳ/1 step
+// nên đếm step chỉ ra ~2/3 số chu kỳ (831207/1250020 = 0,665). Đo đúng
+// phải đo HIỆU cpu.cycles giữa 2 cạnh RB0 (mẫu (aa-c)). Nhóm này khóa
+// cách đo đúng + độ chính xác chu kỳ ở 4/8/10/20MHz + việc compileC trả
+// xtalFreq để app.js đặt cpu.clockHz theo code (không thì code 20MHz
+// chạy chậm 5 lần giờ thực vì runner vẫn nhịp theo 4MHz).
+// (ad-a) Độ chính xác chu kỳ delay (đo bằng cpu.cycles, cạnh RB0)
+{
+  // Đo delay bằng hiệu cpu.cycles giữa cạnh lên và cạnh xuống của RB0.
+  // src: chương trình RB0=1 -> delay -> RB0=0. Trả -1 nếu không thấy cạnh.
+  const delayCycles = (src, maxSteps) => {
+    const r = compileC(src);
+    if (!r.ok) return { ok: false, dt: -1, steps: -1, errors: r.errors };
+    const cpu = createCPU();
+    cpu.loadProgram(r.program);
+    let prev = cpu.readPort(1) & 1;
+    let t1 = -1;
+    let steps = 0;
+    let s1 = -1;
+    while (steps++ < maxSteps) {
+      cpu.step();
+      const b = cpu.readPort(1) & 1;
+      if (prev === 0 && b === 1 && t1 < 0) { t1 = cpu.cycles; s1 = steps; }
+      else if (prev === 1 && b === 0 && t1 >= 0) return { ok: true, dt: cpu.cycles - t1, steps: steps - s1, errors: [] };
+      prev = b;
+    }
+    return { ok: true, dt: -1, steps: -1, errors: [] };
+  };
+  const dl = (freq, code) => `#include <xc.h>\n#define _XTAL_FREQ ${freq}\nvoid main(){ TRISB=0; RB0=1; ${code}; RB0=0; while(1){} }`;
+  const cases = [
+    // [tên, src, kỳ vọng chu kỳ, dung sai]
+    ['__delay_ms(250) @20MHz', dl(20000000, '__delay_ms(250)'), 1250000, 0.01],
+    ['__delay_ms(500) @4MHz', dl(4000000, '__delay_ms(500)'), 500000, 0.01],
+    ['__delay_ms(100) @20MHz', dl(20000000, '__delay_ms(100)'), 500000, 0.01],
+    ['__delay_ms(1000) @8MHz', dl(8000000, '__delay_ms(1000)'), 2000000, 0.01],
+    ['__delay_ms(1000) @20MHz', dl(20000000, '__delay_ms(1000)'), 5000000, 0.01],
+    ['__delay_ms(100) @10MHz', dl(10000000, '__delay_ms(100)'), 250000, 0.01],
+    ['__delay_ms(40) @20MHz (LCD_Init)', dl(20000000, '__delay_ms(40)'), 200000, 0.01],
+    ['__delay_ms(2) @20MHz (LCD_Command)', dl(20000000, '__delay_ms(2)'), 10000, 0.01],
+    ['__delay_ms(1) @4MHz', dl(4000000, '__delay_ms(1)'), 1000, 0.02],
+    ['__delay_us(100) @20MHz', dl(20000000, '__delay_us(100)'), 500, 0.05],
+    ['__delay_us(50) @20MHz (LCD_Pulse)', dl(20000000, '__delay_us(50)'), 250, 0.10],
+  ];
+  for (const [name, src, expect, tol] of cases) {
+    const m = delayCycles(src, Math.ceil(expect * 2) + 100000);
+    const lo = expect * (1 - tol), hi = expect * (1 + tol);
+    check(`(ad-a) ${name}: ~${expect} chu kỳ (±${Math.round(tol * 100)}%)`,
+      m.ok && m.dt >= lo && m.dt <= hi,
+      JSON.stringify(m.errors) + ` dt=${m.dt}`);
+  }
+  // Delay rất nhỏ (__delay_us(2) = 10 chu kỳ, đường NOP): chi phí ghi
+  // RB0 + lấy mẫu cạnh (~12 chu kỳ) át cả delay nên chỉ khóa "vẫn ngắn"
+  // (< 40 chu kỳ cạnh-cạnh), không khóa giá trị tuyệt đối.
+  const mUs2 = delayCycles(dl(20000000, '__delay_us(2)'), 100000);
+  check('(ad-a) __delay_us(2) @20MHz: delay rất nhỏ, cạnh-cạnh < 40 chu kỳ',
+    mUs2.ok && mUs2.dt >= 0 && mUs2.dt < 40,
+    JSON.stringify(mUs2.errors) + ` dt=${mUs2.dt}`);
+}
+
+// (ad-b) BẪY ĐẾM STEP: __delay_ms(250)@20MHz đếm step chỉ ~831k nhưng
+// cpu.cycles đúng ~1,25M — khóa để sau này không ai "sửa" delay theo
+// số step nữa (GOTO 2 chu kỳ/1 step nên step/chu kỳ ~0,665).
+{
+  const src = '#include <xc.h>\n#define _XTAL_FREQ 20000000\nvoid main(){ TRISB=0; RB0=1; __delay_ms(250); RB0=0; while(1){} }';
+  const r = compileC(src);
+  const cpu = createCPU();
+  if (r.ok) cpu.loadProgram(r.program);
+  let prev = cpu.readPort(1) & 1;
+  let t1 = -1, s1 = -1, steps = 0, dt = -1, dsteps = -1;
+  while (steps++ < 3000000) {
+    cpu.step();
+    const b = cpu.readPort(1) & 1;
+    if (prev === 0 && b === 1 && t1 < 0) { t1 = cpu.cycles; s1 = steps; }
+    else if (prev === 1 && b === 0 && t1 >= 0) { dt = cpu.cycles - t1; dsteps = steps - s1; break; }
+    prev = b;
+  }
+  check('(ad-b) __delay_ms(250)@20MHz: cpu.cycles ~1250000 (±1%) nhưng số step chỉ ~831k (tỷ lệ step/cycle ~0,665)',
+    r.ok && dt >= 1237500 && dt <= 1262500 && dsteps >= 800000 && dsteps <= 860000 && dsteps / dt < 0.7,
+    `cycles=${dt} steps=${dsteps} ratio=${dt > 0 ? (dsteps / dt).toFixed(3) : '?'}`);
+}
+
+// (ad-c) compileC trả xtalFreq (để app.js đặt cpu.clockHz theo code)
+{
+  const c20 = compileC('#include <xc.h>\n#define _XTAL_FREQ 20000000\nvoid main(){ TRISB=0; }');
+  const c4 = compileC('void main(){ TRISB=0; }');
+  const c8 = compileC('#include <xc.h>\n#define _XTAL_FREQ 8000000\nvoid main(){ TRISB=0; }');
+  check('(ad-c) compileC trả xtalFreq: 20MHz -> 20000000, mặc định -> 4000000, 8MHz -> 8000000',
+    c20.ok && c20.xtalFreq === 20000000 && c4.ok && c4.xtalFreq === 4000000 && c8.ok && c8.xtalFreq === 8000000,
+    `20M=${c20.xtalFreq} macdinh=${c4.xtalFreq} 8M=${c8.xtalFreq}`);
+}
+
+// (ad-d) Nhịp giờ thực theo clockHz: 50ms ở 20MHz = 250000 chu kỳ.
+// LƯU Ý: cyclesForElapsedMs chặn trên mặc định 500000 chu kỳ/tick
+// (chống chạy bù vô hạn khi tab bị ẩn) nên 250ms@20MHz (=1250000)
+// với cap mặc định chỉ ra 500000 — muốn đủ phải truyền maxCycles lớn.
+{
+  check('(ad-d) cyclesForElapsedMs theo tần số code: 50ms@20MHz=250000, 50ms@10MHz=125000, 1000ms@20MHz=5000000 (cap lớn), 250ms@20MHz bị chặn 500000 bởi cap mặc định',
+    cyclesForElapsedMs(50, 20000000) === 250000
+    && cyclesForElapsedMs(50, 10000000) === 125000
+    && cyclesForElapsedMs(1000, 20000000, 10000000) === 5000000
+    && cyclesForElapsedMs(250, 20000000) === 500000,
+    `50ms@20M=${cyclesForElapsedMs(50, 20000000)} 250ms@20M=${cyclesForElapsedMs(250, 20000000)}`);
+}
+
+// (ad-e) Nhịp nháy LED ở 20MHz: 1 chu kỳ ON+OFF (2x250ms) ~2,5M chu kỳ;
+// code cuộn LCD của Điệp: khoảng cách 2 lần LED RB1 đổi trạng thái liên
+// tiếp ~1,25M chu kỳ (delay 250ms + lệnh LCD mỗi bước).
+{
+  const blink = compileC('#include <xc.h>\n#define _XTAL_FREQ 20000000\nvoid main(){ TRISB=0; while(1){ RB0=1; __delay_ms(250); RB0=0; __delay_ms(250); } }');
+  const cpuB = createCPU();
+  if (blink.ok) cpuB.loadProgram(blink.program);
+  let prev = cpuB.readPort(1) & 1;
+  let first = -1, period = -1, steps = 0;
+  while (steps++ < 10000000) {
+    cpuB.step();
+    const b = cpuB.readPort(1) & 1;
+    if (prev === 0 && b === 1) {
+      if (first < 0) first = cpuB.cycles;
+      else { period = cpuB.cycles - first; break; }
+    }
+    prev = b;
+  }
+  check('(ad-e) Nháy LED @20MHz: chu kỳ ON+OFF ~2500000 chu kỳ (±1%)',
+    blink.ok && period >= 2475000 && period <= 2525000,
+    `period=${period}`);
+  // Code cuộn của Điệp (nếu đọc được file): LED đổi trạng thái mỗi bước.
+  let diepSrc = null;
+  try { diepSrc = readFileSync('/tmp/diep-lcd-scroll.c', 'utf8'); } catch (e) { diepSrc = null; }
+  if (diepSrc) {
+    const r = compileC(diepSrc);
+    const { state } = buildLabState(getLab('led-lcd'));
+    const mapping = resolvePeripherals(benchToNetlist(state));
+    const cpu = createCPU();
+    cpu.setWiring(mapping);
+    if (r.ok && r.program) cpu.loadProgram(r.program);
+    const led1 = () => ledStates(cpu, mapping).find((s) => s.id === 'LED1').on;
+    let prevLed = led1();
+    let tPrev = -1, gap = -1, guard = 0;
+    // Chờ qua khởi tạo + 2 lần LED đổi trạng thái (mỗi lần cách ~1,26M
+    // chu kỳ): chạy từng chặng 20k chu kỳ, tối đa ~6M chu kỳ.
+    while (guard++ < 300 && gap < 0) {
+      runUntil(cpu, cpu.cycles + 20000);
+      const cur = led1();
+      if (cur !== prevLed) {
+        if (tPrev < 0) tPrev = cpu.cycles;
+        else { gap = cpu.cycles - tPrev; break; }
+        prevLed = cur;
+      }
+    }
+    check('(ad-e) Code cuộn LCD @20MHz: 2 lần LED RB1 đổi trạng thái liên tiếp cách nhau ~1,25-1,35M chu kỳ (250ms + lệnh LCD)',
+      r.ok && gap >= 1200000 && gap <= 1400000,
+      `gap=${gap}`);
+  } else {
+    check('(ad-e) Code cuộn LCD @20MHz (bỏ qua: không đọc được /tmp/diep-lcd-scroll.c)', false, 'không đọc được file');
+  }
 }
 
 console.log(`\nKết quả: ${pass} pass, ${fail} fail`);

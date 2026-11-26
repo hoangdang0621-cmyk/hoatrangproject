@@ -22,13 +22,13 @@
 //   returnType/type là chuỗi: 'void' | 'char' | 'uchar' | 'int' | 'uint'
 //   (unsigned char -> 'uchar', unsigned int -> 'uint'). body = null chỉ khi
 //   là khai báo mẫu (prototype) dạng `void f(int);` — codegen bỏ qua.
-//   Param có thể có thêm field pointer:true (vd `char *s`).
+//   Param có thể có thêm field pointer (số cấp con trỏ, vd `char *s` -> 1).
 // VarDecl   {kind:'vardecl', type, name, arraySize:number|null, init:Expr|null|Expr[],
 //            isArray:boolean, line}
 //   arraySize = null khi không phải mảng, hoặc mảng không ghi kích thước
 //   (vd `char s[] = "hi";` — phân biệt bằng isArray). Mảng khởi tạo
 //   `{1,2,3}` thì init là mảng các Expr; `char s[]="hi"` thì init là Str.
-//   Có thể có thêm field pointer:true (vd `char *p;`).
+//   Có thể có thêm field pointer (số cấp con trỏ, vd `char *p;` -> 1).
 // Block     {kind:'block', stmts:[Stmt...], line}
 // Stmt:
 //   ExprStmt {kind:'expr', expr:Expr|null, line}        (expr=null: câu lệnh `;`)
@@ -54,10 +54,12 @@
 //               '&','|','^','&&','||'
 //   Unary   {kind:'unary', op, expr, prefix:boolean, line}
 //           op: '-','!','~','++','--','+','*','&'
-//           ('*' và '&' là con trỏ: parser nhận cú pháp, codegen báo
-//           "chưa hỗ trợ con trỏ". 'cast' xem dưới.)
+//           ('*' và '&' là con trỏ: parser nhận cú pháp, codegen xử lý
+//           con trỏ 1 cấp (*p, &x, p[i], p+i); **p, p->x, mảng con trỏ thì
+//           codegen báo lỗi rõ. 'cast' xem dưới.)
 //           Riêng ép kiểu `(unsigned char)x` -> {kind:'unary', op:'cast',
-//           castType:'uchar', expr, prefix:true, line}.
+//           castType:'uchar', expr, prefix:true, line}; ép kiểu tới con trỏ
+//           `(unsigned char *)x` thì node có thêm field pointer (số cấp).
 //   Assign  {kind:'assign', op, target, value, line}
 //           op: '=','+=','-=','*=','/=','%=','&=','|=','^=','<<=','>>='
 //           target thường là Ident | Member | Index (hoặc Unary '*' cho *p=...)
@@ -941,12 +943,15 @@ class Parser {
       this.next(); // (
       const params = this.parseParams();
       if (this.matchOp(';')) {
-        // Khai báo mẫu (prototype): body = null, codegen bỏ qua
-        return [{ kind: 'func', name: nameTok.value, returnType: type, params, body: null, line }];
+        // Khai báo mẫu (prototype): body = null, codegen bỏ qua (nhưng giữ
+        // field pointer để khỏi mất thông tin kiểu trả về là con trỏ).
+        const proto = { kind: 'func', name: nameTok.value, returnType: type, params, body: null, line };
+        if (pointer) proto.pointer = pointer;
+        return [proto];
       }
       const body = this.parseBlock();
       const node = { kind: 'func', name: nameTok.value, returnType: type, params, body, line };
-      if (pointer) node.pointer = true;
+      if (pointer) node.pointer = pointer;
       return [node];
     }
     // Biến toàn cục (có thể nhiều biến 1 dòng: int a, b = 2;)
@@ -975,7 +980,7 @@ class Parser {
       if (this.peek().type === 'ident') name = this.next().value;
       if (this.matchOp('[')) this.expectOp(']', 'thiếu dấu ]'); // tham số mảng
       const p = { name, type };
-      if (pointer) p.pointer = true;
+      if (pointer) p.pointer = pointer;
       params.push(p);
       if (this.matchOp(',')) continue;
       break;
@@ -1006,7 +1011,7 @@ class Parser {
       kind: 'vardecl', type, name: nameTok.value,
       arraySize, init, isArray, line: nameTok.line,
     };
-    if (pointer) node.pointer = true;
+    if (pointer) node.pointer = pointer;
     return node;
   }
 
@@ -1276,9 +1281,12 @@ class Parser {
     if (t.type === 'op' && t.value === '(' && this.isTypeStart(this.peek(1))) {
       this.next(); // (
       const castType = this.parseType();
+      const pointer = this.parsePointerStars();
       this.expectOp(')', 'thiếu dấu )');
       const expr = this.parseUnary();
-      return { kind: 'unary', op: 'cast', castType, expr, prefix: true, line: t.line };
+      const node = { kind: 'unary', op: 'cast', castType, expr, prefix: true, line: t.line };
+      if (pointer) node.pointer = pointer;
+      return node;
     }
     return this.parsePostfix();
   }

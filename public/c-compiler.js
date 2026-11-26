@@ -10,29 +10,34 @@
 //   const r = compileC(source);
 //   // r.ok === true  -> r.program (Uint16Array) nạp bằng cpu.loadProgram(),
 //   //                  r.lineToAddr (Map dòng C -> địa chỉ) để đặt breakpoint
-//   //                  theo dòng C, r.asm là hợp ngữ đã sinh (để xem lại).
+//   //                  theo dòng C, r.asm là hợp ngữ đã sinh (để xem lại),
+//   //                  r.xtalFreq là tần số thạch anh từ #define _XTAL_FREQ
+//   //                  (mặc định 4000000) — tab code DÙNG NÓ để đặt
+//   //                  cpu.clockHz, không thì code 20MHz chạy chậm 5 lần
+//   //                  giờ thực (vòng delay sinh cho 20MHz nhưng runner
+//   //                  vẫn nhịp theo 4MHz).
 //   // r.ok === false -> r.errors = [{line, message}] với line là dòng C gốc,
 //   //                  hiển thị lỗi ngay tại dòng đó trong editor.
 //
 // Lỗi ở tầng assemble (lẽ ra không xảy ra vì codegen chỉ sinh asm hợp lệ)
 // được map ngược về dòng C gần nhất qua g.asmLineToCLine.
 
-import { parseC } from './c-frontend.js?v=20261125ao';
-import { generateC } from './c-codegen.js?v=20261125ao';
+import { parseC } from './c-frontend.js?v=20261125ap';
+import { generateC } from './c-codegen.js?v=20261125ap';
 import { assemble } from './pic16.js?v=20261125ah';
 
-export const C_VERSION = '20261125ao';
+export const C_VERSION = '20261125ap';
 
 export function compileC(source) {
   // Bước 1: tiền xử lý + lexer + parser -> AST (lỗi: dòng C gốc).
   const p = parseC(source);
   if (p.errors.length > 0) {
-    return { ok: false, program: null, errors: p.errors, lineToAddr: new Map(), asm: '' };
+    return { ok: false, program: null, errors: p.errors, lineToAddr: new Map(), asm: '', xtalFreq: p.xtalFreq };
   }
   // Bước 2: AST -> hợp ngữ (lỗi: dòng C gốc).
   const g = generateC(p.ast, p.xtalFreq);
   if (g.errors.length > 0) {
-    return { ok: false, program: null, errors: g.errors, lineToAddr: new Map(), asm: '' };
+    return { ok: false, program: null, errors: g.errors, lineToAddr: new Map(), asm: '', xtalFreq: p.xtalFreq };
   }
   // Bước 3: hợp ngữ -> mã máy. Lỗi assemble map về dòng C: tra
   // g.asmLineToCLine theo dòng asm; không có thì lấy dòng C gần nhất
@@ -46,7 +51,7 @@ export function compileC(source) {
       if (cLine !== null && cLine !== undefined) lastCLine = cLine;
       errors.push({ line: lastCLine, message: e.message });
     }
-    return { ok: false, program: null, errors, lineToAddr: new Map(), asm: g.asm };
+    return { ok: false, program: null, errors, lineToAddr: new Map(), asm: g.asm, xtalFreq: p.xtalFreq };
   }
   // Bước 4 (ok): dựng lineToAddr (dòng C -> địa chỉ lệnh đầu tiên của
   // dòng đó). Dòng #define / #include không sinh lệnh nên không có map.
@@ -57,5 +62,5 @@ export function compileC(source) {
       lineToAddr.set(cLine, addr);
     }
   }
-  return { ok: true, program: a.program, errors: [], lineToAddr, asm: g.asm };
+  return { ok: true, program: a.program, errors: [], lineToAddr, asm: g.asm, xtalFreq: p.xtalFreq };
 }

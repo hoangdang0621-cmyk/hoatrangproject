@@ -79,9 +79,19 @@
 //   (R,hi,lo) tối ưu thường < 5 chu kỳ (< 0,01% với delay ms). LƯU Ý:
 //   hệ số 776 (không phải 774) là vì lệnh skip (DECFSZ/BTFSC) trong
 //   simulator này tốn 3 chu kỳ khi lệnh bị skip là GOTO 2 chu kỳ.
+//   ĐO DELAY PHẢI ĐO BẰNG cpu.cycles (hiệu 2 cạnh), KHÔNG đếm số lần
+//   step(): GOTO/CALL tốn 2 chu kỳ nhưng chỉ 1 step nên đếm step ra
+//   ~2/3 số chu kỳ thật (vd __delay_ms(250)@20MHz: 831207 step nhưng
+//   1250020 chu kỳ — đã từng nhầm là delay ngắn 1,5 lần).
 //
 // Giới hạn (xem thêm ở cuối báo cáo codegen):
-//   - CHƯA hỗ trợ con trỏ (*p, &x, p->x, char *s): báo lỗi, không sinh code.
+//   - Con trỏ 1 cấp ĐÃ hỗ trợ: biến/tham số/trả về kiểu con trỏ, *p, &x,
+//     p[i], p+n, p-n, p-q, p++/p--, p+=n, so sánh con trỏ, mảng decay
+//     thành con trỏ khi truyền vào hàm. CHƯA hỗ trợ: con trỏ nhiều cấp
+//     (**p), p->x, (*p).x, mảng con trỏ (char *a[3]).
+//   - Con trỏ trỏ vào thanh ghi SFR (vd &PORTB) thì *p KHÔNG chạy được:
+//     readIndirect/writeIndirect trong pic16.js trả 0 / bỏ qua ghi khi
+//     địa chỉ < 0x20 (vùng SFR). Con trỏ chỉ dùng được với RAM (GPR).
 //   - CHƯA hỗ trợ số thực (frontend đã chặn), struct/enum/typedef.
 //   - Đệ quy (trực tiếp/gián tiếp): báo lỗi, không sinh code.
 //   - Program < 2048 từ lệnh (CALL/GOTO 11-bit, PCLATH luôn 0).
@@ -356,7 +366,7 @@ class Codegen {
       if (d.kind === 'func') {
         if (d.body) {
           claimName(d.name, 'hàm', d.line);
-          if (d.pointer) this.err(d.line, 'chưa hỗ trợ con trỏ');
+          if (d.pointer && d.pointer > 1) this.err(d.line, 'chưa hỗ trợ con trỏ nhiều cấp');
           funcDefs.push(d);
         }
       } else if (d.kind === 'vardecl') {
@@ -364,10 +374,13 @@ class Codegen {
       }
     }
     for (const fn of funcDefs) {
-      const retWidth = fn.returnType === 'void' ? 0 : typeWidth(fn.returnType);
+      const retWidth = fn.pointer ? 2 : fn.returnType === 'void' ? 0 : typeWidth(fn.returnType);
       const info = {
         def: fn, name: fn.name, returnType: fn.returnType,
-        retWidth, retSigned: typeSigned(fn.returnType),
+        retWidth, retSigned: fn.pointer ? false : typeSigned(fn.returnType),
+        retIsPointer: !!fn.pointer,
+        retElemWidth: fn.pointer ? typeWidth(fn.returnType) : 1,
+        retElemSigned: fn.pointer ? typeSigned(fn.returnType) : false,
         label: `__C_FN_${fn.name}`, retLabel: `__C_FN_${fn.name}_RET`,
         retSym: null, retAddr: null, params: [], localCount: 0,
       };
@@ -376,10 +389,10 @@ class Codegen {
         // Tên tham số KHÔNG kiểm tra trùng toàn cục: tham số sống trong
         // phạm vi hàm, che tên toàn cục là hợp lệ; slot __P_<hàm>_<i> cũng
         // riêng từng hàm nên không đụng nhau.
-        if (p.pointer) this.err(fn.line, 'chưa hỗ trợ con trỏ');
-        const w = typeWidth(p.type);
+        if (p.pointer && p.pointer > 1) this.err(fn.line, 'chưa hỗ trợ con trỏ nhiều cấp');
+        const w = p.pointer ? 2 : typeWidth(p.type);
         const slot = this.allocNamed(`__P_${fn.name}_${i}`, w, fn.line);
-        info.params.push({ name: p.name, type: p.type, width: w, signed: typeSigned(p.type), addr: slot ? slot.addr : 0, sym: slot ? slot.name : '' });
+        info.params.push({ name: p.name, type: p.type, width: w, signed: p.pointer ? false : typeSigned(p.type), addr: slot ? slot.addr : 0, sym: slot ? slot.name : '', isPointer: !!p.pointer, elemWidth: typeWidth(p.type), elemSigned: typeSigned(p.type) });
       });
       if (retWidth > 0) {
         const slot = this.allocNamed(`__R_${fn.name}`, retWidth, fn.line);
@@ -409,11 +422,12 @@ class Codegen {
   // Cấp phát địa chỉ cho 1 VarDecl. Trả varInfo, gắn lên node._info.
   // Trả null khi lỗi (đã ghi errors).
   allocVarDecl(d) {
-    if (d.pointer) { this.err(d.line, 'chưa hỗ trợ con trỏ'); return null; }
-    const width = typeWidth(d.type);
-    const signed = typeSigned(d.type);
+    if (d.pointer && d.pointer > 1) { this.err(d.line, 'chưa hỗ trợ con trỏ nhiều cấp'); return null; }
+    if (d.pointer && d.isArray) { this.err(d.line, 'chưa hỗ trợ mảng con trỏ'); return null; }
+    const width = d.pointer ? 2 : typeWidth(d.type);
+    const signed = d.pointer ? false : typeSigned(d.type);
     let count = 1;
-    let elemWidth = width;
+    let elemWidth = typeWidth(d.type);
     if (d.isArray) {
       if (d.arraySize !== null && d.arraySize !== undefined) {
         count = d.arraySize;
@@ -445,7 +459,8 @@ class Codegen {
     const info = {
       name: d.name, addr: slot.addr, sym: slot.name,
       width: d.isArray ? elemWidth * count : width,
-      signed, isArray: !!d.isArray, elemWidth, elemSigned: signed, count,
+      signed, isArray: !!d.isArray, elemWidth, elemSigned: typeSigned(d.type), count,
+      isPointer: !!d.pointer,
     };
     d._info = info;
     return info;
@@ -480,22 +495,28 @@ class Codegen {
     if (Array.isArray(stmt)) { for (const s of stmt) this.walkStmtForAlloc(s, fnInfo); return; }
     switch (stmt.kind) {
       case 'vardecl': {
-        const slot = this.allocNamed(`__L_${fnInfo.name}_${fnInfo.localCount++}`, stmt.isArray ? typeWidth(stmt.type) * this.arrayCountOf(stmt) : typeWidth(stmt.type), stmt.line);
+        // Tính đúng độ rộng TRƯỚC khi cấp slot: con trỏ chiếm 2 byte
+        // (địa chỉ 16-bit), không phải typeWidth của kiểu gốc.
+        if (stmt.pointer && stmt.pointer > 1) this.err(stmt.line, 'chưa hỗ trợ con trỏ nhiều cấp');
+        if (stmt.pointer && stmt.isArray) this.err(stmt.line, 'chưa hỗ trợ mảng con trỏ');
+        const baseWidth = typeWidth(stmt.type);
+        const allocWidth = stmt.pointer ? 2
+          : stmt.isArray ? baseWidth * this.arrayCountOf(stmt) : baseWidth;
+        const slot = this.allocNamed(`__L_${fnInfo.name}_${fnInfo.localCount++}`, allocWidth, stmt.line);
         if (slot) {
-          const width = typeWidth(stmt.type);
           stmt._info = {
             name: stmt.name, addr: slot.addr, sym: slot.name,
-            width: stmt.isArray ? width * this.arrayCountOf(stmt) : width,
-            signed: typeSigned(stmt.type), isArray: !!stmt.isArray,
-            elemWidth: width, elemSigned: typeSigned(stmt.type),
+            width: allocWidth,
+            signed: stmt.pointer ? false : typeSigned(stmt.type), isArray: !!stmt.isArray,
+            elemWidth: baseWidth, elemSigned: typeSigned(stmt.type),
             count: stmt.isArray ? this.arrayCountOf(stmt) : 1,
+            isPointer: !!stmt.pointer,
           };
         } else {
           // allocVarDecl đã báo lỗi tràn RAM; vẫn gắn info giả để khỏi crash
-          stmt._info = { name: stmt.name, addr: 0, sym: '__C_T0', width: typeWidth(stmt.type), signed: typeSigned(stmt.type), isArray: !!stmt.isArray, elemWidth: typeWidth(stmt.type), elemSigned: typeSigned(stmt.type), count: 1 };
+          stmt._info = { name: stmt.name, addr: 0, sym: '__C_T0', width: baseWidth, signed: typeSigned(stmt.type), isArray: !!stmt.isArray, elemWidth: baseWidth, elemSigned: typeSigned(stmt.type), count: 1, isPointer: !!stmt.pointer };
         }
-        // Kiểm tra con trỏ / chuỗi / kích thước mảng như biến toàn cục.
-        if (stmt.pointer) this.err(stmt.line, 'chưa hỗ trợ con trỏ');
+        // Kiểm tra chuỗi / kích thước mảng như biến toàn cục.
         if (!stmt.isArray && stmt.init && stmt.init.kind === 'str') this.err(stmt.line, 'chuỗi chỉ dùng để khởi tạo mảng char');
         if (stmt.isArray && stmt.arraySize === null && !(stmt.init && (stmt.init.kind === 'str' || Array.isArray(stmt.init)))) {
           this.err(stmt.line, `mảng ${stmt.name} chưa rõ kích thước`);
@@ -783,24 +804,48 @@ class Codegen {
       case 'ident': {
         const v = this.lookupVar(node.name, node.line);
         if (v.isBit) return { kind: 'bit', reg: v.bitReg, regAddr: v.bitRegAddr, bit: v.bit, width: 1, signed: false, line: node.line };
-        if (v.isArray) { this.err(node.line, 'chưa hỗ trợ con trỏ'); return { kind: 'file', addr: v.addr, sym: v.sym, width: v.width, signed: v.signed, line: node.line }; }
-        return { kind: 'file', addr: v.addr, sym: v.sym, width: v.width, signed: v.signed, line: node.line };
+        if (v.isArray) { this.err(node.line, 'không gán được cho mảng'); return { kind: 'file', addr: v.addr, sym: v.sym, width: v.width, signed: v.signed, line: node.line }; }
+        return { kind: 'file', addr: v.addr, sym: v.sym, width: v.width, signed: v.signed, isPointer: !!v.isPointer, elemWidth: v.elemWidth || 1, elemSigned: !!v.elemSigned, line: node.line };
       }
       case 'member': {
-        if (node.arrow) { this.err(node.line, 'chưa hỗ trợ con trỏ'); return { kind: 'bit', reg: 'PORTB', regAddr: 0x06, bit: 0, width: 1, signed: false, line: node.line }; }
+        if (node.arrow) { this.err(node.line, 'chưa hỗ trợ p->x (truy cập thành viên qua con trỏ)'); return { kind: 'bit', reg: 'PORTB', regAddr: 0x06, bit: 0, width: 1, signed: false, line: node.line }; }
         const r = resolveMember(node.baseName, node.field);
         if (r.error) { this.err(node.line, r.error); return { kind: 'bit', reg: 'PORTB', regAddr: 0x06, bit: 0, width: 1, signed: false, line: node.line }; }
         return { kind: 'bit', reg: r.reg, regAddr: r.regAddr, bit: r.bit, width: 1, signed: false, line: node.line };
       }
       case 'index': {
         const base = node.base;
-        if (!base || base.kind !== 'ident') { this.err(node.line, 'chưa hỗ trợ con trỏ'); return { kind: 'file', addr: TEMP_BASE, sym: '__C_T0', width: 1, signed: false, line: node.line }; }
-        const v = this.lookupVar(base.name, base.line);
-        if (!v.isArray) { this.err(node.line, `${base.name} không phải mảng`); return { kind: 'file', addr: TEMP_BASE, sym: '__C_T0', width: 1, signed: false, line: node.line }; }
-        return { kind: 'index', baseAddr: v.addr, baseSym: v.sym, elemWidth: v.elemWidth, elemSigned: v.elemSigned, width: v.elemWidth, signed: v.elemSigned, indexNode: node.index, line: node.line };
+        if (base && base.kind === 'ident') {
+          const v = this.lookupVar(base.name, base.line);
+          if (v.isArray) {
+            return { kind: 'index', baseAddr: v.addr, baseSym: v.sym, elemWidth: v.elemWidth, elemSigned: v.elemSigned, width: v.elemWidth, signed: v.elemSigned, indexNode: node.index, line: node.line };
+          }
+          if (v.isPointer) {
+            return { kind: 'ptrindex', ptrNode: base, indexNode: node.index, elemWidth: v.elemWidth, elemSigned: !!v.elemSigned, width: v.elemWidth, signed: !!v.elemSigned, line: node.line };
+          }
+          this.err(node.line, `${base.name} không phải mảng hay con trỏ`);
+          return { kind: 'file', addr: TEMP_BASE, sym: '__C_T0', width: 1, signed: false, line: node.line };
+        }
+        // Cơ số là biểu thức bất kỳ (vd (p+1)[i], f()[i]): phải trả con trỏ.
+        if (base && this.typeOf(base).isPointer) {
+          const bt = this.typeOf(base);
+          return { kind: 'ptrindex', ptrNode: base, indexNode: node.index, elemWidth: bt.elemWidth || 1, elemSigned: !!bt.elemSigned, width: bt.elemWidth || 1, signed: !!bt.elemSigned, line: node.line };
+        }
+        this.err(node.line, 'cơ số của [ ] không phải mảng hay con trỏ');
+        return { kind: 'file', addr: TEMP_BASE, sym: '__C_T0', width: 1, signed: false, line: node.line };
       }
       case 'unary':
-        this.err(node.line, 'chưa hỗ trợ con trỏ');
+        if (node.op === '*') {
+          // *p: chỉ lưu node con trỏ, địa chỉ tính lúc đọc/ghi (để p thay
+          // đổi giữa các lần dùng vẫn đúng).
+          const pt = this.typeOf(node.expr);
+          if (!pt.isPointer) {
+            this.err(node.line, 'toán hạng của * không phải con trỏ');
+            return { kind: 'file', addr: TEMP_BASE, sym: '__C_T0', width: 1, signed: false, line: node.line };
+          }
+          return { kind: 'deref', ptrNode: node.expr, elemWidth: pt.elemWidth || 1, elemSigned: !!pt.elemSigned, width: pt.elemWidth || 1, signed: !!pt.elemSigned, line: node.line };
+        }
+        this.err(node.line, 'vế trái phép gán không hợp lệ');
         return { kind: 'file', addr: TEMP_BASE, sym: '__C_T0', width: 1, signed: false, line: node.line };
       default:
         this.err(node.line, 'vế trái phép gán không hợp lệ');
@@ -813,7 +858,7 @@ class Codegen {
   computeIndexAddr(lv, line) {
     const a = this.allocTemp(2);
     a.width = 2; a.signed = false;
-    const idx = this.genExpr(lv.indexNode, 16, true);
+    const idx = this.genExpr(lv.indexNode, 2, true);
     if (lv.elemWidth === 1) {
       this.copyValue(idx, a.addr, a.sym, 2, line);
     } else {
@@ -836,6 +881,29 @@ class Codegen {
     this.emit('ADDLW 1', line);
     this.emit(`ADDWF ${a.sym}+1, F`, line);
     return a;
+  }
+
+  // Tính địa chỉ hiệu dụng của lvalue dạng index/ptrindex vào 1 biến tạm
+  // 2 byte (đỉnh ngăn xếp), trả temp đó. Bên gọi phải freeTemp(2) sau khi
+  // dùng xong. Với 'ptrindex': t = giá trị con trỏ, idx = chỉ số (2 byte),
+  // idx nhân elemWidth rồi cộng vào t. Chỉ free idx ở đây; temp t trả về
+  // cho bên gọi (free t trong hàm này sẽ làm mất temp kết quả vì t nằm
+  // dưới idx trên ngăn xếp tạm).
+  computeEffAddr(lv, line) {
+    if (lv.kind === 'index') return this.computeIndexAddr(lv, line);
+    const t = this.genExpr(lv.ptrNode, 2, true);
+    const idx = this.genExpr(lv.indexNode, 2, true);
+    if (lv.elemWidth === 2) {
+      // idx <<= 1 (phần tử int rộng 2 byte)
+      this.emit('BCF STATUS, C', line);
+      this.ensureBank(idx.addr, idx.sym, line);
+      this.emit(`RLF ${idx.sym}, F`, line);
+      this.ensureBank(idx.addr + 1, idx.sym, line);
+      this.emit(`RLF ${idx.sym}+1, F`, line);
+    }
+    this.computeBinary('+', t, idx, line);
+    this.freeTemp(idx.width);
+    return t;
   }
 
   // Nạp FSR/IRP từ địa chỉ 16-bit trong temp a (a phải là đỉnh ngăn xếp).
@@ -870,10 +938,31 @@ class Codegen {
       this.emitLabel(ld, line);
       return r;
     }
-    // index: đọc qua INDF
+    // deref (*p): đọc n byte của phần tử qua INDF. Kết quả r cấp phát
+    // TRƯỚC, temp địa chỉ p nằm trên r nên free p xong r vẫn còn nguyên.
+    if (lv.kind === 'deref') {
+      const r = this.allocTemp(want);
+      r.signed = lv.elemSigned;
+      const p = this.genExpr(lv.ptrNode, 2, true);
+      this.setFsrFromTemp(p, line);
+      const n = Math.min(want, lv.elemWidth);
+      for (let i = 0; i < n; i++) {
+        this.emit('MOVF INDF, W', line);
+        this.emitMovwf(r.addr, r.sym, i, line);
+        if (i < n - 1) this.emit('INCF FSR, F', line);
+      }
+      if (want > lv.elemWidth) {
+        // Lấp byte cao theo dấu của phần tử trỏ tới.
+        const fill = { addr: r.addr, sym: r.sym, width: lv.elemWidth, signed: lv.elemSigned };
+        this.fillHigh(r.addr, r.sym, fill, want, line);
+      }
+      this.freeTemp(p.width);
+      return r;
+    }
+    // index / ptrindex: đọc qua INDF, địa chỉ tính bằng computeEffAddr.
     const r = this.allocTemp(want);
     r.signed = lv.elemSigned;
-    const a = this.computeIndexAddr(lv, line);
+    const a = this.computeEffAddr(lv, line);
     this.setFsrFromTemp(a, line);
     const n = Math.min(want, lv.elemWidth);
     for (let i = 0; i < n; i++) {
@@ -916,11 +1005,25 @@ class Codegen {
       this.emitLabel(ldone, line);
       return;
     }
-    // index: chép v vào 1 temp đúng độ rộng phần tử rồi ghi qua INDF.
+    // deref (*p): ghi từng byte của v vào INDF. v đã tính TRƯỚC khi
+    // storeLvalue được gọi nên p nằm trên v trong ngăn xếp tạm — đúng
+    // kỷ luật (p là đỉnh khi setFsrFromTemp).
+    if (lv.kind === 'deref') {
+      const p = this.genExpr(lv.ptrNode, 2, true);
+      this.setFsrFromTemp(p, line);
+      for (let i = 0; i < lv.elemWidth; i++) {
+        this.emitMovfW(v.addr, v.sym, i, line);
+        this.emit('MOVWF INDF', line);
+        if (i < lv.elemWidth - 1) this.emit('INCF FSR, F', line);
+      }
+      this.freeTemp(p.width);
+      return;
+    }
+    // index / ptrindex: chép v vào 1 temp đúng độ rộng phần tử rồi ghi qua INDF.
     const t = this.allocTemp(lv.elemWidth);
     t.signed = v.signed;
     this.copyValue(v, t.addr, t.sym, lv.elemWidth, line);
-    const a = this.computeIndexAddr(lv, line);
+    const a = this.computeEffAddr(lv, line);
     this.setFsrFromTemp(a, line);
     for (let i = 0; i < lv.elemWidth; i++) {
       this.emitMovfW(t.addr, t.sym, i, line);
@@ -932,77 +1035,115 @@ class Codegen {
   }
 
   // =========================================================================
-  // KIỂU CỦA BIỂU THỨC (độ rộng tự nhiên theo byte, có dấu không)
+  // KIỂU CỦA BIỂU THỨC (độ rộng tự nhiên theo byte, có dấu không, con trỏ?)
+  // typeOf trả {width, signed, isPointer, elemWidth, elemSigned}:
+  //   - con trỏ (kể cả mảng đã decay): width 2, signed false, isPointer
+  //     true, elemWidth/elemSigned là kiểu phần tử trỏ tới.
+  //   - số nguyên: width theo byte, signed theo luật thăng cấp C.
+  // naturalWidth/signedOf chỉ là vỏ bọc để code cũ không đổi hành vi với
+  // mọi node không phải con trỏ.
   // =========================================================================
-  naturalWidth(node) {
-    if (!node) return 1;
+  typeOf(node) {
+    const ptr = (elemWidth, elemSigned) => ({
+      width: 2, signed: false, isPointer: true,
+      elemWidth: elemWidth || 1, elemSigned: !!elemSigned,
+    });
+    const plain = (width, signed) => ({
+      width, signed: !!signed, isPointer: false,
+      elemWidth: width, elemSigned: !!signed,
+    });
+    if (!node) return plain(1, false);
     switch (node.kind) {
-      case 'num': return node.type === 'char' ? 1 : 2;
-      case 'str': return 1;
+      case 'num': return plain(node.type === 'char' ? 1 : 2, true);
+      case 'str': return plain(1, false);
       case 'ident': {
         const v = this.lookupVar(node.name, node.line);
-        return v.isArray ? 2 : v.width;
+        if (v.isBit || v.isSFR) return plain(1, false);
+        if (v.isPointer) return ptr(v.elemWidth, v.elemSigned);
+        if (v.isArray) return ptr(v.elemWidth, v.elemSigned); // mảng decay
+        return plain(v.width, v.signed);
       }
-      case 'member': return 1;
+      case 'member': return plain(1, false);
       case 'index': {
         const b = node.base;
         if (b && b.kind === 'ident') {
           const v = this.lookupVar(b.name, b.line);
-          if (v.isArray) return v.elemWidth;
+          if (v.isArray || v.isPointer) return plain(v.elemWidth, v.elemSigned);
+        } else if (b) {
+          const bt = this.typeOf(b);
+          if (bt.isPointer) return plain(bt.elemWidth, bt.elemSigned);
         }
-        return 1;
+        return plain(1, false);
       }
-      case 'binary':
-        if (['&&', '||', '<', '>', '<=', '>=', '==', '!='].includes(node.op)) return 1;
-        return Math.max(this.naturalWidth(node.left), this.naturalWidth(node.right));
-      case 'unary':
-        if (node.op === '!') return 1;
-        if (node.op === 'cast') return node.castType === 'void' ? 1 : typeWidth(node.castType);
-        return this.naturalWidth(node.expr);
-      case 'assign': return this.naturalWidth(node.target);
+      case 'binary': {
+        if (['&&', '||', '<', '>', '<=', '>=', '==', '!='].includes(node.op)) {
+          return plain(1, false);
+        }
+        const lt = this.typeOf(node.left);
+        const rt = this.typeOf(node.right);
+        if (node.op === '+' || node.op === '-') {
+          if (lt.isPointer && rt.isPointer) {
+            // p - q: hiệu số phần tử (int có dấu); p + q vô nghĩa.
+            if (node.op === '-') return plain(2, true);
+            return plain(2, false);
+          }
+          if (lt.isPointer) return ptr(lt.elemWidth, lt.elemSigned);
+          if (rt.isPointer) return ptr(rt.elemWidth, rt.elemSigned);
+        }
+        return plain(Math.max(lt.width, rt.width), lt.signed && rt.signed);
+      }
+      case 'unary': {
+        if (node.op === '!') return plain(1, false);
+        if (node.op === 'cast') {
+          if (node.pointer) return ptr(typeWidth(node.castType), typeSigned(node.castType));
+          if (node.castType === 'void') return plain(1, false);
+          return plain(typeWidth(node.castType), typeSigned(node.castType));
+        }
+        if (node.op === '*') {
+          // *p: kiểu phần tử trỏ tới.
+          const t = this.typeOf(node.expr);
+          return plain(t.elemWidth || 1, t.elemSigned);
+        }
+        if (node.op === '&') {
+          // &x: kiểu phần tử là kiểu của x (mảng -> phần tử mảng,
+          // *p -> pointee, biến thường -> chính kiểu biến).
+          const e = node.expr;
+          if (e && e.kind === 'ident') {
+            const v = this.lookupVar(e.name, e.line);
+            if (v.isArray || v.isPointer) return ptr(v.elemWidth, v.elemSigned);
+            return ptr(v.width, v.signed);
+          }
+          const t = this.typeOf(node.expr);
+          return ptr(t.isPointer ? t.elemWidth : t.width, t.isPointer ? t.elemSigned : t.signed);
+        }
+        // '++'/'--'/'-'/'+'/'~': cùng kiểu với toán hạng.
+        return this.typeOf(node.expr);
+      }
+      case 'assign': return this.typeOf(node.target);
       case 'call': {
-        if (node.name === '__delay_ms' || node.name === '__delay_us') return 1;
+        if (node.name === '__delay_ms' || node.name === '__delay_us') return plain(1, false);
         const fn = this.funcs.get(node.name);
-        return fn ? fn.retWidth || 1 : 1;
+        if (!fn) return plain(1, false);
+        if (fn.retIsPointer) return ptr(fn.retElemWidth, fn.retElemSigned);
+        return plain(fn.retWidth || 1, fn.retSigned);
       }
-      case 'ternary': return Math.max(this.naturalWidth(node.then), this.naturalWidth(node.else));
-      default: return 1;
+      case 'ternary': {
+        const tt = this.typeOf(node.then);
+        const et = this.typeOf(node.else);
+        if (tt.isPointer) return ptr(tt.elemWidth, tt.elemSigned);
+        if (et.isPointer) return ptr(et.elemWidth, et.elemSigned);
+        return plain(Math.max(tt.width, et.width), tt.signed && et.signed);
+      }
+      default: return plain(1, false);
     }
   }
 
+  naturalWidth(node) {
+    return this.typeOf(node).width;
+  }
+
   signedOf(node) {
-    if (!node) return false;
-    switch (node.kind) {
-      case 'num': return true;
-      case 'str': return false;
-      case 'ident': {
-        const v = this.lookupVar(node.name, node.line);
-        return v.isBit || v.isSFR ? false : !!v.signed;
-      }
-      case 'member': return false;
-      case 'index': {
-        const b = node.base;
-        if (b && b.kind === 'ident') {
-          const v = this.lookupVar(b.name, b.line);
-          if (v.isArray) return !!v.elemSigned;
-        }
-        return false;
-      }
-      case 'binary':
-        if (['&&', '||', '<', '>', '<=', '>=', '==', '!=', '!'].includes(node.op)) return false;
-        return this.signedOf(node.left) && this.signedOf(node.right);
-      case 'unary':
-        if (node.op === '!') return false;
-        if (node.op === 'cast') return typeSigned(node.castType);
-        return this.signedOf(node.expr);
-      case 'assign': return this.signedOf(node.target);
-      case 'call': {
-        const fn = this.funcs.get(node.name);
-        return fn ? fn.retSigned : false;
-      }
-      case 'ternary': return this.signedOf(node.then) && this.signedOf(node.else);
-      default: return false;
-    }
+    return this.typeOf(node).signed;
   }
 
   // Đổi độ rộng của biến tạm đang ở đỉnh ngăn xếp (lấp byte cao theo dấu
@@ -1040,7 +1181,15 @@ class Codegen {
         return this.dummyTemp(want);
       case 'ident': {
         const v = this.lookupVar(node.name, line);
-        if (v.isArray) { this.err(line, 'chưa hỗ trợ con trỏ'); return this.dummyTemp(want); }
+        if (v.isArray) {
+          // Mảng decay thành con trỏ tới phần tử đầu: địa chỉ hằng 2 byte.
+          const r = this.allocTemp(2);
+          r.signed = false;
+          this.setByte(r.addr, r.sym, 0, v.addr & 0xff, line);
+          this.setByte(r.addr, r.sym, 1, (v.addr >> 8) & 0xff, line);
+          this.adjustTempWidth(r, want, line);
+          return r;
+        }
         if (v.isBit) {
           const lv = { kind: 'bit', reg: v.bitReg, regAddr: v.bitRegAddr, bit: v.bit, width: 1, signed: false, line };
           return this.readLvalue(lv, want, line);
@@ -1059,7 +1208,7 @@ class Codegen {
       }
       case 'index': {
         const lv = this.resolveLvalue(node);
-        if (lv.kind !== 'index') return this.dummyTemp(want);
+        if (lv.kind !== 'index' && lv.kind !== 'ptrindex') return this.dummyTemp(want);
         return this.readLvalue(lv, want, line);
       }
       case 'binary': {
@@ -1078,6 +1227,56 @@ class Codegen {
           return r;
         }
         // Số học / bit / dịch: tính tại chỗ vào toán hạng trái.
+        // Con trỏ: p + n / p - n (n đếm theo phần tử), p - q (hiệu số
+        // phần tử). So sánh con trỏ đã xử lý ở nhánh quan hệ phía trên
+        // (genCond/compareBranch tính đủ 16-bit nhờ typeOf).
+        const lt = this.typeOf(node.left);
+        const rt = this.typeOf(node.right);
+        if ((node.op === '+' || node.op === '-') && (lt.isPointer || rt.isPointer)) {
+          if (lt.isPointer && rt.isPointer) {
+            if (node.op === '-') {
+              // p - q: trừ 16-bit rồi chia cho elemWidth (dịch phải số học).
+              const a = this.genExpr(node.left, 2, true);
+              const b = this.genExpr(node.right, 2, true);
+              this.computeBinary('-', a, b, line);
+              this.freeTemp(b.width);
+              if (lt.elemWidth === 2) {
+                this.emit('BCF STATUS, C', line);
+                this.ensureBank(a.addr + 1, a.sym, line);
+                this.emit(`BTFSC ${a.sym}+1, 7`, line);
+                this.emit('BSF STATUS, C', line);
+                this.ensureBank(a.addr + 1, a.sym, line);
+                this.emit(`RRF ${a.sym}+1, F`, line);
+                this.ensureBank(a.addr, a.sym, line);
+                this.emit(`RRF ${a.sym}, F`, line);
+              }
+              a.signed = true;
+              this.adjustTempWidth(a, want, line);
+              return a;
+            }
+            // p + q vô nghĩa trong C: rơi xuống đường số học thường.
+          } else if (lt.isPointer || node.op === '+') {
+            // p + n, p - n, n + p: n nhân elemWidth rồi cộng/trừ 16-bit.
+            const ptrIsLeft = lt.isPointer;
+            const elemW = (ptrIsLeft ? lt : rt).elemWidth || 1;
+            const a = this.genExpr(ptrIsLeft ? node.left : node.right, 2, true);
+            const b = this.genExpr(ptrIsLeft ? node.right : node.left, 2, true);
+            if (elemW === 2) {
+              // b <<= 1 (phần tử int rộng 2 byte)
+              this.emit('BCF STATUS, C', line);
+              this.ensureBank(b.addr, b.sym, line);
+              this.emit(`RLF ${b.sym}, F`, line);
+              this.ensureBank(b.addr + 1, b.sym, line);
+              this.emit(`RLF ${b.sym}+1, F`, line);
+            }
+            this.computeBinary(node.op, a, b, line);
+            this.freeTemp(b.width);
+            a.signed = false;
+            this.adjustTempWidth(a, want, line);
+            return a;
+          }
+          // n - p vô nghĩa: rơi xuống đường số học thường.
+        }
         let cw = want;
         if (node.op === '/' || node.op === '%') cw = 2;
         else if (node.op === '>>') cw = Math.max(want, this.naturalWidth(node.left));
@@ -1092,11 +1291,91 @@ class Codegen {
         return a;
       }
       case 'unary': {
-        if (node.op === '*' || node.op === '&') {
-          this.err(line, 'chưa hỗ trợ con trỏ');
+        if (node.op === '*') {
+          // *p: đọc phần tử qua INDF (FSR/IRP). Lưu ý giới hạn CPU:
+          // p trỏ vào SFR (địa chỉ < 0x20) thì đọc trả 0 (pic16.js).
+          const pt = this.typeOf(node.expr);
+          if (!pt.isPointer) {
+            this.err(line, 'toán hạng của * không phải con trỏ');
+            return this.dummyTemp(want);
+          }
+          const ew = pt.elemWidth || 1;
+          if (!valueUsed) {
+            const p0 = this.genExpr(node.expr, 2, true);
+            this.freeTemp(p0.width);
+            const r0 = this.allocTemp(want);
+            r0.signed = false;
+            this.emitClrf(r0.addr, r0.sym, 0, line);
+            if (want === 2) this.emitClrf(r0.addr, r0.sym, 1, line);
+            return r0;
+          }
+          // Kết quả r cấp phát TRƯỚC, temp địa chỉ p nằm trên r: free p
+          // xong r vẫn còn nguyên (đừng cấp p trước r — temp sau sẽ
+          // cấp chồng lên r và ghi đè giá trị vừa đọc).
+          const r = this.allocTemp(want);
+          r.signed = !!pt.elemSigned;
+          const p = this.genExpr(node.expr, 2, true);
+          this.setFsrFromTemp(p, line);
+          const n = Math.min(want, ew);
+          for (let i = 0; i < n; i++) {
+            this.emit('MOVF INDF, W', line);
+            this.emitMovwf(r.addr, r.sym, i, line);
+            if (i < n - 1) this.emit('INCF FSR, F', line);
+          }
+          if (want > ew) {
+            const fill = { addr: r.addr, sym: r.sym, width: ew, signed: !!pt.elemSigned };
+            this.fillHigh(r.addr, r.sym, fill, want, line);
+          }
+          this.freeTemp(p.width);
+          return r;
+        }
+        if (node.op === '&') {
+          // &x: địa chỉ hằng 2 byte; &a[i]/&p[i]: địa chỉ hiệu dụng;
+          // &*p: chính giá trị con trỏ. &bit -> lỗi; &SFR cho phép
+          // (trả số địa chỉ, dù *p trỏ SFR không chạy được trên CPU).
+          const e = node.expr;
+          if (e.kind === 'unary' && e.op === '*') {
+            const t = this.genExpr(e.expr, 2, true);
+            t.signed = false;
+            this.adjustTempWidth(t, want, line);
+            return t;
+          }
+          if (e.kind === 'member') {
+            this.err(line, 'không lấy địa chỉ của bit');
+            return this.dummyTemp(want);
+          }
+          if (e.kind === 'index') {
+            const lv = this.resolveLvalue(e);
+            if (lv.kind !== 'index' && lv.kind !== 'ptrindex') return this.dummyTemp(want);
+            const a = this.computeEffAddr(lv, line);
+            a.signed = false;
+            this.adjustTempWidth(a, want, line);
+            return a;
+          }
+          if (e.kind === 'ident') {
+            const v = this.lookupVar(e.name, e.line);
+            if (v.isBit) {
+              this.err(line, 'không lấy địa chỉ của bit');
+              return this.dummyTemp(want);
+            }
+            const a = this.allocTemp(2);
+            a.signed = false;
+            this.setByte(a.addr, a.sym, 0, v.addr & 0xff, line);
+            this.setByte(a.addr, a.sym, 1, (v.addr >> 8) & 0xff, line);
+            this.adjustTempWidth(a, want, line);
+            return a;
+          }
+          this.err(line, 'không lấy được địa chỉ của biểu thức này');
           return this.dummyTemp(want);
         }
         if (node.op === 'cast') {
+          if (node.pointer) {
+            // Ép kiểu tới con trỏ: no-op, chỉ đổi kiểu (giữ nguyên 2 byte).
+            const t = this.genExpr(node.expr, 2, true);
+            t.signed = false;
+            this.adjustTempWidth(t, want, line);
+            return t;
+          }
           if (node.castType === 'void') {
             const t = this.genExpr(node.expr, 1, false);
             this.freeTemp(t.width);
@@ -1187,6 +1466,9 @@ class Codegen {
       this.err(line, 'không tăng/giảm được bit');
       return this.dummyTemp(want);
     }
+    // Con trỏ: p++/p-- nhảy theo kích thước phần tử (int* nhảy 2 byte),
+    // còn *p++/p[i]++ thì tăng GIÁ TRỊ phần tử nên delta giữ ±1.
+    if (lv.kind === 'file' && lv.isPointer) delta *= lv.elemWidth;
     const w = lv.width;
     if (prefix) {
       const r = this.readLvalue(lv, w, line);
@@ -1208,7 +1490,8 @@ class Codegen {
     return r;
   }
 
-  // Tăng/giảm 1 biến tạm tại chỗ (delta = +1 hoặc -1).
+  // Tăng/giảm 1 biến tạm tại chỗ (delta = +1, -1, +2 hoặc -2;
+  // ±2 dùng cho p++ với con trỏ int*).
   incDecTemp(t, delta, line) {
     if (delta === 1) {
       if (t.width === 1) {
@@ -1223,16 +1506,38 @@ class Codegen {
       }
       return;
     }
-    if (t.width === 1) {
-      this.ensureBank(t.addr, t.sym, line);
-      this.emit(`DECF ${t.sym}, F`, line);
+    if (delta === -1) {
+      if (t.width === 1) {
+        this.ensureBank(t.addr, t.sym, line);
+        this.emit(`DECF ${t.sym}, F`, line);
+      } else {
+        this.emitMovlw(1, line);
+        this.ensureBank(t.addr, t.sym, line);
+        this.emit(`SUBWF ${t.sym}, F`, line);
+        this.ensureBank(t.addr + 1, t.sym, line);
+        this.emit('BTFSS STATUS, C', line);
+        this.emit(`DECF ${t.sym}+1, F`, line);
+      }
+      return;
+    }
+    // delta = ±2 (chỉ gặp với biến tạm 2 byte: con trỏ int*).
+    const mag = Math.abs(delta);
+    this.emitMovlw(mag, line);
+    this.ensureBank(t.addr, t.sym, line);
+    if (delta > 0) {
+      this.emit(`ADDWF ${t.sym}, F`, line);
+      if (t.width === 2) {
+        this.ensureBank(t.addr + 1, t.sym, line);
+        this.emit('BTFSC STATUS, C', line);
+        this.emit(`INCF ${t.sym}+1, F`, line);
+      }
     } else {
-      this.emitMovlw(1, line);
-      this.ensureBank(t.addr, t.sym, line);
       this.emit(`SUBWF ${t.sym}, F`, line);
-      this.ensureBank(t.addr + 1, t.sym, line);
-      this.emit('BTFSS STATUS, C', line);
-      this.emit(`DECF ${t.sym}+1, F`, line);
+      if (t.width === 2) {
+        this.ensureBank(t.addr + 1, t.sym, line);
+        this.emit('BTFSS STATUS, C', line);
+        this.emit(`DECF ${t.sym}+1, F`, line);
+      }
     }
   }
 
@@ -1252,6 +1557,16 @@ class Codegen {
     t.signed = lv.signed;
     const v = this.genExpr(node.value, 2, true);
     v.signed = this.signedOf(node.value);
+    // p += n / p -= n (lv chính là biến con trỏ): n đếm theo phần tử,
+    // nhân với elemWidth trước khi cộng (int* thì n *= 2).
+    if (lv.kind === 'file' && lv.isPointer && (op === '+=' || op === '-=')
+      && lv.elemWidth === 2) {
+      this.emit('BCF STATUS, C', line);
+      this.ensureBank(v.addr, v.sym, line);
+      this.emit(`RLF ${v.sym}, F`, line);
+      this.ensureBank(v.addr + 1, v.sym, line);
+      this.emit(`RLF ${v.sym}+1, F`, line);
+    }
     this.computeBinary(op.slice(0, -1), t, v, line);
     this.storeLvalue(lv, t, line);
     this.freeTemp(v.width);
@@ -1954,7 +2269,7 @@ class Codegen {
     }
     const paramScope = new Map();
     for (const p of fnInfo.params) {
-      if (p.name) paramScope.set(p.name, { name: p.name, addr: p.addr, sym: p.sym, width: p.width, signed: p.signed });
+      if (p.name) paramScope.set(p.name, { name: p.name, addr: p.addr, sym: p.sym, width: p.width, signed: p.signed, isPointer: p.isPointer, elemWidth: p.elemWidth, elemSigned: p.elemSigned });
     }
     this.scopes = [globalScope, paramScope];
     this.emitLabel(fnInfo.label);

@@ -10,7 +10,7 @@ import {
 } from './wiring.js?v=20261125r';
 import { defaultBenchState, benchToNetlist } from './bench-model.js?v=20261125al';
 import { meterReadings } from './circuit-solver.js?v=20261125al';
-import { compileC } from './c-compiler.js?v=20261125ao';
+import { compileC } from './c-compiler.js?v=20261125ap';
 
 const cpu = createCPU();
 cpu.clockHz = 4000000;
@@ -43,7 +43,9 @@ void main() {
   }
 }`;
 
-// Vòng lặp chạy 1x thời gian thực @4MHz (1 triệu lệnh/giây). ProgramRunner
+// Vòng lặp chạy 1x thời gian thực theo cpu.clockHz (mặc định 4MHz:
+// 1 triệu lệnh/giây; loadC đổi clockHz theo _XTAL_FREQ của code vừa
+// dịch, vd code 20MHz thì 5 triệu lệnh/giây). ProgramRunner
 // chỉ step khi đang ở trạng thái running, còn lại tick là no-op.
 // Đo thời gian thực đã trôi qua rồi chạy bù đủ số chu kỳ, thay vì mặc định
 // mỗi lần hẹn giờ là đúng 50ms: trong trình duyệt, khi cảnh 3D nặng thì
@@ -93,9 +95,15 @@ window.HoaTrangBenchBridge = {
   // theo dòng C, nhưng runner.loadAsm tự set map theo dòng HỢP NGỮ đã
   // sinh — nên BẮT BUỘC ghi đè lại bằng map dòng C, không thì breakpoint
   // và dòng hiện tại sẽ chỉ sai dòng. Lỗi thì không nạp gì.
+  // clockHz PHẢI theo _XTAL_FREQ của code vừa dịch (r.xtalFreq): vòng
+  // delay sinh theo tần số đó, runner nhịp theo cpu.clockHz — lệch nhau
+  // thì delay sai giờ thực (vd code 20MHz mà clockHz còn 4MHz thì
+  // __delay_ms(250) chạy thành 1,25 giây). File .hex không mang tần số
+  // nên loadHex trả clockHz về 4MHz như trước đây.
   loadC(source) {
     const r = compileC(source);
     if (!r.ok) return { ok: false, errors: r.errors };
+    cpu.clockHz = r.xtalFreq;
     const loaded = runner.loadAsm(r.asm);
     if (!loaded.ok) return { ok: false, errors: loaded.errors };
     runner.lineToAddr = r.lineToAddr;
@@ -105,7 +113,7 @@ window.HoaTrangBenchBridge = {
   },
   // Chỉ dịch C, không nạp gì (để bench.js dùng cho gutter/breakpoint).
   compileCOnly(source) { return compileC(source); },
-  loadHex(text) { const r = runner.loadHex(text); if (r.ok) applyAllPots(); return r; },
+  loadHex(text) { const r = runner.loadHex(text); if (r.ok) { cpu.clockHz = 4000000; applyAllPots(); } return r; },
   runProgram: () => runner.run(),
   pauseProgram: () => runner.pause(),
   stepProgram: () => runner.stepOnce(),
