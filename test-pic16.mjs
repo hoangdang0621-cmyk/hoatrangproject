@@ -8,6 +8,10 @@ import { LABS, getLab, buildLabState } from './public/labs.js';
 import { buildSolverNets, solveLinear, solveCircuit, meterReadings, formatVolts, formatAmps, formatCurrentDirection, LED_FORWARD_VOLTS, LED_SERIES_OHMS, PIC_OUTPUT_VOLTS } from './public/circuit-solver.js';
 import { compileC, C_VERSION } from './public/c-compiler.js';
 
+// Fixture C thật của Điệp (khôi phục từ chat, lưu bền trong repo thay vì
+// /tmp — /tmp bị xóa khi VM thay). Đọc bằng đường dẫn tương đối từ file test.
+const readFixture = (name) => readFileSync(new URL(`./test/fixtures/${name}`, import.meta.url), 'utf8');
+
 // Các chương trình Assembly dùng để kiểm thử — inline tại đây (file
 // public/examples.js chứa các bài lab mẫu đã bị gỡ ngày 25/11/2026 nên test
 // không import từ đó nữa). Chỉ giữ id + code, không còn hướng dẫn lab.
@@ -3852,14 +3856,14 @@ void main(){
     !eAddrBit.ok && eAddrBit.program === null && eAddrBit.errors.some((e) => e.message.includes('không lấy địa chỉ của bit')),
     JSON.stringify(eAddrBit.errors));
 }
-// (ac-g) Code thật của Điệp (/tmp/diep-lcd-scroll.c): LCD cuộn "Hello Diep"
+// (ac-g) Code thật của Điệp (test/fixtures/diep-lcd-scroll.c): LCD cuộn "Hello Diep"
 // (ký tự tự tạo Đ=0, ệ=1) + LED RB1 nháy mỗi bước, chạy trên board led-lcd.
 // Chuỗi kỳ vọng tính bằng code từ message (mã 0/1 hiện thành ' ' vì LCD
 // chưa mô phỏng CGRAM — xem ghi chú trong báo cáo).
 {
   let diepSrc = null;
-  try { diepSrc = readFileSync('/tmp/diep-lcd-scroll.c', 'utf8'); } catch (e) { diepSrc = null; }
-  check('(ac-g) đọc được /tmp/diep-lcd-scroll.c', typeof diepSrc === 'string' && diepSrc.length > 0,
+  try { diepSrc = readFixture('diep-lcd-scroll.c'); } catch (e) { diepSrc = null; }
+  check('(ac-g) đọc được test/fixtures/diep-lcd-scroll.c', typeof diepSrc === 'string' && diepSrc.length > 0,
     diepSrc === null ? 'không đọc được file' : `dài ${diepSrc.length} ký tự`);
   if (diepSrc) {
     const r = compileC(diepSrc);
@@ -3916,7 +3920,7 @@ void main(){
       && cpu.lcd.ddram[11] === 0 && cpu.lcd.ddram[13] === 1,
       `line=${JSON.stringify(samples.length ? samples[10].line : '')} ddram[11]=${cpu.lcd.ddram[11]} ddram[13]=${cpu.lcd.ddram[13]}`);
   } else {
-    check('(ac-g) code Điệp compileC ok, 0 lỗi (bỏ qua: không đọc được file)', false, 'không đọc được /tmp/diep-lcd-scroll.c');
+    check('(ac-g) code Điệp compileC ok, 0 lỗi (bỏ qua: không đọc được file)', false, 'không đọc được test/fixtures/diep-lcd-scroll.c');
   }
 }
 
@@ -4050,7 +4054,7 @@ void main(){
     `period=${period}`);
   // Code cuộn của Điệp (nếu đọc được file): LED đổi trạng thái mỗi bước.
   let diepSrc = null;
-  try { diepSrc = readFileSync('/tmp/diep-lcd-scroll.c', 'utf8'); } catch (e) { diepSrc = null; }
+  try { diepSrc = readFixture('diep-lcd-scroll.c'); } catch (e) { diepSrc = null; }
   if (diepSrc) {
     const r = compileC(diepSrc);
     const { state } = buildLabState(getLab('led-lcd'));
@@ -4076,7 +4080,7 @@ void main(){
       r.ok && gap >= 1200000 && gap <= 1400000,
       `gap=${gap}`);
   } else {
-    check('(ad-e) Code cuộn LCD @20MHz (bỏ qua: không đọc được /tmp/diep-lcd-scroll.c)', false, 'không đọc được file');
+    check('(ad-e) Code cuộn LCD @20MHz (bỏ qua: không đọc được test/fixtures/diep-lcd-scroll.c)', false, 'không đọc được file');
   }
 }
 
@@ -4181,13 +4185,13 @@ void main(void)
   }
 }
 
-// (ae-c) Code LCD 2 hàng thật của Điệp (/tmp/diep-xc8-v2-fixed.c):
+// (ae-c) Code LCD 2 hàng thật của Điệp (test/fixtures/diep-xc8-v2-fixed.c):
 // hàng 1 "    VIET NAM    ", hàng 2 cuộn "cong hoa xa hoi chu nghia
 // viet nam", LED nháy mỗi bước, KHÔNG kẹt (2 ảnh chụp cách nhau 1 bước
 // cuộn phải khác nhau).
 {
   let diepSrc = null;
-  try { diepSrc = readFileSync('/tmp/diep-xc8-v2-fixed.c', 'utf8'); } catch (e) { diepSrc = null; }
+  try { diepSrc = readFixture('diep-xc8-v2-fixed.c'); } catch (e) { diepSrc = null; }
   if (diepSrc) {
     const r = compileC(diepSrc);
     check('(ae-c) code 2 hàng của Điệp compile ok, 0 lỗi', r.ok, JSON.stringify(r.errors));
@@ -4226,7 +4230,7 @@ void main(void)
     check('(ae-c) hàng 1 vẫn giữ tiêu đề sau khi cuộn',
       cpu.lcd.getLines()[0] === '    VIET NAM    ', JSON.stringify(cpu.lcd.getLines()[0]));
   } else {
-    check('(ae-c) code 2 hàng của Điệp (bỏ qua: không đọc được /tmp/diep-xc8-v2-fixed.c)', false, 'không đọc được file');
+    check('(ae-c) code 2 hàng của Điệp (bỏ qua: không đọc được test/fixtures/diep-xc8-v2-fixed.c)', false, 'không đọc được file');
   }
 }
 
@@ -4322,10 +4326,10 @@ void main(void){ TRISD=0; TRISE=0; ADCON1=0x06; __delay_ms(40); LCD_Command(0x38
     check('(af-d) sizeof(mảng) trong biểu thức compile ok', r2.ok, JSON.stringify(r2.errors));
   }
 
-  // (af-e) Code gốc của Điệp (/tmp/diep-xc8-v2.c) NGUYÊN VẸN, không sửa.
+  // (af-e) Code gốc của Điệp (test/fixtures/diep-xc8-v2.c) NGUYÊN VẸN, không sửa.
   {
     let diepSrc = null;
-    try { diepSrc = readFileSync('/tmp/diep-xc8-v2.c', 'utf8'); } catch (e) { diepSrc = null; }
+    try { diepSrc = readFixture('diep-xc8-v2.c'); } catch (e) { diepSrc = null; }
     if (diepSrc) {
       const r = compileC(diepSrc);
       check('(af-e) code gốc Điệp compile ok, 0 lỗi (không sửa file)', r.ok, JSON.stringify(r.errors));
@@ -4361,7 +4365,7 @@ void main(void){ TRISD=0; TRISE=0; ADCON1=0x06; __delay_ms(40); LCD_Command(0x38
       check('(af-e) LED RB1 đổi trạng thái giữa 2 bước cuộn',
         ledA !== ledB, `ledA=${ledA} ledB=${ledB}`);
     } else {
-      check('(af-e) code gốc Điệp (bỏ qua: không đọc được /tmp/diep-xc8-v2.c)', false, 'không đọc được file');
+      check('(af-e) code gốc Điệp (bỏ qua: không đọc được test/fixtures/diep-xc8-v2.c)', false, 'không đọc được file');
     }
   }
 

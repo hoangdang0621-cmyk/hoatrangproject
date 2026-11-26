@@ -376,24 +376,6 @@ void main() {
     const b = bridge();
     if (!b || typeof b.getRunStatus !== 'function') return;
     const st = b.getRunStatus();
-    // DEBUG tạm (gỡ sau khi sửa xong lỗi "Nạp & chạy không chạy"): hiện số
-    // chu kỳ CPU + nội dung LCD + trạng thái LED để biết CPU có đang chạy
-    // thật không mà không cần mở DevTools. Cập nhật mỗi lần hẹn giờ.
-    const dbgEl = $('benchCodeDebug');
-    if (dbgEl) {
-      let lcdTxt = '?', lcdOk = '?', ledTxt = '?';
-      try {
-        if (typeof b.getLcd === 'function') {
-          const lcd = b.getLcd();
-          lcdTxt = JSON.stringify(lcd.lines);
-          lcdOk = lcd.complete ? 'du-day' : 'THIEU-DAY';
-        }
-        if (typeof b.getLedStates === 'function') {
-          ledTxt = b.getLedStates().map((s) => `${s.id}:${s.on ? 'SANG' : 'tat'}`).join(' ') || 'khong-co-led';
-        }
-      } catch {}
-      dbgEl.textContent = `DEBUG tạm: state=${st.state} cycles=${st.cycles ?? '?'} pc=0x${(st.pc ?? 0).toString(16).toUpperCase()} LCD[${lcdOk}]=${lcdTxt} LED ${ledTxt}`;
-    }
     const sig = [st.state, st.pauseReason, st.pc, st.line, st.hexMode].join('|');
     if (!force && sig === codeStatusSig) return;
     codeStatusSig = sig;
@@ -1430,6 +1412,29 @@ void main() {
     }
     ctx.fillText(text, 128, 76);
     t.tex.needsUpdate = true;
+  }
+  // Vẽ 1 hàng LCD 16 ô lên canvas (canvas 256×64, mỗi ô 16px, font đã
+  // đặt sẵn 28px monospace, baseline 'middle', màu #7CFFB2). Ô thường:
+  // vẽ ký tự; ô custom (mã CGRAM): vẽ bitmap 5×8 (mỗi hàng là số 5 bit,
+  // bit 4 = cột trái nhất).
+  function drawLcdLine(ctx, cells, y) {
+    for (let i = 0; i < 16; i++) {
+      const cell = cells[i];
+      if (!cell) continue;
+      const x = i * 16;
+      if (cell.custom) {
+        const px = 2.6, w = 5 * px, h = 8 * px;
+        const ox = x + (16 - w) / 2, oy = y - h / 2;
+        for (let r = 0; r < 8; r++) {
+          const row = cell.custom[r] || 0;
+          for (let c = 0; c < 5; c++) {
+            if ((row >> (4 - c)) & 1) ctx.fillRect(ox + c * px, oy + r * px, px, px);
+          }
+        }
+      } else if (cell.ch && cell.ch !== ' ') {
+        ctx.fillText(cell.ch, x, y);
+      }
+    }
   }
   function resistorBands(value) {
     const v = Math.max(1, Math.round(value));
