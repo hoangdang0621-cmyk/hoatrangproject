@@ -19,7 +19,7 @@ import {
 } from './bench-model.js?v=20261125aw';
 import { checkWiring, SIGNAL_COLORS } from './wiring.js?v=20261125r';
 import { formatVolts, formatAmps, formatCurrentDirection } from './circuit-solver.js?v=20261125aw';
-import { LABS, getLab, buildLabState } from './labs.js?v=20261125ao';
+import { LABS, getLab, buildLabState } from './labs.js?v=20261125az';
 
 const $ = (id) => document.getElementById(id);
 const benchView = $('benchView');
@@ -64,6 +64,7 @@ function main() {
   let drag = null;              // {mode:'palette'|'move'|'move-psu'|'orbit'|'wire-end', ...}
   let pressedBtn = null;        // id nút đang nhấn giữ trên bàn
   let wireAddrError = '';       // lỗi nhập địa chỉ lỗ trong Inspector dây
+  let inspAutoCloseTimer = null; // hẹn tự tắt popup Inspector sau 2s nếu không động vào
   let seq = 1, wireSeq = 100;
   state.components.forEach((c) => {
     const n = parseInt(String(c.id).replace(/^[A-Z]+/, ''), 10);
@@ -517,6 +518,17 @@ void main() {
   }
 
   // --- Chọn / Inspector (panel trượt từ phải) ---
+  // Popup Inspector tự tắt sau 2s nếu không động vào (Điệp lệnh 26/11):
+  // mở popup thì hẹn tắt; bấm/chạm/cuộn/focus vào panel thì hủy hẹn
+  // (đã động vào thì để mở cho chỉnh). Đóng popup thì hủy hẹn.
+  function armInspAutoClose() {
+    clearTimeout(inspAutoCloseTimer);
+    inspAutoCloseTimer = setTimeout(() => { inspAutoCloseTimer = null; select(null); }, 2000);
+  }
+  function disarmInspAutoClose() {
+    clearTimeout(inspAutoCloseTimer);
+    inspAutoCloseTimer = null;
+  }
   function select(sel) {
     const prevWire = selected && selected.kind === 'wire' ? selected.id : null;
     selected = sel;
@@ -525,6 +537,7 @@ void main() {
     if (prevWire || (sel && sel.kind === 'wire')) rebuildWires();
     else updateSelectionVisual();
     renderInspector();
+    if (sel) armInspAutoClose(); else disarmInspAutoClose();
   }
   function updateSelectionVisual() {
     if (!sceneReady) return;
@@ -639,8 +652,17 @@ void main() {
           <input class="input" id="inspResVal" type="number" min="1" max="10000000" step="1" value="${comp.props?.value ?? 220}">
           <p class="sub">Điện trở nối 2 strip của nó — dùng nối tiếp với LED để hạn dòng.</p>`;
       } else if (comp.type === 'led') {
+        // Ô chọn màu luôn hiện đúng màu thật của LED: nếu màu hiện tại
+        // không nằm trong bảng màu (vd LED Lab 2 cũ màu #16A34A, hoặc
+        // mạch đã lưu từ trước) thì thêm nó làm lựa chọn đang chọn, tránh
+        // trình duyệt tự nhảy về lựa chọn đầu tiên (Đỏ) khi không có
+        // option nào khớp.
+        const curLedColor = comp.props?.color || '#DC2626';
+        const ledOpts = LED_COLORS.some((c) => c.value === curLedColor)
+          ? LED_COLORS.map((c) => `<option value="${c.value}"${curLedColor === c.value ? ' selected' : ''}>${c.name}</option>`).join('')
+          : `<option value="${curLedColor}" selected>Màu hiện tại (${curLedColor})</option>` + LED_COLORS.map((c) => `<option value="${c.value}">${c.name}</option>`).join('');
         body = `<label class="bench-insp-label" for="inspLedColor">Màu LED</label>
-          <select class="select" id="inspLedColor">${LED_COLORS.map((c) => `<option value="${c.value}"${(comp.props?.color || '#DC2626') === c.value ? ' selected' : ''}>${c.name}</option>`).join('')}</select>
+          <select class="select" id="inspLedColor">${ledOpts}</select>
           <p class="sub">LED sáng khi anode ở mức 1 và cathode về GND (hoặc mức 0).</p>`;
       } else if (comp.type === 'pot') {
         const pct = comp.props?.pct ?? 0;
@@ -2486,6 +2508,15 @@ void main() {
   renderChecks();
   updateModeBanner();
   updateSizeUI();
+
+  // Động vào popup Inspector (rê chuột vào, bấm, cuộn, tab vào) thì hủy
+  // hẹn tự tắt — gắn 1 lần ở panel (không gắn trong renderInspector vì
+  // innerHTML thay mỗi lần vẽ lại sẽ nhân đôi listener).
+  if (inspectorEl) {
+    for (const ev of ['pointerenter', 'pointerdown', 'wheel', 'focusin']) {
+      inspectorEl.addEventListener(ev, disarmInspAutoClose);
+    }
+  }
 }
 
 function esc(s) {

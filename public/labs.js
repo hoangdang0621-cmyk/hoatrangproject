@@ -4,7 +4,7 @@
 // Thêm lab mới chỉ cần thêm 1 phần tử vào mảng LABS.
 // Lỗ chân RB0 (h29), vị trí điện trở/LED và dây nối đã tính bằng legsFor /
 // canPlace trên board mặc định 830 và kiểm chứng bằng netlist (test q).
-import { defaultBenchState, defaultProps, canPlace, parseHole, parsePsuPost } from './bench-model.js?v=20261125al';
+import { defaultBenchState, defaultProps, canPlace, parseHole, parsePsuPost } from './bench-model.js?v=20261125aw';
 
 export const LABS = [
   {
@@ -86,7 +86,7 @@ void main() {
     size: { cols: 100, rows: 20, rails: true },
     components: [
       { id: 'R1', type: 'resistor', anchor: 's45', rot: 0, props: { value: 220 } },
-      { id: 'LED1', type: 'led', anchor: 's52', rot: 0, props: { color: '#16A34A' } },
+      { id: 'LED1', type: 'led', anchor: 's52', rot: 0, props: { color: '#059669' } }, // xanh lá trong bảng màu (dropdown hiện đúng "Xanh lá")
       { id: 'LCD1', type: 'lcd', anchor: 'a77', rot: 0, props: {} },
     ],
     // Quy tắc dây lab: cắm vào lỗ kề trong cùng đoạn strip (5 hàng), KHÔNG cắm trùng lỗ chân linh kiện.

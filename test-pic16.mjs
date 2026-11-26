@@ -3068,7 +3068,7 @@ WAIT_EE
   check('(y-a) Lab 2 có đúng 1 điện trở 220Ω (R1 @s45) + 1 LED xanh lá (LED1 @s52) + 1 LCD (LCD1 @a77)',
     lab.components.length === 3
     && lab.components[0].id === 'R1' && lab.components[0].type === 'resistor' && lab.components[0].anchor === 's45' && lab.components[0].props.value === 220
-    && lab.components[1].id === 'LED1' && lab.components[1].type === 'led' && lab.components[1].anchor === 's52' && lab.components[1].props.color === '#16A34A'
+    && lab.components[1].id === 'LED1' && lab.components[1].type === 'led' && lab.components[1].anchor === 's52' && lab.components[1].props.color === '#059669'
     && lab.components[2].id === 'LCD1' && lab.components[2].type === 'lcd' && lab.components[2].anchor === 'a77',
     JSON.stringify(lab.components));
   check('(y-a) Lab 2 có đúng 13 dây: 3 dây LED (RB1->R, R->anode, cathode->GND) + 10 dây LCD (RS/E/D0–D7)',
