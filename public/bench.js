@@ -19,7 +19,7 @@ import {
 import { checkWiring, SIGNAL_COLORS } from './wiring.js?v=20261125r';
 import { assemble } from './pic16.js?v=20261125ah';
 import { formatVolts, formatAmps, formatCurrentDirection } from './circuit-solver.js?v=20261125al';
-import { LABS, getLab, buildLabState } from './labs.js?v=20261125am';
+import { LABS, getLab, buildLabState } from './labs.js?v=20261125an';
 
 const $ = (id) => document.getElementById(id);
 const benchView = $('benchView');

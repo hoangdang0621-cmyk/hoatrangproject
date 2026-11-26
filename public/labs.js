@@ -26,7 +26,7 @@ export const LABS = [
   {
     id: 'led-lcd',
     title: 'Điều khiển LED + LCD',
-    desc: 'Board lớn 100 cột × 20 hàng — linh kiện cách xa nhau, dễ nhìn. Đấu nối sẵn — LCD 16x2 chế độ 8-bit: RS→RE0 (chân 8), E→RE1 (chân 9), D0→RD0 (chân 19), D1→RD1 (chân 20), D2→RD2 (chân 21), D3→RD3 (chân 22), D4→RD4 (chân 27), D5→RD5 (chân 28), D6→RD6 (chân 29), D7→RD7 (chân 30). LED xanh lá → RB1 (chân 34) qua điện trở 220Ω, cathode về GND. Trên bàn: chip PIC ở giữa (neo g41, cột 41–60), LCD ở góc trên phải (neo a77, RS=a77 … D7=a86), điện trở R1 neo s45 và LED1 neo s52 ở góc dưới giữa (cách chip 6 hàng, cách LCD ~13 cột, không bị thân LCD che). Chương trình: khởi tạo LCD (0x38, 0x0C, 0x01, 0x06), ghi chữ lên dòng 1 và nháy LED RB1.',
+    desc: 'LCD 16x2 chế độ 8-bit đấu sẵn: RS→RE0 (chân 8), E→RE1 (chân 9), D0→RD0 (chân 19), D1→RD1 (chân 20), D2→RD2 (chân 21), D3→RD3 (chân 22), D4→RD4 (chân 27), D5→RD5 (chân 28), D6→RD6 (chân 29), D7→RD7 (chân 30). LED xanh lá → RB1 (chân 34) qua điện trở 220Ω, cathode về GND.',
     size: { cols: 100, rows: 20, rails: true },
     components: [
       { id: 'R1', type: 'resistor', anchor: 's45', rot: 0, props: { value: 220 } },

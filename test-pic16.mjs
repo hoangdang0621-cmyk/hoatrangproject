@@ -3057,7 +3057,8 @@ WAIT_EE
   check('(y-a) Lab 2: Điều khiển LED + LCD, board 100×20, desc liệt kê đủ bảng đấu nối',
     lab && lab.id === 'led-lcd' && lab.title === 'Điều khiển LED + LCD'
     && lab.size && lab.size.cols === 100 && lab.size.rows === 20 && lab.size.rails === true
-    && lab.desc.includes('RS→RE0') && lab.desc.includes('D7→RD7') && lab.desc.includes('RB1'),
+    && lab.desc.includes('RS→RE0') && lab.desc.includes('D7→RD7') && lab.desc.includes('RB1')
+    && !lab.desc.includes('100 cột') && !lab.desc.includes('Board lớn') && !lab.desc.includes('Trên bàn'),
     lab ? lab.id : 'thieu LABS[1]');
   check('(y-a) Lab 2 có đúng 1 điện trở 220Ω (R1 @s45) + 1 LED xanh lá (LED1 @s52) + 1 LCD (LCD1 @a77)',
     lab.components.length === 3
