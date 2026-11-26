@@ -13,9 +13,9 @@
 // - Net không nối tới nguồn áp nào và không có đường về GND thì floating
 //   (điện áp null, không gán 0V bừa); nhánh trong mạch floating thì dòng 0.
 import {
-  DEFAULT_SIZE, legsFor, stripKey, parseHole, parsePsuPost, psuVolts,
+  DEFAULT_SIZE, legsFor, stripKey, parseHole, parsePsuPost, parseScopePost, psuVolts,
   benchToNetlist, normalizeWireEnd, meterMode,
-} from './bench-model.js?v=20261125av';
+} from './bench-model.js?v=20261125aw';
 import { resolvePeripherals, ledStates, PIC_PINS } from './wiring.js?v=20261125r';
 
 export const LED_FORWARD_VOLTS = 2.0;  // sụt áp thuận LED khi sáng
@@ -71,17 +71,21 @@ export function buildSolverNets(state, pressedIds = []) {
     }
   }
   // Đầu dây -> strip: lỗ -> strip của lỗ; cọc nguồn -> RAIL+/RAIL-;
-  // đầu {x,y,z} cũ -> cọc nguồn nếu khớp vị trí cọc (normalizeWireEnd).
+  // cọc hiện sóng -> node riêng 'SCOPE:OSC1.CH1' (để union-find nối strip
+  // với cọc; scope chỉ quan sát, không phải nhánh mạch); đầu {x,y,z} cũ
+  // -> cọc nguồn/cọc hiện sóng nếu khớp vị trí cọc (normalizeWireEnd).
   const endStripKey = (e) => {
     if (typeof e === 'string') {
       const pp = parsePsuPost(e);
       if (pp) return pp.sign === '+' ? 'RAIL+' : 'RAIL-';
+      if (parseScopePost(e)) return 'SCOPE:' + e;
       return stripKey(e, size);
     }
     const norm = normalizeWireEnd(state, e);
     if (typeof norm === 'string') {
       const pp = parsePsuPost(norm);
       if (pp) return pp.sign === '+' ? 'RAIL+' : 'RAIL-';
+      if (parseScopePost(norm)) return 'SCOPE:' + norm;
     }
     return null;
   };
@@ -102,6 +106,10 @@ export function buildSolverNets(state, pressedIds = []) {
     nodeOfStrip,
     nodeOfTerm: (compId, term) => nodeOfStrip(legStrip.get(compId + '.' + term)),
     nodeOfPicPin: (pinId) => nodeOfStrip(picPinStrip.get('PIC.' + pinId)),
+    // Node của 1 cọc hiện sóng ('SCOPE:OSC1.CH1'): dùng lại nodeOfStrip
+    // để find đúng root sau union (cọc nối strip nào thì cùng root đó);
+    // cọc chưa nối dây thì không có node (undefined -> coi như null).
+    nodeOfScopeTerm: (compId, term) => nodeOfStrip('SCOPE:' + compId + '.' + term),
     railPlus: find('RAIL+'),
     railMinus: find('RAIL-'),
   };
@@ -395,12 +403,12 @@ export function meterReadings(state, cpu, pressedIds = []) {
 
 // ---------------------------------------------------------------------------
 // Điện áp 2 kênh của mọi đồng hồ hiện sóng trên bàn. Cùng mẫu meterReadings
-// (chế độ V): CH1 = V(chân CH1) − V(chân GND), CH2 = V(chân CH2) −
-// V(chân GND). Trả [{id, ch1, ch2}] (mỗi kênh là số volt hoặc null).
-// - Chân GND floating (null) -> cả 2 kênh null (không có mốc đo).
-// - Chân kênh floating -> kênh đó null, kênh còn lại vẫn đọc được.
-// - 2 chân cùng 1 net -> hiệu 0V (kể cả net đó floating, vì 2 đầu đo là
-//   cùng 1 điểm). Chân rơi ngoài board (không có node) -> kênh đó null.
+// (chế độ V): CH1 = V(cọc CH1) − V(cọc GND), CH2 = V(cọc CH2) −
+// V(cọc GND). Trả [{id, ch1, ch2}] (mỗi kênh là số volt hoặc null).
+// - Cọc GND floating (null) -> cả 2 kênh null (không có mốc đo).
+// - Cọc kênh floating -> kênh đó null, kênh còn lại vẫn đọc được.
+// - 2 cọc cùng 1 net -> hiệu 0V (kể cả net đó floating, vì 2 đầu đo là
+//   cùng 1 điểm). Cọc chưa nối dây (không có node) -> kênh đó null.
 // pressedIds: id các nút đang nhấn giữ (nút nhấn = công tắc đóng).
 // ---------------------------------------------------------------------------
 export const SCOPE_MAX_SAMPLES = 240; // bộ nhớ vòng: 240 mẫu × 50ms = 12 giây
@@ -416,14 +424,16 @@ export function scopeVoltages(state, cpu, pressedIds = []) {
   const out = [];
   for (const comp of state.components) {
     if (comp.type !== 'oscilloscope') continue;
-    const nG = nets.nodeOfTerm(comp.id, 'GND');
+    // Mốc đo là node cọc GND (không còn là chân lỗ): GND chưa nối dây
+    // (không có node) hoặc floating -> cả 2 kênh null.
+    const nG = nets.nodeOfScopeTerm(comp.id, 'GND');
     const vG = (nG === null || nG === undefined) ? null : nodeVoltage.get(nG);
     const gndV = (vG === null || vG === undefined) ? null : vG;
     const readCh = (term) => {
       if (gndV === null) return null; // GND floating: không có mốc đo
-      const n = nets.nodeOfTerm(comp.id, term);
-      if (!n) return null; // chân rơi ngoài board
-      if (n === nG) return 0; // 2 chân cùng 1 net
+      const n = nets.nodeOfScopeTerm(comp.id, term);
+      if (!n) return null; // cọc chưa nối dây
+      if (n === nG) return 0; // 2 cọc cùng 1 net
       const v = nodeVoltage.get(n);
       if (v === null || v === undefined) return null; // kênh floating
       return v - gndV;

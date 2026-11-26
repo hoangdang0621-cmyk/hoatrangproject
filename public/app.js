@@ -8,8 +8,8 @@ import {
   resolvePeripherals, ledStates, buzzerStates,
   applyButtonToCpu, applyPotToCpu,
 } from './wiring.js?v=20261125r';
-import { defaultBenchState, benchToNetlist } from './bench-model.js?v=20261125av';
-import { meterReadings, scopeVoltages, pushScopeSample, SCOPE_MAX_SAMPLES } from './circuit-solver.js?v=20261125av';
+import { defaultBenchState, benchToNetlist } from './bench-model.js?v=20261125aw';
+import { meterReadings, scopeVoltages, pushScopeSample, SCOPE_MAX_SAMPLES } from './circuit-solver.js?v=20261125aw';
 import { compileC } from './c-compiler.js?v=20261125ar';
 
 const cpu = createCPU();

@@ -331,11 +331,11 @@ export const LEG_LAYOUTS = {
   // Mode 'A' (đo dòng): 0Ω, nối 2 strip như dây (xem buildBenchNets),
   // dòng đo từ P sang N. Mode nằm trong props.mode ('V' mặc định).
   multimeter: [{ term: 'P', dc: 0, dr: 0 }, { term: 'N', dc: 4, dr: 0 }],
-  // Đồng hồ hiện sóng (oscilloscope) 2 kênh: CH1/CH2 đo áp so với GND,
-  // cách nhau 2 cột (span 4 cột như multimeter). Trở kháng vô cùng như
-  // multimeter chế độ V: chỉ đọc điện áp, không ảnh hưởng mạch (không
-  // thêm terminal vào netlist CPU, xem buildBenchNets).
-  oscilloscope: [{ term: 'CH1', dc: 0, dr: 0 }, { term: 'CH2', dc: 2, dr: 0 }, { term: 'GND', dc: 4, dr: 0 }],
+  // Đồng hồ hiện sóng KHÔNG còn trong bảng chân: nó là linh kiện NGOÀI
+  // BÀN (như khối nguồn), ngồi trên mặt bàn, nối dây vào 3 cọc CH1/CH2/GND
+  // ở mặt trước thân máy (xem parseScopePost/scopePostPos ở dưới). Trở
+  // kháng vô cùng như multimeter chế độ V: chỉ đọc điện áp, không ảnh
+  // hưởng mạch (không thêm terminal vào netlist CPU, xem buildBenchNets).
 };
 
 // Chế độ của đồng hồ đo: 'A' (đo dòng) hoặc 'V' (đo áp, mặc định khi
@@ -421,7 +421,7 @@ export function legsFor(comp, size = DEFAULT_SIZE) {
     const a = parseHole(comp.anchor, size);
     return (a ? picLegsForAnchor(a, size) : picLegs(size)).map((l) => ({ term: l.term, hole: l.hole }));
   }
-  if (comp.type === 'psu') return [];
+  if (comp.type === 'psu' || comp.type === 'oscilloscope') return [];
   const anchor = parseHole(comp.anchor, size);
   if (!anchor) return [];
   return legOffsets(comp.type, comp.rot || 0).map((l) => ({
@@ -447,7 +447,7 @@ export function occupancy(state, ignoreId = null) {
 // và chân nằm dưới thân chip PIC (hàng b..h, cột picCol..picCol+19).
 export function canPlace(state, type, anchor, rot = 0, ignoreId = null) {
   const size = state.size ?? DEFAULT_SIZE;
-  if (type === 'psu') return { ok: true, legs: [] }; // nguồn đặt trên mặt bàn, không cần lỗ
+  if (type === 'psu' || type === 'oscilloscope') return { ok: true, legs: [] }; // nguồn / hiện sóng đặt trên mặt bàn, không cần lỗ
   const legs = legsFor({ type, anchor, rot }, size);
   if (!legs.length) return { ok: false, reason: 'Không đặt được linh kiện này lên lỗ.' };
   for (const leg of legs) {
@@ -560,17 +560,22 @@ export function buildBenchNets(state, pressedIds = []) {
     for (let i = 1; i < keys.length; i++) union(keys[0], keys[i]);
   }
   // Strip của 1 đầu dây: lỗ -> strip của lỗ đó; cọc nguồn -> RAIL+/RAIL-;
-  // đầu {x,y,z} cũ -> cọc nguồn nếu khớp vị trí cọc, còn không thì bỏ qua.
+  // cọc hiện sóng -> null (chỉ quan sát, không nối gì trong netlist CPU);
+  // đầu {x,y,z} cũ -> cọc nguồn/cọc hiện sóng nếu khớp vị trí cọc, còn
+  // không thì bỏ qua. Dây 1 đầu lỗ + 1 đầu cọc scope bị bỏ qua ở vòng
+  // union dưới (kiểm ka && kb) nên strip của lỗ đó không đổi.
   const endStripKey = (e) => {
     if (typeof e === 'string') {
       const pp = parsePsuPost(e);
       if (pp) return pp.sign === '+' ? 'RAIL+' : 'RAIL-';
+      if (parseScopePost(e)) return null;
       return stripKey(e, size);
     }
     const norm = normalizeWireEnd(state, e);
     if (typeof norm === 'string') {
       const pp = parsePsuPost(norm);
       if (pp) return pp.sign === '+' ? 'RAIL+' : 'RAIL-';
+      if (parseScopePost(norm)) return null;
     }
     return null;
   };
@@ -670,9 +675,51 @@ export function normalizeWireEnd(state, e) {
         if (Math.abs(e.x - (c.tx + dx)) < 6 && Math.abs(e.z - (c.tz + dz)) < 6) return c.id + '.' + sign;
       }
     }
+    // Đầu {x,y,z} cũ khớp cọc hiện sóng thì đổi thành id cọc ('OSC1.CH1'...).
+    for (const c of state.components) {
+      if (c.type !== 'oscilloscope') continue;
+      for (const [term, dx] of [['CH1', -SCOPE_POST_DX], ['CH2', 0], ['GND', SCOPE_POST_DX]]) {
+        if (Math.abs(e.x - (c.tx + dx)) < 6 && Math.abs(e.z - (c.tz + SCOPE_POST_DZ)) < 6) return c.id + '.' + term;
+      }
+    }
   }
   return e;
 }
+
+// ---------------------------------------------------------------------------
+// Cọc của đồng hồ hiện sóng: linh kiện NGOÀI BÀN (như khối nguồn), ngồi
+// trên mặt bàn, nối dây từ lỗ breadboard vào 3 cọc CH1/CH2/GND ở mặt
+// trước thân máy (id 'OSC1.CH1' / 'OSC1.CH2' / 'OSC1.GND').
+// Thân máy 100 rộng × 60 cao × 50 sâu (mm), KHÔNG scale như PSU nên tọa
+// độ cọc là tọa độ 3D thật: cọc ở mặt trước (z = tz+26), cao y = 10,
+// CH1 x = tx−28, CH2 x = tx, GND x = tx+28.
+// Vị trí mặc định khi đặt mới / khi migrate scope cũ: tx=130, tz=-150
+// (cạnh phải nguồn, sau board, không chồng nguồn: nguồn rộng 60 ở tx=0
+// trải −30..30; scope rộng 100 ở tx=130 trải 80..180).
+// ---------------------------------------------------------------------------
+export const SCOPE_POST_DX = 28; // |x| cọc CH1/GND so với tx (CH2 ở giữa)
+export const SCOPE_POST_Y = 10;  // cao cọc
+export const SCOPE_POST_DZ = 26; // z cọc so với tz (mặt trước hộp sâu 50 ở +25, cọc nhô +1)
+export const SCOPE_DEFAULT_TX = 130;
+export const SCOPE_DEFAULT_TZ = -150;
+export function parseScopePost(id) {
+  const m = typeof id === 'string' ? id.match(/^OSC(\d+)\.(CH1|CH2|GND)$/) : null;
+  return m ? { scopeId: 'OSC' + m[1], term: m[2] } : null;
+}
+// Vị trí 3D của cọc hiện sóng trên bàn (mm).
+export function scopePostPos(state, id) {
+  const sp = parseScopePost(id);
+  if (!sp) return null;
+  const comp = state.components.find((c) => c.id === sp.scopeId && c.type === 'oscilloscope');
+  if (!comp) return null;
+  const dx = sp.term === 'CH1' ? -SCOPE_POST_DX : sp.term === 'GND' ? SCOPE_POST_DX : 0;
+  return { x: comp.tx + dx, y: SCOPE_POST_Y, z: comp.tz + SCOPE_POST_DZ };
+}
+// Lỗ chân CŨ của scope cắm lỗ (trước khi đổi sang linh kiện ngoài bàn):
+// 3 chân CH1/CH2/GND cách nhau 2 cột từ lỗ neo (dc 0/2/4, dr 0). Chỉ dùng
+// trong migration sanitizeState (LEG_LAYOUTS đã bỏ scope nên 3 số này
+// hardcode ở đây, không lấy từ bảng chân nữa).
+export const SCOPE_LEG_DC_OLD = { CH1: 0, CH2: 2, GND: 4 };
 
 const KIND_LABEL = { led: 'LED', button: 'Nút', pot: 'Chiết áp', lcd: 'LCD', buzzer: 'Còi', multimeter: 'Đồng hồ đo', oscilloscope: 'Đồng hồ hiện sóng' };
 export function compLabel(comp) {
@@ -801,6 +848,35 @@ export function sanitizeState(raw) {
   // có cờ thì id đã đúng, không chuyển lại.
   const oldRows = rowsOf(size);
   const migrate = raw.labelFormat !== HOLE_LABEL_FORMAT ? (id) => migrateOldHoleId(id, oldRows) : (id) => id;
+  // Migration scope cắm lỗ cũ -> scope ngoài bàn: với mỗi scope cũ (có
+  // anchor, chưa có tx/tz), tính strip của 3 lỗ chân cũ (CH1/CH2/GND) để
+  // viết lại đầu dây nào nằm trên strip đó thành id cọc tương ứng. Dây
+  // thường cắm vào lỗ KỀ trong cùng strip (vd b50) chứ không cắm đúng lỗ
+  // chân (a50 đã bị chân chiếm) nên phải so theo strip, không so theo lỗ.
+  const scopeMigrations = []; // {id, legStrip: Map stripKey -> term}
+  for (const c of raw.components || []) {
+    if (!c || c.type !== 'oscilloscope' || (typeof c.tx === 'number' && typeof c.tz === 'number')) continue;
+    const anchor = parseHole(migrate(c.anchor), size);
+    if (!anchor) continue; // anchor không parse được: scope này bị xóa ở dưới, không đoán bừa
+    const legStrip = new Map();
+    for (const [term, dc] of Object.entries(SCOPE_LEG_DC_OLD)) {
+      const hole = holeId(anchor.r, anchor.c + dc, size);
+      if (hole) legStrip.set(stripKey(hole, size), term);
+    }
+    scopeMigrations.push({ id: c.id, legStrip });
+  }
+  // Viết lại 1 đầu dây theo migration: lỗ nào nằm trên strip chân cũ thì
+  // thành id cọc scope ('OSC0.CH1'...), đầu còn lại giữ nguyên.
+  const migrateScopeWireEnd = (e) => {
+    if (typeof e !== 'string') return e;
+    const k = stripKey(e, size);
+    if (!k) return e;
+    for (const m of scopeMigrations) {
+      const term = m.legStrip.get(k);
+      if (term) return m.id + '.' + term;
+    }
+    return e;
+  };
   const components = [];
   for (const c of raw.components) {
     if (!c || typeof c.id !== 'string' || typeof c.type !== 'string') continue;
@@ -816,6 +892,19 @@ export function sanitizeState(raw) {
     if (c.type === 'psu') {
       if (typeof c.tx === 'number' && typeof c.tz === 'number') {
         components.push({ id: c.id, type: 'psu', tx: c.tx, tz: c.tz, fixed: true, props: { volts: psuVolts(c) } });
+      }
+      continue;
+    }
+    if (c.type === 'oscilloscope') {
+      // Scope mới (ngoài bàn, có tx/tz): giữ nguyên vị trí. Scope cũ
+      // (cắm lỗ, có anchor): migrate về vị trí mặc định cạnh phải nguồn
+      // (tx=130, tz=-150), bỏ anchor/rot; dây đã viết lại theo strip chân
+      // cũ (scopeMigrations). Anchor không parse được thì xóa scope
+      // (không đoán bừa vị trí chân).
+      if (typeof c.tx === 'number' && typeof c.tz === 'number') {
+        components.push({ id: c.id, type: 'oscilloscope', tx: c.tx, tz: c.tz, fixed: false, props: {} });
+      } else if (parseHole(migrate(c.anchor), size)) {
+        components.push({ id: c.id, type: 'oscilloscope', tx: SCOPE_DEFAULT_TX, tz: SCOPE_DEFAULT_TZ, fixed: false, props: {} });
       }
       continue;
     }
@@ -843,18 +932,22 @@ export function sanitizeState(raw) {
   const wires = [];
   for (const w of raw.wires) {
     if (!w || typeof w.id !== 'string' || typeof w.color !== 'string') continue;
-    // Đầu dây hợp lệ: lỗ trên board, cọc nguồn (PSU1.+/PSU1.-), hoặc điểm 3D cũ.
+    // Đầu dây hợp lệ: lỗ trên board, cọc nguồn (PSU1.+/PSU1.-), cọc hiện
+    // sóng (OSC1.CH1/CH2/GND), hoặc điểm 3D cũ.
     const okEnd = (e) => {
       if (typeof e === 'string') {
         if (parseHole(e, size)) return true;
         const pp = parsePsuPost(e);
-        return !!pp && components.some((c) => c.id === pp.psuId);
+        if (pp) return components.some((c) => c.id === pp.psuId);
+        const sp = parseScopePost(e);
+        return !!sp && components.some((c) => c.id === sp.scopeId && c.type === 'oscilloscope');
       }
       return e && typeof e.x === 'number' && typeof e.y === 'number' && typeof e.z === 'number';
     };
-    // Đầu {x,y,z} cũ khớp cọc nguồn thì đổi thành id cọc.
-    const na = normalizeWireEnd({ components }, migrate(w.a));
-    const nb = normalizeWireEnd({ components }, migrate(w.b));
+    // Đầu {x,y,z} cũ khớp cọc nguồn/cọc hiện sóng thì đổi thành id cọc;
+    // đầu dây trên strip chân scope cũ thì viết lại thành id cọc scope.
+    const na = migrateScopeWireEnd(normalizeWireEnd({ components }, migrate(w.a)));
+    const nb = migrateScopeWireEnd(normalizeWireEnd({ components }, migrate(w.b)));
     if (okEnd(na) && okEnd(nb)) wires.push({ id: w.id, a: na, b: nb, color: w.color });
   }
   return { size, components, wires, labelFormat: HOLE_LABEL_FORMAT };
@@ -903,6 +996,17 @@ export function pruneStateForSize(state, newSize) {
       }
       continue;
     }
+    if (comp.type === 'oscilloscope') {
+      // Scope ngoài bàn: giữ nguyên vị trí (không theo size board). Scope
+      // cũ cắm lỗ (không có tx/tz) thì bỏ — migration chỉ làm ở
+      // sanitizeState (nơi viết lại được dây), ở đây không đoán bừa.
+      if (typeof comp.tx === 'number' && typeof comp.tz === 'number') {
+        keptComponents.push({ id: comp.id, type: 'oscilloscope', tx: comp.tx, tz: comp.tz, fixed: false, props: {} });
+      } else {
+        removed.components.push(comp.id);
+      }
+      continue;
+    }
     // Đồng hồ cũ (vôn kế/ampe kế) -> multimeter, giữ nguyên id (như
     // sanitizeState). State trong bộ nhớ thường đã qua sanitizeState nên
     // đây chỉ là phòng thủ khi prune được gọi trên state chưa migrate.
@@ -940,12 +1044,14 @@ export function pruneStateForSize(state, newSize) {
       if (rb === null) { removed.wires.push(w.id); continue; }
       b = rb;
     } else {
-      // Đầu dây hợp lệ: lỗ trên board, cọc nguồn, hoặc điểm 3D cũ.
+      // Đầu dây hợp lệ: lỗ trên board, cọc nguồn, cọc hiện sóng, hoặc điểm 3D cũ.
       const okEnd = (e) => {
         if (typeof e === 'string') {
           if (parseHole(e, size)) return true;
           const pp = parsePsuPost(e);
-          return !!pp && keptComponents.some((c) => c.id === pp.psuId);
+          if (pp) return keptComponents.some((c) => c.id === pp.psuId);
+          const sp = parseScopePost(e);
+          return !!sp && keptComponents.some((c) => c.id === sp.scopeId && c.type === 'oscilloscope');
         }
         return e && typeof e.x === 'number' && typeof e.y === 'number' && typeof e.z === 'number';
       };
@@ -968,14 +1074,21 @@ export function validateWireEnd(state, wireId, end, newHole) {
   const w = state.wires.find((x) => x.id === wireId);
   if (!w) return { ok: false, reason: 'Không tìm thấy dây.' };
   if (end !== 'a' && end !== 'b') return { ok: false, reason: 'Đầu dây không hợp lệ.' };
-  // Đích hợp lệ: lỗ trên board hoặc cọc nguồn (PSU1.+/PSU1.-) của nguồn đang có trên bàn.
+  // Đích hợp lệ: lỗ trên board, cọc nguồn (PSU1.+/PSU1.-) của nguồn đang
+  // có trên bàn, hoặc cọc hiện sóng (OSC1.CH1/CH2/GND) của hiện sóng
+  // đang có trên bàn.
   const pp = parsePsuPost(newHole);
+  const sp = parseScopePost(newHole);
   if (pp) {
     if (!state.components.some((c) => c.id === pp.psuId && c.type === 'psu')) {
       return { ok: false, reason: 'Không có nguồn ' + pp.psuId + ' trên bàn.' };
     }
+  } else if (sp) {
+    if (!state.components.some((c) => c.id === sp.scopeId && c.type === 'oscilloscope')) {
+      return { ok: false, reason: 'Không có hiện sóng ' + sp.scopeId + ' trên bàn.' };
+    }
   } else if (!parseHole(newHole, size)) {
-    return { ok: false, reason: 'Địa chỉ "' + newHole + '" không hợp lệ trên board ' + sizeLabel(size) + ' (lỗ vd c12, hoặc cọc nguồn PSU1.+/PSU1.-).' };
+    return { ok: false, reason: 'Địa chỉ "' + newHole + '" không hợp lệ trên board ' + sizeLabel(size) + ' (lỗ vd c12, cọc nguồn PSU1.+/PSU1.-, hoặc cọc hiện sóng OSC1.CH1).' };
   }
   const other = end === 'a' ? w.b : w.a;
   if (other === newHole) return { ok: false, reason: 'Hai đầu dây trùng nhau.' };

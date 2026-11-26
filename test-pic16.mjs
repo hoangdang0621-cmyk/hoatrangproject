@@ -3,7 +3,7 @@
 import { readFileSync } from 'node:fs';
 import { assemble, createCPU, parseIntelHex, exportHex, disassemble, ProgramRunner, cyclesForElapsedMs } from './public/pic16.js';
 import { defaultNetlist, resolvePeripherals, checkWiring, ledStates, buzzerStates, applyButtonToCpu, applyPotToCpu, PIC_PINS } from './public/wiring.js';
-import { PITCH, SEGMENT_GAP_MM, rowZ, HOLE_RADIUS, HOLE_HEIGHT, HOLE_TOP_ABOVE_BOARD, holeCenterY, depthPrecisionAt, MAX_CAMERA_DISTANCE, SEGMENT_LINE_WIDTH_MM, segmentBoundaries, allHoles, stripKey, parseHole, holePos, holeId, rowLabel, rowIndexFromLabel, migrateOldHoleId, picLegs, picLegsForAnchor, picAnchor, legsFor, canPlace, buildBenchNets, benchToNetlist, defaultBenchState, sanitizeState, boardSize, picCol, picRows, picBodyDepth, picBodyDepthForRows, bodyDepth, pruneStateForSize, validateWireEnd, retargetWireEnd, togglePlacement, normalizeSize, holeCount, sizeLabel, sameSize, compLabel, nextComponentId, defaultProps, psuVolts, validatePsuVolts, parsePsuPost, psuPostPos, PSU_SCALE, PSU_POST_DX, PSU_POST_Y, PSU_POST_DZ, normalizeWireEnd, clampCamTarget, zoomTowardPoint, panTarget, meterMode } from './public/bench-model.js';
+import { PITCH, SEGMENT_GAP_MM, rowZ, HOLE_RADIUS, HOLE_HEIGHT, HOLE_TOP_ABOVE_BOARD, holeCenterY, depthPrecisionAt, MAX_CAMERA_DISTANCE, SEGMENT_LINE_WIDTH_MM, segmentBoundaries, allHoles, stripKey, parseHole, holePos, holeId, rowLabel, rowIndexFromLabel, migrateOldHoleId, picLegs, picLegsForAnchor, picAnchor, legsFor, canPlace, buildBenchNets, benchToNetlist, defaultBenchState, sanitizeState, boardSize, picCol, picRows, picBodyDepth, picBodyDepthForRows, bodyDepth, pruneStateForSize, validateWireEnd, retargetWireEnd, togglePlacement, normalizeSize, holeCount, sizeLabel, sameSize, compLabel, nextComponentId, defaultProps, psuVolts, validatePsuVolts, parsePsuPost, psuPostPos, PSU_SCALE, PSU_POST_DX, PSU_POST_Y, PSU_POST_DZ, parseScopePost, scopePostPos, SCOPE_POST_DX, SCOPE_POST_Y, SCOPE_POST_DZ, SCOPE_DEFAULT_TX, SCOPE_DEFAULT_TZ, normalizeWireEnd, clampCamTarget, zoomTowardPoint, panTarget, meterMode } from './public/bench-model.js';
 import { LABS, getLab, buildLabState } from './public/labs.js';
 import { buildSolverNets, solveLinear, solveCircuit, meterReadings, scopeVoltages, pushScopeSample, SCOPE_MAX_SAMPLES, formatVolts, formatAmps, formatCurrentDirection, LED_FORWARD_VOLTS, LED_SERIES_OHMS, PIC_OUTPUT_VOLTS } from './public/circuit-solver.js';
 import { compileC, C_VERSION } from './public/c-compiler.js';
@@ -4415,19 +4415,19 @@ void main(){
 // (circuit-solver.js) + bộ nhớ vòng pushScopeSample. Điện áp kỳ vọng tính
 // theo mô hình solver: chân PIC output cao = 5V / thấp = 0V, PSU = 5V,
 // net floating thì điện áp null (không gán 0V bừa).
+// Scope là linh kiện NGOÀI BÀN (version aw): đặt bằng tx/tz (mặc định
+// tx=130, tz=-150, cạnh phải nguồn), nối dây từ lỗ breadboard vào 3 cọc
+// CH1/CH2/GND ('OSC0.CH1'...), không còn chân cắm lỗ.
 {
-  // Bàn Lab 1 + scope neo a50: CH1 -> RB0, CH2 -> RB1, GND -> rail -.
-  // CH1 strip a50-e50 (dây b50->f29), CH2 strip a52-e52 (dây b52->f28),
-  // GND strip a54-e54 (dây b54->B-50). a50 nằm ngoài vùng chip (cột
-  // 22-41) và ngoài vùng R0/LED0 (hàng i) nên đặt được. Lưu ý: lỗ rail
-  // chỉ tới cột 50 (railCols của board 830) nên dây GND phải về B-50,
-  // không về B-54 được (parseHole('B-54') = null).
+  // Bàn Lab 1 + scope ngoài bàn: CH1 -> RB0, CH2 -> RB1, GND -> rail -.
+  // Dây nối thẳng strip của chân PIC (f29 = strip RB0, f28 = strip RB1)
+  // vào cọc scope; GND nối rail B-50 vào cọc GND.
   const lab1WithScope = () => {
     const { state } = buildLabState(LABS[0]);
-    state.components.push({ id: 'OSC0', type: 'oscilloscope', anchor: 'a50', rot: 0, props: {} });
-    state.wires.push({ id: 'T-S1', a: 'b50', b: 'f29', color: '#DC2626' });
-    state.wires.push({ id: 'T-S2', a: 'b52', b: 'f28', color: '#DC2626' });
-    state.wires.push({ id: 'T-S3', a: 'b54', b: 'B-50', color: '#0F172A' });
+    state.components.push({ id: 'OSC0', type: 'oscilloscope', tx: 130, tz: -150, fixed: false, props: {} });
+    state.wires.push({ id: 'T-S1', a: 'f29', b: 'OSC0.CH1', color: '#DC2626' });
+    state.wires.push({ id: 'T-S2', a: 'f28', b: 'OSC0.CH2', color: '#DC2626' });
+    state.wires.push({ id: 'T-S3', a: 'B-50', b: 'OSC0.GND', color: '#0F172A' });
     return state;
   };
   // TRISB=0 (tất cả PORTB output), PORTB=0 (RB0=RB1=0) — như helper
@@ -4496,9 +4496,9 @@ void main(){
   check('(ag-c) CH1 và GND cùng 1 net (cả 2 về RAIL+) -> CH1 = 0V; CH2 không nối -> null',
     (() => {
       const st = defaultBenchState(830);
-      st.components.push({ id: 'OSC0', type: 'oscilloscope', anchor: 'a10', rot: 0, props: {} });
-      st.wires.push({ id: 'T-C1', a: 'b10', b: 'T+10', color: '#DC2626' });
-      st.wires.push({ id: 'T-C2', a: 'b14', b: 'T+14', color: '#DC2626' });
+      st.components.push({ id: 'OSC0', type: 'oscilloscope', tx: 130, tz: -150, fixed: false, props: {} });
+      st.wires.push({ id: 'T-C1', a: 'T+10', b: 'OSC0.CH1', color: '#DC2626' });
+      st.wires.push({ id: 'T-C2', a: 'T+14', b: 'OSC0.GND', color: '#DC2626' });
       const r = scopeVoltages(st, createCPU())[0];
       return r && r.ch1 === 0 && r.ch2 === null;
     })(), '');
@@ -4513,28 +4513,147 @@ void main(){
         && buf[0][0] === 61 && buf[0][1] === -61
         && buf[239][0] === 300 && buf[239][1] === -300;
     })(), '');
-  // (ag-e) Scope: chân CH1=a10, CH2=a12, GND=a14; đặt được, id OSC0,
-  // nhãn "Đồng hồ hiện sóng 0", không props đặc biệt ({}).
-  check('(ag-e) scope chân CH1=a10, CH2=a12, GND=a14; đặt được, id OSC0, nhãn "Đồng hồ hiện sóng 0"',
-    JSON.stringify(legsFor({ type: 'oscilloscope', anchor: 'a10', rot: 0 }, 830)) === JSON.stringify([{ term: 'CH1', hole: 'a10' }, { term: 'CH2', hole: 'a12' }, { term: 'GND', hole: 'a14' }])
-    && canPlace(defaultBenchState(830), 'oscilloscope', 'a10').ok
+  // (ag-e) Scope ngoài bàn: không chân lỗ, đặt được (canPlace ok, legs
+  // rỗng), id OSC0, nhãn "Đồng hồ hiện sóng 0", không props đặc biệt ({}),
+  // parseScopePost/scopePostPos đúng tọa độ cọc (CH1 x=tx-28, CH2 x=tx,
+  // GND x=tx+28, y=10, z=tz+26), vị trí mặc định tx=130, tz=-150.
+  check('(ag-e) scope ngoài bàn: legsFor=[]; canPlace ok; id OSC0; nhãn "Đồng hồ hiện sóng 0"; cọc đúng tọa độ',
+    JSON.stringify(legsFor({ type: 'oscilloscope', tx: 130, tz: -150 }, 830)) === '[]'
+    && canPlace(defaultBenchState(830), 'oscilloscope', null).ok
+    && canPlace(defaultBenchState(830), 'oscilloscope', null).legs.length === 0
     && nextComponentId(defaultBenchState(830), 'oscilloscope') === 'OSC0'
     && compLabel({ id: 'OSC0', type: 'oscilloscope' }) === 'Đồng hồ hiện sóng 0'
-    && JSON.stringify(defaultProps('oscilloscope')) === '{}', '');
-  // (ag-e2) Scope không nối strip nào trong netlist bench (2 LED ở 2
-  // strip vẫn tách net dù chân scope cùng strip với chúng) và không vào
-  // netlist CPU (wiring.js không có định nghĩa loại này).
-  check('(ag-e2) scope không nối strip (2 LED vẫn tách net) và không vào netlist CPU',
+    && JSON.stringify(defaultProps('oscilloscope')) === '{}'
+    && JSON.stringify(parseScopePost('OSC1.CH1')) === JSON.stringify({ scopeId: 'OSC1', term: 'CH1' })
+    && JSON.stringify(parseScopePost('OSC12.GND')) === JSON.stringify({ scopeId: 'OSC12', term: 'GND' })
+    && parseScopePost('OSC1.X') === null && parseScopePost('PSU1.+') === null && parseScopePost('a10') === null
+    && JSON.stringify(scopePostPos({ components: [{ id: 'OSC1', type: 'oscilloscope', tx: 130, tz: -150 }] }, 'OSC1.CH1')) === JSON.stringify({ x: 102, y: 10, z: -124 })
+    && JSON.stringify(scopePostPos({ components: [{ id: 'OSC1', type: 'oscilloscope', tx: 130, tz: -150 }] }, 'OSC1.CH2')) === JSON.stringify({ x: 130, y: 10, z: -124 })
+    && JSON.stringify(scopePostPos({ components: [{ id: 'OSC1', type: 'oscilloscope', tx: 130, tz: -150 }] }, 'OSC1.GND')) === JSON.stringify({ x: 158, y: 10, z: -124 })
+    && scopePostPos({ components: [{ id: 'OSC1', type: 'oscilloscope', tx: 130, tz: -150 }] }, 'OSC9.CH1') === null
+    && scopePostPos({ components: [{ id: 'OSC1', type: 'oscilloscope', tx: 130, tz: -150 }] }, 'PSU1.+') === null
+    && SCOPE_POST_DX === 28 && SCOPE_POST_Y === 10 && SCOPE_POST_DZ === 26
+    && SCOPE_DEFAULT_TX === 130 && SCOPE_DEFAULT_TZ === -150, '');
+  // (ag-e2) Dây tới cọc scope không nối strip nào trong netlist bench (2
+  // LED ở 2 strip vẫn tách net dù mỗi strip có 1 dây vào cọc scope) và
+  // scope không vào netlist CPU; nhưng trong solver, node cọc scope
+  // chính là node của strip đã nối vào cọc đó.
+  check('(ag-e2) dây tới cọc scope không nối strip (2 LED vẫn tách net), scope không vào netlist CPU, node cọc = node strip',
     (() => {
       const st = defaultBenchState(830);
-      st.components.push({ id: 'OSC0', type: 'oscilloscope', anchor: 'a10', rot: 0, props: {} });
+      st.components.push({ id: 'OSC0', type: 'oscilloscope', tx: 130, tz: -150, fixed: false, props: {} });
       st.components.push({ id: 'LED0', type: 'led', anchor: 'c10', rot: 0, props: { color: '#DC2626' } });
       st.components.push({ id: 'LED1', type: 'led', anchor: 'c14', rot: 0, props: { color: '#DC2626' } });
+      st.wires.push({ id: 'T-E1', a: 'c10', b: 'OSC0.CH1', color: '#DC2626' });
+      st.wires.push({ id: 'T-E2', a: 'c14', b: 'OSC0.CH2', color: '#DC2626' });
       const n = buildBenchNets(st);
       const nl = benchToNetlist(st);
+      const sn = buildSolverNets(st);
       return n.termRoot.get('LED0.A') !== n.termRoot.get('LED1.A')
         && !n.termRoot.has('OSC0.CH1')
-        && !nl.components.some((c) => c.id === 'OSC0');
+        && !nl.components.some((c) => c.id === 'OSC0')
+        && sn.nodeOfScopeTerm('OSC0', 'CH1') === sn.nodeOfTerm('LED0', 'A')
+        && sn.nodeOfScopeTerm('OSC0', 'CH2') === sn.nodeOfTerm('LED1', 'A')
+        && (sn.nodeOfScopeTerm('OSC0', 'GND') === null || sn.nodeOfScopeTerm('OSC0', 'GND') === undefined);
+    })(), '');
+  // (ag-f) Migration scope cũ (cắm lỗ, anchor a50) -> scope ngoài bàn:
+  // dây cũ vào lỗ kề cùng strip với chân cũ (b50/b52/b54, cùng strip với
+  // a50/a52/a54) được viết lại thành cọc OSC0.CH1/CH2/GND; scope có tx/tz
+  // mặc định, không còn anchor; scopeVoltages vẫn đọc đúng RB0 (đặt tay
+  // TRISB=0, PORTB=0x01 -> RB0=1, RB1=0).
+  check('(ag-f) migration: scope cũ anchor a50 + dây vào lỗ chân cũ -> tx/tz, dây thành cọc OSC0.CH1/CH2/GND, vẫn đọc đúng RB0',
+    (() => {
+      const raw = defaultBenchState(830);
+      raw.components.push({ id: 'OSC0', type: 'oscilloscope', anchor: 'a50', rot: 0, props: {} });
+      raw.wires.push({ id: 'T-S1', a: 'b50', b: 'f29', color: '#DC2626' });
+      raw.wires.push({ id: 'T-S2', a: 'b52', b: 'f28', color: '#DC2626' });
+      raw.wires.push({ id: 'T-S3', a: 'b54', b: 'B-50', color: '#0F172A' });
+      const st = sanitizeState(raw);
+      const sc = st.components.find((c) => c.id === 'OSC0');
+      if (!sc || sc.type !== 'oscilloscope' || sc.tx !== 130 || sc.tz !== -150 || sc.anchor) return false;
+      const wEnds = new Set(st.wires.flatMap((w) => [w.a, w.b]));
+      if (!wEnds.has('OSC0.CH1') || !wEnds.has('OSC0.CH2') || !wEnds.has('OSC0.GND')) return false;
+      if (st.wires.some((w) => ['b50', 'b52', 'b54'].includes(w.a) || ['b50', 'b52', 'b54'].includes(w.b))) return false;
+      if (!st.wires.some((w) => w.a === 'OSC0.CH1' && w.b === 'f29')) return false;
+      const cpu = createCPU();
+      cpu.setWiring(resolvePeripherals(benchToNetlist(st)));
+      cpu.writeFile(0x03, 0x20); cpu.writeFile(0x06, 0x00); // TRISB=0 (bank 1)
+      cpu.writeFile(0x03, 0x00); cpu.writeFile(0x06, 0x01); // PORTB=0x01 (bank 0) -> RB0=1, RB1=0
+      const r = scopeVoltages(st, cpu)[0];
+      return r && Math.abs(r.ch1 - 5) <= 0.05 && r.ch2 === 0;
+    })(), '');
+  // (ag-f2) Migration: scope cũ anchor hỏng (không parse được) -> scope
+  // bị xóa, không đoán bừa vị trí chân.
+  check('(ag-f2) migration: scope cũ anchor hỏng -> scope bị xóa, không đoán bừa',
+    (() => {
+      const raw = defaultBenchState(830);
+      raw.components.push({ id: 'OSC0', type: 'oscilloscope', anchor: 'zz999', rot: 0, props: {} });
+      const st = sanitizeState(raw);
+      return !st.components.some((c) => c.id === 'OSC0');
+    })(), '');
+  // (ag-f3) validate/retarget đầu dây sang cọc scope: OSC0.CH1 hợp lệ
+  // (scope đang có trên bàn), OSC9.CH1 bị từ chối (không có scope đó).
+  check('(ag-f3) validate/retarget đầu dây sang cọc scope: OSC0.CH1 ok, OSC9.CH1 từ chối',
+    (() => {
+      const st = defaultBenchState(830);
+      st.components.push({ id: 'OSC0', type: 'oscilloscope', tx: 130, tz: -150, fixed: false, props: {} });
+      st.wires.push({ id: 'T-V1', a: 'f29', b: 'B-50', color: '#DC2626' });
+      const v1 = validateWireEnd(st, 'T-V1', 'b', 'OSC0.CH1');
+      const v2 = validateWireEnd(st, 'T-V1', 'b', 'OSC9.CH1');
+      if (!v1.ok || v2.ok) return false;
+      const r = retargetWireEnd(st, 'T-V1', 'b', 'OSC0.CH1');
+      return r.ok && st.wires.find((w) => w.id === 'T-V1').b === 'OSC0.CH1';
+    })(), '');
+  // (ag-g) drawScopeWaveform vẽ đúng lên canvas 512×288 với ctx đã
+  // scale(2,2): trích hàm từ bench.js, chạy với ctx giả lập transform,
+  // kiểm tra nền phủ kín 512×288, chữ CH1/CH2 đúng mẫu mới nhất, và
+  // không lỗi khi buffer rỗng. Bench.js cũng phải tạo canvas scope
+  // 512×288 + ctx.setTransform(2,0,0,2,0,0); nhánh scope cũ (màn nằm
+  // ngửa trên nóc) đã xóa.
+  check('(ag-g) drawScopeWaveform trên canvas 512x288 + ctx scale(2,2): nền phủ kín, chữ CH1/CH2 đúng, buffer rỗng không lỗi',
+    (() => {
+      const src = readFileSync(new URL('./public/bench.js', import.meta.url), 'utf8');
+      const start = src.indexOf('function drawScopeWaveform(t, samples) {');
+      const end = src.indexOf('function drawLcdLine(', start);
+      if (start < 0 || end < 0) return false;
+      const fnSrc = src.slice(start, end);
+      const body = fnSrc.slice(fnSrc.indexOf('{') + 1, fnSrc.lastIndexOf('\n  }'));
+      if (!body.includes('fillRect(0, 0, W, 144)')) return false;
+      const calls = [];
+      const ctx = {
+        scaleX: 1, scaleY: 1,
+        setTransform(a, _b, _c, d) { this.scaleX = a; this.scaleY = d; },
+        fillRect(x, y, w, h) { calls.push(['fillRect', x * this.scaleX, y * this.scaleY, w * this.scaleX, h * this.scaleY]); },
+        beginPath() {}, moveTo() {}, lineTo() {}, stroke() {},
+        fillText(text) { calls.push(['fillText', String(text)]); },
+        set fillStyle(_v) {}, set strokeStyle(_v) {}, set lineWidth(_v) {},
+        set font(_v) {}, set textBaseline(_v) {}, set textAlign(_v) {},
+      };
+      const draw = new Function('t', 'samples', 'SCOPE_V_MIN', 'SCOPE_V_MAX', 'SCOPE_GRID_TOP', 'SCOPE_GRID_BOTTOM', 'formatVolts', body);
+      const t = { ctx, tex: {} };
+      ctx.setTransform(2, 0, 0, 2, 0, 0);
+      draw(t, [[5, 0], [0, 5]], -0.5, 5.5, 16, 128, formatVolts);
+      const bgOk = calls.some((c) => c[0] === 'fillRect' && c[1] === 0 && c[2] === 0 && c[3] === 512 && c[4] === 288);
+      const chOk = calls.some((c) => c[0] === 'fillText' && c[1] === 'CH1 0.00 V')
+        && calls.some((c) => c[0] === 'fillText' && c[1] === 'CH2 5.00 V');
+      if (!bgOk || !chOk || t.tex.needsUpdate !== true) return false;
+      // Buffer rỗng: vẽ nền + chữ "—", không lỗi.
+      calls.length = 0;
+      t.tex.needsUpdate = false;
+      draw(t, [], -0.5, 5.5, 16, 128, formatVolts);
+      return calls.some((c) => c[0] === 'fillRect' && c[3] === 512 && c[4] === 288)
+        && calls.some((c) => c[0] === 'fillText' && c[1] === 'CH1 —')
+        && calls.some((c) => c[0] === 'fillText' && c[1] === 'CH2 —')
+        && t.tex.needsUpdate === true;
+    })(), '');
+  check('(ag-g2) bench.js tạo canvas scope 512x288 + ctx.setTransform(2,0,0,2,0,0); nhánh scope cũ đã xóa',
+    (() => {
+      const src = readFileSync(new URL('./public/bench.js', import.meta.url), 'utf8');
+      return src.includes('cv.width = 512; cv.height = 288')
+        && src.includes('ctx.setTransform(2, 0, 0, 2, 0, 0)')
+        && src.includes("new THREE.BoxGeometry(100, 60, 50)")
+        && src.includes('pickScopePost') && src.includes('scopePostPos(state, e)')
+        && !src.includes('trên nóc vẽ sóng');
     })(), '');
 }
 

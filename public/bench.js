@@ -14,10 +14,11 @@ import {
   pruneStateForSize, validateWireEnd, retargetWireEnd, togglePlacement,
   normalizeSize, holeCount, sizeLabel, sameSize,
   psuVolts, validatePsuVolts, parsePsuPost, psuPostPos, PSU_SCALE, PSU_POST_DX, PSU_POST_Y, PSU_POST_DZ,
+  parseScopePost, scopePostPos, SCOPE_POST_DX, SCOPE_POST_Y, SCOPE_POST_DZ, SCOPE_DEFAULT_TX, SCOPE_DEFAULT_TZ,
   clampCamTarget, zoomTowardPoint, panTarget, meterMode,
-} from './bench-model.js?v=20261125av';
+} from './bench-model.js?v=20261125aw';
 import { checkWiring, SIGNAL_COLORS } from './wiring.js?v=20261125r';
-import { formatVolts, formatAmps, formatCurrentDirection } from './circuit-solver.js?v=20261125av';
+import { formatVolts, formatAmps, formatCurrentDirection } from './circuit-solver.js?v=20261125aw';
 import { LABS, getLab, buildLabState } from './labs.js?v=20261125ao';
 
 const $ = (id) => document.getElementById(id);
@@ -81,6 +82,7 @@ function main() {
   const wireMeshes = new Map();   // wireId -> THREE.Mesh (ống) + hit tube
   const wireHandleMeshes = [];    // núm tròn ở 2 đầu dây đang chọn (để kéo)
   const psuHitMeshes = [];        // núm bắt vô hình ở 2 cọc nguồn (để kéo đầu dây vào)
+  const scopeHitMeshes = [];      // núm bắt vô hình ở 3 cọc hiện sóng (để kéo đầu dây vào)
   const ledMats = new Map();      // compId -> material phát sáng LED
   const lcdTexs = new Map();      // compId -> {canvas, ctx, tex, last}
   const meterTexs = new Map();    // compId -> {canvas, ctx, tex, last, kind}
@@ -155,7 +157,7 @@ function main() {
     { type: 'led', name: 'LED', hint: 'Kéo vào lỗ breadboard', svg: '<svg viewBox="0 0 48 64"><line x1="18" y1="34" x2="18" y2="62" stroke="#94A3B8" stroke-width="3"/><line x1="30" y1="34" x2="30" y2="62" stroke="#94A3B8" stroke-width="3"/><circle cx="24" cy="22" r="14" fill="#DC2626" stroke="#991B1B" stroke-width="2"/><circle cx="20" cy="18" r="4" fill="#FCA5A5"/></svg>' },
     { type: 'resistor', name: 'Điện trở 220Ω', hint: 'Kéo vào lỗ breadboard', svg: '<svg viewBox="0 0 76 30"><line x1="0" y1="15" x2="14" y2="15" stroke="#94A3B8" stroke-width="3"/><line x1="62" y1="15" x2="76" y2="15" stroke="#94A3B8" stroke-width="3"/><rect x="14" y="7" width="48" height="16" rx="8" fill="#D9A066" stroke="#92400E" stroke-width="1.5"/><rect x="26" y="7" width="4" height="16" fill="#DC2626"/><rect x="34" y="7" width="4" height="16" fill="#DC2626"/><rect x="42" y="7" width="4" height="16" fill="#92400E"/></svg>' },
     { type: 'multimeter', name: 'Đồng hồ đo', hint: 'Kéo vào lỗ breadboard — chọn đo áp (V) hay đo dòng (A) trong popup', svg: '<svg viewBox="0 0 76 44"><rect x="6" y="4" width="64" height="28" rx="4" fill="#1E3A5F" stroke="#0F172A" stroke-width="2"/><rect x="12" y="10" width="52" height="16" rx="2" fill="#0F172A"/><text x="38" y="22" text-anchor="middle" font-family="Fira Code, monospace" font-size="10" fill="#7DD3FC">5.00 V</text><line x1="22" y1="32" x2="22" y2="42" stroke="#94A3B8" stroke-width="3"/><line x1="54" y1="32" x2="54" y2="42" stroke="#94A3B8" stroke-width="3"/></svg>' },
-    { type: 'oscilloscope', name: 'Đồng hồ hiện sóng', hint: 'Kéo vào lỗ breadboard — CH1/CH2 cắm vào điểm cần xem, GND vào mass', svg: '<svg viewBox="0 0 76 44"><rect x="6" y="4" width="64" height="28" rx="4" fill="#1E3A5F" stroke="#0F172A" stroke-width="2"/><rect x="12" y="10" width="52" height="16" rx="2" fill="#0F172A"/><path d="M14 21 V15 H22 V21 H30 V15 H38 V21 H46 V15 H54 V21" fill="none" stroke="#7DD3FC" stroke-width="1.5"/><path d="M14 24 L20 19 L26 24 L32 19 L38 24 L44 19 L50 24" fill="none" stroke="#FBBF24" stroke-width="1.5"/><circle cx="22" cy="30" r="2" fill="#7DD3FC"/><circle cx="38" cy="30" r="2" fill="#FBBF24"/><circle cx="54" cy="30" r="2" fill="#0F172A" stroke="#94A3B8" stroke-width="1"/><line x1="22" y1="32" x2="22" y2="42" stroke="#94A3B8" stroke-width="3"/><line x1="38" y1="32" x2="38" y2="42" stroke="#94A3B8" stroke-width="3"/><line x1="54" y1="32" x2="54" y2="42" stroke="#94A3B8" stroke-width="3"/></svg>' },
+    { type: 'oscilloscope', name: 'Đồng hồ hiện sóng', hint: 'Kéo thả lên mặt bàn — nối dây vào cọc CH1/CH2/GND', svg: '<svg viewBox="0 0 76 44"><rect x="6" y="4" width="64" height="28" rx="4" fill="#1E3A5F" stroke="#0F172A" stroke-width="2"/><rect x="12" y="10" width="52" height="16" rx="2" fill="#0F172A"/><path d="M14 21 V15 H22 V21 H30 V15 H38 V21 H46 V15 H54 V21" fill="none" stroke="#7DD3FC" stroke-width="1.5"/><path d="M14 24 L20 19 L26 24 L32 19 L38 24 L44 19 L50 24" fill="none" stroke="#FBBF24" stroke-width="1.5"/><circle cx="22" cy="30" r="2" fill="#7DD3FC"/><circle cx="38" cy="30" r="2" fill="#FBBF24"/><circle cx="54" cy="30" r="2" fill="#0F172A" stroke="#94A3B8" stroke-width="1"/><line x1="22" y1="32" x2="22" y2="42" stroke="#94A3B8" stroke-width="3"/><line x1="38" y1="32" x2="38" y2="42" stroke="#94A3B8" stroke-width="3"/><line x1="54" y1="32" x2="54" y2="42" stroke="#94A3B8" stroke-width="3"/></svg>' },
     { type: 'button', name: 'Nút nhấn', hint: 'Kéo vào lỗ breadboard', svg: '<svg viewBox="0 0 56 56"><rect x="6" y="6" width="44" height="44" rx="6" fill="#FFFFFF" stroke="#1E3A5F" stroke-width="2"/><circle cx="28" cy="28" r="11" fill="#F1F3F5" stroke="#1E3A5F" stroke-width="2"/></svg>' },
     { type: 'pot', name: 'Chiết áp', hint: 'Kéo vào lỗ breadboard', svg: '<svg viewBox="0 0 64 64"><rect x="4" y="4" width="56" height="56" rx="8" fill="#FFFFFF" stroke="#1E3A5F" stroke-width="2"/><circle cx="32" cy="32" r="16" fill="#F1F3F5" stroke="#1E3A5F" stroke-width="2"/><line x1="32" y1="32" x2="32" y2="19" stroke="#DC2626" stroke-width="3"/></svg>' },
     { type: 'lcd', name: 'LCD 16x2', hint: 'Kéo vào lỗ breadboard', svg: '<svg viewBox="0 0 210 84"><rect x="2" y="6" width="206" height="72" rx="6" fill="#123524" stroke="#0F172A" stroke-width="2"/><rect x="16" y="20" width="16" height="16" rx="1" fill="#2E7D4F"/><rect x="38" y="20" width="16" height="16" rx="1" fill="#2E7D4F"/><rect x="60" y="20" width="16" height="16" rx="1" fill="#2E7D4F"/><rect x="16" y="46" width="16" height="16" rx="1" fill="#2E7D4F"/><rect x="38" y="46" width="16" height="16" rx="1" fill="#2E7D4F"/><text x="200" y="14" text-anchor="end" font-family="Fira Code, monospace" font-size="8" fill="#7CFFB2">16x2</text></svg>' },
@@ -528,7 +530,7 @@ void main() {
     if (!sceneReady) return;
     const selComp = selected && selected.kind === 'comp'
       ? state.components.find((c) => c.id === selected.id) : null;
-    if (selComp && selComp.type !== 'psu' && selComp.type !== 'pic') showHighlightForComp(selComp.id);
+    if (selComp && selComp.type !== 'psu' && selComp.type !== 'oscilloscope' && selComp.type !== 'pic') showHighlightForComp(selComp.id);
     else hideHighlight();
   }
   function renderInspector() {
@@ -630,7 +632,7 @@ void main() {
     } else {
       const comp = state.components.find((c) => c.id === selected.id);
       if (!comp) { select(null); return; }
-      const pos = comp.type === 'psu' ? `Trên bàn (${Math.round(comp.tx)}, ${Math.round(comp.tz)})` : 'BB: ' + comp.anchor;
+      const pos = (comp.type === 'psu' || comp.type === 'oscilloscope') ? `Trên bàn (${Math.round(comp.tx)}, ${Math.round(comp.tz)})` : 'BB: ' + comp.anchor;
       let body = '';
       if (comp.type === 'resistor') {
         body = `<label class="bench-insp-label" for="inspResVal">Giá trị điện trở (Ω)</label>
@@ -702,7 +704,7 @@ void main() {
             <div class="bench-conn"><span>CH2</span><span id="inspScopeCH2">${formatVolts(last[1])}</span></div>
           </div>
           <button type="button" class="btn btn-small" data-act="scope-clear">Xóa sóng</button>
-          <p class="sub">Màn hình vẽ sóng CH1 (cyan) và CH2 (vàng) so với GND, thang −0,5..5,5V, cửa sổ 12 giây. Lấy mẫu 20 lần/giây nên tín hiệu nhanh hơn ~10Hz sẽ bị méo (giới hạn lấy mẫu, không phải lỗi mạch). Chân nào chưa nối thì kênh đó hiện "—".</p>`;
+          <p class="sub">Màn hình vẽ sóng CH1 (cyan) và CH2 (vàng) so với GND, thang −0,5..5,5V, cửa sổ 12 giây. Lấy mẫu 20 lần/giây nên tín hiệu nhanh hơn ~10Hz sẽ bị méo (giới hạn lấy mẫu, không phải lỗi mạch). Cọc nào chưa nối dây thì kênh đó hiện "—".</p>`;
       } else if (comp.type === 'pic') {
         const conns = legsFor(comp, state.size).map((l) => {
           const d = describeTerminal(state, l.term, pressedIds());
@@ -743,19 +745,27 @@ void main() {
             : 'chưa nối';
           return `<div class="bench-conn"><span>${l.term}</span><span>${esc(txt)}</span></div>`;
         }).join('')}</div>` : '';
-      // Mục "Chân": từng chân cắm vào lỗ nào (chỉ đọc). PSU không có chân
-      // dạng lỗ nên bỏ qua. Chân treo ngoài board (hole null) thì hiện
-      // "ngoài board". Tên chân bỏ tiền tố 'PIC.' (PIC.RA0 -> RA0).
-      const legs = comp.type === 'psu' ? [] : legsFor(comp, state.size);
+      // Mục "Chân": từng chân cắm vào lỗ nào (chỉ đọc). PSU và hiện sóng
+      // không có chân dạng lỗ nên bỏ qua. Chân treo ngoài board (hole
+      // null) thì hiện "ngoài board". Tên chân bỏ tiền tố 'PIC.' (PIC.RA0 -> RA0).
+      const legs = (comp.type === 'psu' || comp.type === 'oscilloscope') ? [] : legsFor(comp, state.size);
       const pins = legs.length ? `<label class="bench-insp-label">Chân</label><div class="bench-conns">${legs.map((l) => {
         const term = l.term.startsWith('PIC.') ? l.term.slice(4) : l.term;
         return `<div class="bench-conn"><span>${esc(term)}</span><span>${l.hole ? esc(holeName(l.hole)) : 'ngoài board'}</span></div>`;
+      }).join('')}</div>` : '';
+      // Mục "Cọc" (chỉ hiện sóng ngoài bàn): 3 cọc CH1/CH2/GND + trạng
+      // thái nối dây của từng cọc (đầu dây kia, hoặc 'chưa nối dây').
+      const posts = comp.type === 'oscilloscope' ? `<label class="bench-insp-label">Cọc</label><div class="bench-conns">${['CH1', 'CH2', 'GND'].map((term) => {
+        const postId = comp.id + '.' + term;
+        const w = state.wires.find((x) => x.a === postId || x.b === postId);
+        const other = w ? (w.a === postId ? w.b : w.a) : null;
+        return `<div class="bench-conn"><span>${term}</span><span>${other ? esc(holeName(other)) : 'chưa nối dây'}</span></div>`;
       }).join('')}</div>` : '';
       const canDelete = comp.type !== 'pic' && comp.type !== 'psu';
       inspectorEl.innerHTML = `
         <div class="bench-insp-head"><div><strong>${esc(compLabel(comp))}</strong><div class="bench-insp-pos">${esc(pos)}</div></div>
         <button type="button" class="bench-insp-close" data-act="close" aria-label="Đóng">×</button></div>
-        <div class="bench-insp-body">${body}${conns}${pins}</div>
+        <div class="bench-insp-body">${body}${conns}${pins}${posts}</div>
         ${canDelete ? '<div class="bench-insp-foot"><button type="button" class="btn btn-danger-outline btn-small" data-act="del-comp">Xoá linh kiện</button></div>' : ''}`;
       const resInput = inspectorEl.querySelector('#inspResVal');
       if (resInput) resInput.addEventListener('change', () => {
@@ -839,6 +849,8 @@ void main() {
     if (typeof e === 'string') {
       const pp = parsePsuPost(e);
       if (pp) return 'cọc ' + pp.sign + ' nguồn ' + pp.psuId;
+      const sp = parseScopePost(e);
+      if (sp) return 'cọc ' + sp.term + ' của ' + sp.scopeId;
       return e;
     }
     if (e && typeof e.x === 'number') return 'cọc nguồn';
@@ -846,7 +858,8 @@ void main() {
   }
   // Thường hoá địa chỉ người dùng gõ: trim, chữ hàng về thường
   // ('C12' -> 'c12', 'AA12' -> 'aa12'), chữ rail về hoa ('t+5' -> 'T+5'),
-  // cọc nguồn về dạng chuẩn ('psu1.+' -> 'PSU1.+').
+  // cọc nguồn về dạng chuẩn ('psu1.+' -> 'PSU1.+'), cọc hiện sóng về dạng
+  // chuẩn ('osc1.ch1' -> 'OSC1.CH1').
   function normalizeHoleInput(v) {
     const s = String(v || '').trim();
     let m = s.match(/^([a-zA-Z]+)(\d+)$/);
@@ -855,6 +868,8 @@ void main() {
     if (m) return m[1].toUpperCase() + m[2] + m[3];
     m = s.match(/^psu(\d+)\.([+-])$/i);
     if (m) return 'PSU' + m[1] + '.' + m[2];
+    m = s.match(/^osc(\d+)\.(ch1|ch2|gnd)$/i);
+    if (m) return 'OSC' + m[1] + '.' + m[2].toUpperCase();
     return s;
   }
   function deleteSelected() {
@@ -1273,6 +1288,49 @@ void main() {
       }
       return g;
     }
+    if (comp.type === 'oscilloscope') {
+      // Đồng hồ hiện sóng NGOÀI BÀN (như khối nguồn): ngồi trên mặt bàn,
+      // không anchor, không chân lỗ. Thân máy 100×60×50 (mm), màn hình
+      // ĐỨNG ở mặt trước (plane 80×42, canvas 512×288), 3 cọc CH1/CH2/GND
+      // ở mặt trước dưới màn hình. Màn hình vẽ bằng cùng tọa độ 256×144
+      // cũ: ctx đã scale(2,2) ngay khi tạo nên drawScopeWaveform không
+      // cần đổi logic vẽ (fillRect(0,0,256,144) phủ kín canvas 512×288).
+      g.position.set(comp.tx, 0, comp.tz);
+      const body = new THREE.Mesh(new THREE.BoxGeometry(100, 60, 50), stdMat(0x1E3A5F, { roughness: 0.5 }));
+      body.position.y = 30;
+      body.castShadow = true;
+      body.receiveShadow = true;
+      g.add(body);
+      const cv = document.createElement('canvas');
+      cv.width = 512; cv.height = 288;
+      const ctx = cv.getContext('2d');
+      ctx.setTransform(2, 0, 0, 2, 0, 0);
+      const tex = new THREE.CanvasTexture(cv);
+      const screen = new THREE.Mesh(
+        new THREE.PlaneGeometry(80, 42),
+        new THREE.MeshBasicMaterial({ map: tex }));
+      screen.position.set(0, 34, 25.2);
+      g.add(screen);
+      const t = { canvas: cv, ctx, tex, last: '' };
+      scopeTexs.set(comp.id, t);
+      drawScopeWaveform(t, []);
+      // 3 cọc ở mặt trước dưới màn hình (CH1 cyan, CH2 vàng, GND tối),
+      // mỗi cọc có núm bắt vô hình (sphere r=8) để bấm nối dây (pickScopePost).
+      for (const [term, dx, col] of [['CH1', -SCOPE_POST_DX, 0x7DD3FC], ['CH2', 0, 0xFBBF24], ['GND', SCOPE_POST_DX, 0x0F172A]]) {
+        const post = new THREE.Mesh(new THREE.CylinderGeometry(3, 3, 8, 16), stdMat(col));
+        post.rotation.x = Math.PI / 2;
+        post.position.set(dx, SCOPE_POST_Y, SCOPE_POST_DZ);
+        g.add(post);
+        const hit = new THREE.Mesh(
+          new THREE.SphereGeometry(8, 10, 10),
+          new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false }));
+        hit.position.set(dx, SCOPE_POST_Y, SCOPE_POST_DZ);
+        hit.userData = { scopePostId: comp.id + '.' + term };
+        g.add(hit);
+        scopeHitMeshes.push(hit);
+      }
+      return g;
+    }
     // Linh kiện cắm lỗ: gốc nhóm ở lỗ neo, chân theo legOffsets.
     // Chân kim loại phải rơi đúng lỗ: khoảng cách Z theo hàng dùng rowZ
     // (linh kiện xoay mà chân qua ranh giới đoạn thì 2 chân cách 5.08mm,
@@ -1289,7 +1347,7 @@ void main() {
     // 7mm là đủ (xem legMesh). Chân chui vào trong thân là bình thường,
     // không chọc xuyên qua đỉnh linh kiện nào (thân thấp nhất là điện
     // trở, đỉnh y=7.65, mà chân điện trở ở x=0/x=10.16 nằm ngoài thân).
-    const legH = (comp.type === 'multimeter' || comp.type === 'oscilloscope') ? 9 : 7;
+    const legH = comp.type === 'multimeter' ? 9 : 7;
     for (const o of offs) g.add(legMesh(o.dc * PITCH, rowZ(anchorR + o.dr, compRows) - rowZ(anchorR, compRows), legH));
     if (comp.type === 'led') {
       const color = comp.props?.color || '#DC2626';
@@ -1401,34 +1459,6 @@ void main() {
       dotB.rotation.x = Math.PI / 2;
       dotB.position.set(8.89, 11, 6.15);
       g.add(dotB);
-    } else if (comp.type === 'oscilloscope') {
-      // Đồng hồ hiện sóng 2 kênh: hộp navy 20×6×12 như đồng hồ đo, màn
-      // hình 256×144 trên nóc vẽ sóng CH1 (cyan) / CH2 (vàng hổ phách).
-      // 3 chấm màu ở mặt trước đánh dấu chân (cyan = CH1, vàng = CH2,
-      // tối = GND). Chân kim loại dài 9mm như đồng hồ đo (xem vòng
-      // legOffsets phía trên: 3 chân CH1/GND cách nhau 4 cột, CH2 ở giữa).
-      const body = new THREE.Mesh(new THREE.BoxGeometry(20, 6, 12), stdMat(0x1E3A5F, { roughness: 0.5 }));
-      body.position.set(5.08, 11, 0);
-      body.castShadow = true;
-      g.add(body);
-      const cv = document.createElement('canvas');
-      cv.width = 256; cv.height = 144;
-      const tex = new THREE.CanvasTexture(cv);
-      const screen = new THREE.Mesh(
-        new THREE.PlaneGeometry(16, 9),
-        new THREE.MeshBasicMaterial({ map: tex }));
-      screen.rotation.x = -Math.PI / 2;
-      screen.position.set(5.08, 14.15, 0);
-      g.add(screen);
-      const t = { canvas: cv, ctx: cv.getContext('2d'), tex, last: '' };
-      scopeTexs.set(comp.id, t);
-      drawScopeWaveform(t, []);
-      for (const [x, col] of [[1.27, 0x7DD3FC], [5.08, 0xFBBF24], [8.89, 0x0F172A]]) {
-        const dot = new THREE.Mesh(new THREE.CylinderGeometry(1.1, 1.1, 0.5, 12), stdMat(col));
-        dot.rotation.x = Math.PI / 2;
-        dot.position.set(x, 11, 6.15);
-        g.add(dot);
-      }
     }
     return g;
   }
@@ -1614,6 +1644,9 @@ void main() {
       // Cọc nguồn (PSU1.+/PSU1.-) lấy vị trí từ khối nguồn đang có trên bàn.
       const pp = parsePsuPost(e);
       if (pp) return psuPostPos(state, e);
+      // Cọc hiện sóng (OSC1.CH1/CH2/GND) lấy vị trí từ thân máy trên bàn.
+      const sp = parseScopePost(e);
+      if (sp) return scopePostPos(state, e);
       const p = holePos(e, state.size);
       return p ? { x: p.x, y: BOARD_TOP, z: p.z } : null;
     }
@@ -1625,6 +1658,7 @@ void main() {
     for (const [, g] of compMeshes) compRoot.remove(g);
     compMeshes.clear();
     psuHitMeshes.length = 0;
+    scopeHitMeshes.length = 0;
     ledMats.clear(); lcdTexs.clear(); meterTexs.clear(); scopeTexs.clear(); buzzerMats.clear(); btnTops.clear();
     for (const comp of state.components) {
       const g = buildComponentMesh(comp);
@@ -1653,6 +1687,23 @@ void main() {
     if (type === 'psu') {
       const id = nextComponentId(state, 'psu');
       const comp = { id, type: 'psu', tx, tz, fixed: false, props: defaultProps('psu') };
+      state.components.push(comp);
+      save(); rebuildAll(); syncToCpu();
+      select({ kind: 'comp', id });
+      setStatus('Đã đặt ' + compLabel(comp) + ' lên bàn.');
+      return id;
+    }
+    if (type === 'oscilloscope') {
+      // Hiện sóng ngoài bàn: đặt bằng tx/tz như nguồn, xóa được (không
+      // fixed). Không truyền tọa độ (tx=tz=0) thì về vị trí mặc định cạnh
+      // phải nguồn (tx=130, tz=-150).
+      const id = nextComponentId(state, 'oscilloscope');
+      const comp = {
+        id, type: 'oscilloscope',
+        tx: (tx === 0 && tz === 0) ? SCOPE_DEFAULT_TX : tx,
+        tz: (tx === 0 && tz === 0) ? SCOPE_DEFAULT_TZ : tz,
+        fixed: false, props: defaultProps('oscilloscope'),
+      };
       state.components.push(comp);
       save(); rebuildAll(); syncToCpu();
       select({ kind: 'comp', id });
@@ -1768,6 +1819,18 @@ void main() {
     const u = hits[0].object.userData;
     return u && u.psuPostId ? u.psuPostId : null;
   }
+  // Cọc hiện sóng (CH1/CH2/GND) của đồng hồ hiện sóng: điểm thả hợp lệ
+  // cho đầu dây (cả kéo đầu dây vào cọc lẫn đi dây mới bắt đầu/kết thúc
+  // ở cọc), mirror pickPsuPost.
+  function pickScopePost(e) {
+    const ndc = pointerNdc(e);
+    if (!ndc.inside || !scopeHitMeshes.length) return null;
+    raycaster.setFromCamera(ndc, camera);
+    const hits = raycaster.intersectObjects(scopeHitMeshes, false);
+    if (!hits.length) return null;
+    const u = hits[0].object.userData;
+    return u && u.scopePostId ? u.scopePostId : null;
+  }
   function pickObject(e) {
     const ndc = pointerNdc(e);
     if (!ndc.inside) return null;
@@ -1815,15 +1878,15 @@ void main() {
   }
   function showHighlightForComp(id) {
     const comp = state.components.find((c) => c.id === id);
-    if (!comp || comp.type === 'psu' || !sceneReady) { hideHighlight(); return; }
+    if (!comp || comp.type === 'psu' || comp.type === 'oscilloscope' || !sceneReady) { hideHighlight(); return; }
     showHighlight(comp.anchor, comp.type, comp.rot || 0, true);
     highlightBox.material.color.set(0x059669);
   }
   function hideHighlight() { if (highlightBox) highlightBox.visible = false; }
-  function showTableHighlight(x, z, ok) {
+  function showTableHighlight(x, z, ok, w = 124, d = 84) {
     if (!sceneReady) return;
     highlightBox.visible = true;
-    highlightBox.scale.set(124, 1, 84);
+    highlightBox.scale.set(w, 1, d);
     highlightBox.material.color.set(ok ? 0x059669 : 0xDC2626);
     highlightBox.position.set(x, 1, z);
     highlightBox.rotation.y = 0;
@@ -1859,13 +1922,15 @@ void main() {
     if (!drag || drag.mode !== 'palette') return;
     moveGhost(e);
     if (Math.hypot(e.clientX - drag.startX, e.clientY - drag.startY) > 4) drag.moved = true;
-    if (drag.type === 'psu') {
+    if (drag.type === 'psu' || drag.type === 'oscilloscope') {
       const pt = pickTablePoint(e);
       if (!pt) { drag.valid = false; hideHighlight(); return; }
       drag.tx = pt.x; drag.tz = pt.z;
       const blocked = Math.abs(pt.x) < 145 && Math.abs(pt.z) < 64;
       drag.valid = !blocked;
-      showTableHighlight(pt.x, pt.z, !blocked);
+      // Ô sáng theo cỡ thân máy: nguồn 60×40 -> 124×84, hiện sóng 100×50 -> 112×62.
+      if (drag.type === 'psu') showTableHighlight(pt.x, pt.z, !blocked);
+      else showTableHighlight(pt.x, pt.z, !blocked, 112, 62);
       return;
     }
     const hole = pickHole(e);
@@ -1887,9 +1952,9 @@ void main() {
       setPlacementMode(d.type);
       return;
     }
-    if (d.type === 'psu') {
-      if (d.valid) placeComponent('psu', null, 0, d.tx, d.tz);
-      else setStatus('Không đặt được nguồn ở đây (đè lên breadboard).');
+    if (d.type === 'psu' || d.type === 'oscilloscope') {
+      if (d.valid) placeComponent(d.type, null, 0, d.tx, d.tz);
+      else setStatus('Không đặt được ' + (d.type === 'psu' ? 'nguồn' : 'hiện sóng') + ' ở đây (đè lên breadboard).');
       return;
     }
     if (d.valid && d.anchor) placeComponent(d.type, d.anchor, d.rot);
@@ -1921,7 +1986,7 @@ void main() {
       }
     }
     if (wiringMode) {
-      const hole = pickHole(e) || pickPsuPost(e);
+      const hole = pickHole(e) || pickPsuPost(e) || pickScopePost(e);
       if (!hole) { wireStart = null; startMarker.visible = false; return; }
       if (!wireStart) {
         wireStart = hole;
@@ -1940,12 +2005,12 @@ void main() {
       return;
     }
     if (placementMode) {
-      if (placementMode === 'psu') {
+      if (placementMode === 'psu' || placementMode === 'oscilloscope') {
         const pt = pickTablePoint(e);
         if (pt && !(Math.abs(pt.x) < 145 && Math.abs(pt.z) < 64)) {
-          const id = placeComponent('psu', null, 0, pt.x, pt.z);
+          const id = placeComponent(placementMode, null, 0, pt.x, pt.z);
           if (id) setPlacementMode(null); // đặt 1 lần thì thoát chế độ đặt
-        } else setStatus('Không đặt được nguồn ở đây (đè lên breadboard).');
+        } else setStatus('Không đặt được ' + (placementMode === 'psu' ? 'nguồn' : 'hiện sóng') + ' ở đây (đè lên breadboard).');
         return;
       }
       const hole = pickHole(e);
@@ -1964,7 +2029,7 @@ void main() {
         pressBenchButton(comp.id, true);
       }
       if (comp.type === 'pic') return; // chip cố định, chỉ chọn để xem
-      if (comp.type === 'psu') {
+      if (comp.type === 'psu' || comp.type === 'oscilloscope') {
         drag = { mode: 'move-psu', id: comp.id, startX: e.clientX, startY: e.clientY, origTx: comp.tx, origTz: comp.tz, moved: false };
       } else {
         drag = { mode: 'move', id: comp.id, startX: e.clientX, startY: e.clientY, origAnchor: comp.anchor, origRot: comp.rot || 0, rot: comp.rot || 0, anchor: comp.anchor, valid: true, moved: false };
@@ -1985,8 +2050,17 @@ void main() {
   }
   function onCanvasPointerMove(e) {
     if (e.pointerType && e.pointerType !== 'mouse') return;
-    // Hover ở chế độ đặt: hiện ô sáng báo lỗ sắp đặt + góc xoay hiện tại.
-    if (!drag && placementMode && placementMode !== 'psu') {
+    // Hover ở chế độ đặt: hiện ô sáng báo vị trí sắp đặt (lỗ cho linh
+    // kiện cắm lỗ, mặt bàn cho nguồn/hiện sóng) + góc xoay hiện tại.
+    if (!drag && placementMode) {
+      if (placementMode === 'psu' || placementMode === 'oscilloscope') {
+        const pt = pickTablePoint(e);
+        if (!pt) { hideHighlight(); return; }
+        const blocked = Math.abs(pt.x) < 145 && Math.abs(pt.z) < 64;
+        if (placementMode === 'psu') showTableHighlight(pt.x, pt.z, !blocked);
+        else showTableHighlight(pt.x, pt.z, !blocked, 112, 62);
+        return;
+      }
       const hole = pickHole(e);
       if (!hole) { hideHighlight(); return; }
       const chk = canPlace(state, placementMode, hole, placementRot);
@@ -2001,9 +2075,9 @@ void main() {
       const fixedEnd = drag.end === 'a' ? w.b : w.a;
       const fixedPos = endpointPos(fixedEnd);
       if (!fixedPos) return;
-      // Đích thả: lỗ breadboard/rail hoặc cọc nguồn (+/−).
+      // Đích thả: lỗ breadboard/rail, cọc nguồn (+/−) hoặc cọc hiện sóng.
       const hole = pickHole(e);
-      const post = hole ? null : pickPsuPost(e);
+      const post = hole ? null : (pickPsuPost(e) || pickScopePost(e));
       const targetId = hole || post;
       drag.hoverHole = targetId;
       // Đường dây tạm từ đầu cố định tới chuột.
@@ -2075,7 +2149,9 @@ void main() {
       drag.valid = !blocked;
       drag.tx = pt.x; drag.tz = pt.z;
       g.position.set(pt.x, 0, pt.z);
-      showTableHighlight(pt.x, pt.z, !blocked);
+      const isScope = state.components.find((c) => c.id === drag.id)?.type === 'oscilloscope';
+      if (isScope) showTableHighlight(pt.x, pt.z, !blocked, 112, 62);
+      else showTableHighlight(pt.x, pt.z, !blocked);
     }
   }
   function onCanvasPointerUp(e) {
