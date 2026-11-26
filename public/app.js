@@ -3,14 +3,14 @@
 // chưa nạp chương trình nào; code mẫu nằm sẵn trong tab "Nạp viết code",
 // người dùng bấm "Nạp & chạy" thì chip mới chạy. ProgramRunner điều khiển
 // chạy/tạm dừng/chạy từng lệnh/breakpoint.
-import { createCPU, ProgramRunner, cyclesForElapsedMs } from './pic16.js?v=20261125aq';
+import { createCPU, ProgramRunner, cyclesForElapsedMs } from './pic16.js?v=20261125ax';
 import {
   resolvePeripherals, ledStates, buzzerStates,
   applyButtonToCpu, applyPotToCpu,
 } from './wiring.js?v=20261125r';
 import { defaultBenchState, benchToNetlist } from './bench-model.js?v=20261125aw';
 import { meterReadings, scopeVoltages, pushScopeSample, SCOPE_MAX_SAMPLES } from './circuit-solver.js?v=20261125aw';
-import { compileC } from './c-compiler.js?v=20261125ar';
+import { compileC } from './c-compiler.js?v=20261125ax';
 
 const cpu = createCPU();
 cpu.clockHz = 4000000;

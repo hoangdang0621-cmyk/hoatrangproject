@@ -1,7 +1,7 @@
 // test-pic16.mjs — Kiểm thử xác định cho lõi pic16.js (KHÔNG đưa vào public/).
 // Chạy: node test-pic16.mjs   (exit 0 = tất cả pass)
 import { readFileSync } from 'node:fs';
-import { assemble, createCPU, parseIntelHex, exportHex, disassemble, ProgramRunner, cyclesForElapsedMs } from './public/pic16.js';
+import { assemble, createCPU, parseIntelHex, exportHex, disassemble, ProgramRunner, cyclesForElapsedMs, LCD } from './public/pic16.js';
 import { defaultNetlist, resolvePeripherals, checkWiring, ledStates, buzzerStates, applyButtonToCpu, applyPotToCpu, PIC_PINS } from './public/wiring.js';
 import { PITCH, SEGMENT_GAP_MM, rowZ, HOLE_RADIUS, HOLE_HEIGHT, HOLE_TOP_ABOVE_BOARD, holeCenterY, depthPrecisionAt, MAX_CAMERA_DISTANCE, SEGMENT_LINE_WIDTH_MM, segmentBoundaries, allHoles, stripKey, parseHole, holePos, holeId, rowLabel, rowIndexFromLabel, migrateOldHoleId, picLegs, picLegsForAnchor, picAnchor, legsFor, canPlace, buildBenchNets, benchToNetlist, defaultBenchState, sanitizeState, boardSize, picCol, picRows, picBodyDepth, picBodyDepthForRows, bodyDepth, pruneStateForSize, validateWireEnd, retargetWireEnd, togglePlacement, normalizeSize, holeCount, sizeLabel, sameSize, compLabel, nextComponentId, defaultProps, psuVolts, validatePsuVolts, parsePsuPost, psuPostPos, PSU_SCALE, PSU_POST_DX, PSU_POST_Y, PSU_POST_DZ, parseScopePost, scopePostPos, SCOPE_POST_DX, SCOPE_POST_Y, SCOPE_POST_DZ, SCOPE_DEFAULT_TX, SCOPE_DEFAULT_TZ, normalizeWireEnd, clampCamTarget, zoomTowardPoint, panTarget, meterMode } from './public/bench-model.js';
 import { LABS, getLab, buildLabState } from './public/labs.js';
@@ -3495,7 +3495,7 @@ function measureOnHalf(cpu, isOn) {
 
 // (aa-a) Lab 1 C: compile ok, LED0 SÁNG rồi TẮT, nửa chu kỳ ~500000 (±20%)
 {
-  check('(aa-a) C_VERSION = 20261125ar', C_VERSION === '20261125ar', String(C_VERSION));
+  check('(aa-a) C_VERSION = 20261125ax', C_VERSION === '20261125ax', String(C_VERSION));
   const { r, cpu, mapping } = runLabC(0, LAB1_C, 100000);
   const led0 = () => ledStates(cpu, mapping).find((s) => s.id === 'LED0').on;
   check('(aa-a) Lab 1 C: compileC ok, 0 lỗi, có program',
@@ -4655,6 +4655,135 @@ void main(){
         && src.includes('pickScopePost') && src.includes('scopePostPos(state, e)')
         && !src.includes('trên nóc vẽ sóng');
     })(), '');
+}
+
+// Nhóm (ah): lệnh shift màn hình LCD 0x18/0x1C (v=20261125ax) — trước đây
+// command() bỏ qua hẳn 0x10-0x1F nên code Điệp shift 32 lần mà chữ đứng yên.
+{
+  const L1 = '0123456789ABCDEF';
+  const L2 = 'SCROLL 0x18     ';
+  const BLANK = '                ';
+  const write2Lines = (lcd) => {
+    const w = (s) => { for (const ch of s) lcd.writeData(ch.charCodeAt(0)); };
+    lcd.command(0x38); lcd.command(0x0C); lcd.command(0x01); lcd.command(0x06);
+    w(L1); lcd.command(0xC0); w(L2);
+  };
+  const lcd = new LCD();
+  write2Lines(lcd);
+  check('(ah-a) LCD shift: ban đầu 2 dòng đủ', JSON.stringify(lcd.getLines()) === JSON.stringify([L1, L2]),
+    `got=${JSON.stringify(lcd.getLines())}`);
+  lcd.command(0x18);
+  check('(ah-b) sau 0x18 x1: dòng 1 "123456789ABCDEF ", dòng 2 "CROLL 0x18      "',
+    lcd.getLines()[0] === '123456789ABCDEF ' && lcd.getLines()[1] === 'CROLL 0x18      ',
+    `got=${JSON.stringify(lcd.getLines())}`);
+  check('(ah-c) getDisplayCells phản ánh shift: ô đầu dòng 1 sau 0x18 x1 là "1"',
+    lcd.getDisplayCells()[0][0].ch === '1' && lcd.getDisplayCells()[1][0].ch === 'C',
+    `cells=${lcd.getDisplayCells()[0][0].ch}/${lcd.getDisplayCells()[1][0].ch}`);
+  for (let i = 0; i < 15; i++) lcd.command(0x18);
+  check('(ah-d) sau 0x18 x16: cả 2 dòng toàn khoảng trắng (chữ đã trôi hết)',
+    lcd.getLines()[0] === BLANK && lcd.getLines()[1] === BLANK,
+    `got=${JSON.stringify(lcd.getLines())}`);
+  for (let i = 0; i < 16; i++) lcd.command(0x1C);
+  check('(ah-e) sau 0x1C x16: về đúng 2 dòng ban đầu',
+    JSON.stringify(lcd.getLines()) === JSON.stringify([L1, L2]),
+    `got=${JSON.stringify(lcd.getLines())}`);
+  for (let i = 0; i < 40; i++) lcd.command(0x18);
+  check('(ah-f) shift 40 lần quay vòng về đúng ban đầu',
+    JSON.stringify(lcd.getLines()) === JSON.stringify([L1, L2]),
+    `got=${JSON.stringify(lcd.getLines())}`);
+  // Dịch con trỏ: addr đổi, nội dung + shift không đổi (addr đang ở 0x50
+  // sau khi ghi 2 dòng: dòng 2 viết đủ 16 ký tự từ 0x40).
+  const addrBefore = lcd.addr;
+  lcd.command(0x14);
+  check('(ah-g) 0x14 dịch con trỏ phải: addr 0x50->0x51, nội dung và shift không đổi',
+    lcd.addr === 0x51 && lcd.shift === 0 && JSON.stringify(lcd.getLines()) === JSON.stringify([L1, L2]),
+    `addr=${lcd.addr.toString(16)} shift=${lcd.shift}`);
+  lcd.command(0x10);
+  check('(ah-h) 0x10 dịch con trỏ trái: addr về 0x50, nội dung không đổi',
+    lcd.addr === addrBefore && JSON.stringify(lcd.getLines()) === JSON.stringify([L1, L2]),
+    `addr=${lcd.addr.toString(16)}`);
+  // Quay vòng con trỏ ở ranh giới dòng.
+  lcd.command(0x80 | 0x27); lcd.command(0x14);
+  const w1 = lcd.addr === 0x40;
+  lcd.command(0x80 | 0x40); lcd.command(0x10);
+  const w2 = lcd.addr === 0x27;
+  lcd.command(0x80 | 0x00); lcd.command(0x10);
+  const w3 = lcd.addr === 0x67;
+  lcd.command(0x80 | 0x67); lcd.command(0x14);
+  const w4 = lcd.addr === 0x00;
+  check('(ah-i) dịch con trỏ quay vòng đúng ranh giới (0x27->0x40, 0x40->0x27, 0x00->0x67, 0x67->0x00)',
+    w1 && w2 && w3 && w4, `w=${[w1, w2, w3, w4].join(',')}`);
+  // 0x01 clear và 0x02 return home đều reset shift về 0.
+  for (let i = 0; i < 5; i++) lcd.command(0x18);
+  lcd.command(0x01);
+  const clearOk = lcd.shift === 0 && lcd.getLines()[0] === BLANK && lcd.getLines()[1] === BLANK;
+  write2Lines(lcd);
+  const afterClearWriteOk = JSON.stringify(lcd.getLines()) === JSON.stringify([L1, L2]);
+  check('(ah-j) 0x01 clear reset shift về 0 (ghi lại hiện đúng từ đầu)',
+    clearOk && afterClearWriteOk, `shift=${lcd.shift} lines=${JSON.stringify(lcd.getLines())}`);
+  for (let i = 0; i < 5; i++) lcd.command(0x18);
+  lcd.command(0x02);
+  check('(ah-k) 0x02 return home reset shift về 0, DDRAM giữ nguyên',
+    lcd.shift === 0 && lcd.addr === 0 && JSON.stringify(lcd.getLines()) === JSON.stringify([L1, L2]),
+    `shift=${lcd.shift} addr=${lcd.addr} lines=${JSON.stringify(lcd.getLines())}`);
+}
+
+// Nhóm (ah) e2e: code thật của Điệp (test/fixtures/diep-lcd-shift.c), bản
+// rút ngắn delay 1000ms -> 10ms (chỉ đổi delay, giữ nguyên logic), chạy trên
+// CPU thật với board led-lcd. Lấy mẫu dòng LCD mỗi 20k chu kỳ, ghi lại mỗi
+// lần dòng đổi để kiểm tra pha 1 trôi trái, pha 2 trôi về, cuối SHIFT DONE.
+{
+  let diepSrc = null;
+  try { diepSrc = readFixture('diep-lcd-shift.c'); } catch (e) { diepSrc = null; }
+  check('(ah-l) đọc được test/fixtures/diep-lcd-shift.c',
+    typeof diepSrc === 'string' && diepSrc.length > 0,
+    diepSrc === null ? 'không đọc được file' : `dài ${diepSrc.length} ký tự`);
+  if (diepSrc) {
+    const shortSrc = diepSrc.replaceAll('__delay_ms(1000)', '__delay_ms(10)');
+    const r = compileC(shortSrc);
+    check('(ah-m) code shift rút ngắn compileC ok, 0 lỗi',
+      r.ok && r.errors.length === 0 && r.program !== null, JSON.stringify((r.errors || []).slice(0, 2)));
+    const { state } = buildLabState(getLab('led-lcd'));
+    const mapping = resolvePeripherals(benchToNetlist(state));
+    const cpu = createCPU();
+    cpu.setWiring(mapping);
+    if (r.ok && r.program) cpu.loadProgram(r.program);
+    const L1 = '0123456789ABCDEF';
+    const L2 = 'SCROLL 0x18     ';
+    const BLANK = '                ';
+    // Lấy mẫu mỗi 5k chu kỳ tới 1M (mỗi vòng lặp ~10k chu kỳ: __delay_ms(10)
+    // @4MHz = 10.000 chu kỳ lệnh, vì 1 chu kỳ lệnh = 1us; SHIFT DONE tới
+    // ~360k chu kỳ): mỗi lần dòng đổi thì ghi lại (khử trùng lặp liên tiếp).
+    // Bước 5k đủ mịn để không bỏ sót trạng thái trống (chỉ tồn tại ~10k
+    // chu kỳ giữa shift trái cuối và shift phải đầu).
+    const samples = [];
+    let last = null;
+    let guard = 0;
+    while (cpu.cycles < 1000000 && guard++ < 300) {
+      runUntil(cpu, cpu.cycles + 5000);
+      const cur = cpu.lcd.getLines();
+      const key = cur[0] + '|' + cur[1];
+      if (key !== last) { last = key; samples.push(cur); }
+    }
+    const blankIx = (() => {
+      // Trạng thái trống lúc đầu (chưa ghi gì) cũng là 2 dòng trống — phải
+      // tìm trạng thái trống SAU KHI 2 dòng đầy đã hiện (tức cuối pha 1).
+      const firstFullIx = samples.findIndex((s) => s[0] === L1 && s[1] === L2);
+      if (firstFullIx < 0) return -1;
+      return samples.findIndex((s, i) => i > firstFullIx && s[0] === BLANK && s[1] === BLANK);
+    })();
+    const backIx = blankIx >= 0
+      ? samples.findIndex((s, i) => i > blankIx && s[0] === L1 && s[1] === L2)
+      : -1;
+    check('(ah-n) pha 1: sau 16 shift trái, 2 dòng toàn khoảng trắng',
+      r.ok && blankIx >= 0, `samples=${samples.length} blankIx=${blankIx}`);
+    check('(ah-o) pha 2: sau 16 shift phải, 2 dòng về đúng ban đầu',
+      r.ok && backIx > blankIx, `blankIx=${blankIx} backIx=${backIx}`);
+    const lastS = samples[samples.length - 1];
+    check('(ah-p) cuối: hiện "SHIFT DONE" / "0x18 + 0x1C"',
+      r.ok && lastS && lastS[0].startsWith('SHIFT DONE') && lastS[1].startsWith('0x18 + 0x1C'),
+      `last=${JSON.stringify(lastS)} samples=${samples.length}`);
+  }
 }
 
 console.log(`\nKết quả: ${pass} pass, ${fail} fail`);

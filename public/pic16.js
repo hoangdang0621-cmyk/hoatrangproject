@@ -164,16 +164,40 @@ export class LCD {
     this.addr = 0; this.addrIsCgram = false;
     this.displayOn = true; this.cursorOn = false; this.blink = false;
     this.entryInc = true;
+    // Offset cửa sổ hiển thị (0..39), CHUNG cho cả 2 dòng: lệnh shift
+    // màn hình (0x18/0x1C) trượt cửa sổ này trong DDRAM, không sửa DDRAM.
+    this.shift = 0;
   }
   command(cmd) {
-    if (cmd === 0x01) { this.ddram.fill(0x20); this.addr = 0; this.addrIsCgram = false; } // Clear display: chỉ DDRAM, CGRAM giữ nguyên
-    else if (cmd === 0x02) { this.addr = 0; this.addrIsCgram = false; } // Return home
+    if (cmd === 0x01) { this.ddram.fill(0x20); this.addr = 0; this.addrIsCgram = false; this.shift = 0; } // Clear display: chỉ DDRAM, CGRAM giữ nguyên; màn hình về vị trí gốc
+    else if (cmd === 0x02) { this.addr = 0; this.addrIsCgram = false; this.shift = 0; } // Return home: con trỏ về 0, màn hình về vị trí gốc
     else if ((cmd & 0xfc) === 0x04) { this.entryInc = !!(cmd & 0x02); } // Entry mode
     else if ((cmd & 0xf8) === 0x08) { // Display on/off
       this.displayOn = !!(cmd & 0x04); this.cursorOn = !!(cmd & 0x02); this.blink = !!(cmd & 0x01);
+    } else if ((cmd & 0xf0) === 0x10) { // Cursor/display shift (0x10-0x1F): bit 3 = S/C, bit 2 = R/L
+      const toDisplay = !!(cmd & 0x08); // S/C: 1 = dịch màn hình, 0 = dịch con trỏ
+      const toRight = !!(cmd & 0x04); // R/L: 1 = phải, 0 = trái
+      if (toDisplay) {
+        // Dịch màn hình: dịch trái (0x18) thì cửa sổ trượt sang phải trong
+        // DDRAM (ký tự trái trôi ra, ký tự phải hiện vào); dịch phải (0x1C)
+        // thì ngược lại. Không đổi DDRAM, không đổi con trỏ.
+        this.shift = (this.shift + (toRight ? 39 : 1)) % 40;
+      } else {
+        // Dịch con trỏ (0x14 phải / 0x10 trái): quay vòng như writeData,
+        // không đổi DDRAM, không đổi shift.
+        if (toRight) {
+          this.addr++;
+          if (this.addr === 0x28) this.addr = 0x40;
+          else if (this.addr === 0x68) this.addr = 0x00;
+        } else {
+          this.addr--;
+          if (this.addr === 0x3f) this.addr = 0x27;
+          else if (this.addr < 0) this.addr = 0x67;
+        }
+      }
     } else if (cmd & 0x80) { this.addr = cmd & 0x7f; this.addrIsCgram = false; } // Set DDRAM address
     else if (cmd & 0x40) { this.addr = cmd & 0x3f; this.addrIsCgram = true; } // Set CGRAM address (0x40-0x7F)
-    // 0x20-0x3F function set, 0x10-0x1F shift: không cần cho bài lab
+    // 0x20-0x3F function set: không cần cho bài lab
   }
   writeData(ch) {
     if (this.addrIsCgram) {
@@ -206,14 +230,14 @@ export class LCD {
       const ch = (b >= 32 && b < 127) ? String.fromCharCode(b) : ' ';
       return { ch, custom: b < 0x10 ? this.getCustomChar(b) : null };
     };
-    const line = (base) => { const out = []; for (let i = 0; i < 16; i++) out.push(cell(this.ddram[base + i])); return out; };
+    const line = (base) => { const out = []; for (let i = 0; i < 16; i++) out.push(cell(this.ddram[base + (this.shift + i) % 40])); return out; };
     return [line(0), line(0x40)];
   }
   getLines() {
     const dec = (b) => (b >= 32 && b < 127 ? String.fromCharCode(b) : ' ');
     let l0 = '', l1 = '';
-    for (let i = 0; i < 16; i++) l0 += dec(this.ddram[i]);
-    for (let i = 0; i < 16; i++) l1 += dec(this.ddram[0x40 + i]);
+    for (let i = 0; i < 16; i++) l0 += dec(this.ddram[(this.shift + i) % 40]);
+    for (let i = 0; i < 16; i++) l1 += dec(this.ddram[0x40 + (this.shift + i) % 40]);
     return [l0, l1];
   }
   getText() { const [a, b] = this.getLines(); return a + '\n' + b; }

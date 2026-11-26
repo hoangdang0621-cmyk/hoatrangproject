@@ -23,10 +23,10 @@
 // được map ngược về dòng C gần nhất qua g.asmLineToCLine.
 
 import { parseC } from './c-frontend.js?v=20261125ar';
-import { generateC } from './c-codegen.js?v=20261125ar';
-import { assemble } from './pic16.js?v=20261125aq';
+import { generateC } from './c-codegen.js?v=20261125ax';
+import { assemble } from './pic16.js?v=20261125ax';
 
-export const C_VERSION = '20261125ar';
+export const C_VERSION = '20261125ax';
 
 export function compileC(source) {
   // Bước 1: tiền xử lý + lexer + parser -> AST (lỗi: dòng C gốc).
