@@ -3,14 +3,14 @@
 // chưa nạp chương trình nào; code mẫu nằm sẵn trong tab "Nạp viết code",
 // người dùng bấm "Nạp & chạy" thì chip mới chạy. ProgramRunner điều khiển
 // chạy/tạm dừng/chạy từng lệnh/breakpoint.
-import { createCPU, ProgramRunner, cyclesForElapsedMs } from './pic16.js?v=20261125ah';
+import { createCPU, ProgramRunner, cyclesForElapsedMs } from './pic16.js?v=20261125aq';
 import {
   resolvePeripherals, ledStates, buzzerStates,
   applyButtonToCpu, applyPotToCpu,
 } from './wiring.js?v=20261125r';
 import { defaultBenchState, benchToNetlist } from './bench-model.js?v=20261125al';
 import { meterReadings } from './circuit-solver.js?v=20261125al';
-import { compileC } from './c-compiler.js?v=20261125ap';
+import { compileC } from './c-compiler.js?v=20261125aq';
 
 const cpu = createCPU();
 cpu.clockHz = 4000000;
@@ -83,7 +83,7 @@ window.HoaTrangBenchBridge = {
     try { return meterReadings(benchStateForMeters, cpu, pressedIdsForMeters); }
     catch { return { voltmeters: [], ammeters: [] }; }
   },
-  getLcd: () => ({ lines: cpu.lcd.getLines(), complete: !mapping.lcd.id || mapping.lcd.complete }),
+  getLcd: () => ({ lines: cpu.lcd.getLines(), cells: cpu.lcd.getDisplayCells(), complete: !mapping.lcd.id || mapping.lcd.complete }),
   getPin: (port, bit) => ({ dir: cpu.pinDirection(port, bit), level: cpu.pinLevel(port, bit) }),
   getTris: () => cpu.tris,
   getMapping: () => mapping,

@@ -3491,7 +3491,7 @@ function measureOnHalf(cpu, isOn) {
 
 // (aa-a) Lab 1 C: compile ok, LED0 SÁNG rồi TẮT, nửa chu kỳ ~500000 (±20%)
 {
-  check('(aa-a) C_VERSION = 20261125ap', C_VERSION === '20261125ap', String(C_VERSION));
+  check('(aa-a) C_VERSION = 20261125aq', C_VERSION === '20261125aq', String(C_VERSION));
   const { r, cpu, mapping } = runLabC(0, LAB1_C, 100000);
   const led0 = () => ledStates(cpu, mapping).find((s) => s.id === 'LED0').on;
   check('(aa-a) Lab 1 C: compileC ok, 0 lỗi, có program',
@@ -4077,6 +4077,156 @@ void main(){
       `gap=${gap}`);
   } else {
     check('(ad-e) Code cuộn LCD @20MHz (bỏ qua: không đọc được /tmp/diep-lcd-scroll.c)', false, 'không đọc được file');
+  }
+}
+
+// (ae) CBLOCK BANK 2/3 (v=20261125aq) — NGUYÊN NHÂN GỐC VỤ KẸT CODE 2 HÀNG.
+// Lỗi: assembler pic16.js cắt địa chỉ CBLOCK còn 8-bit ("v & 0xff") nên
+// CBLOCK 0x110 (bank 2) thành 0x10 (bank 0). Codegen cấp phát đúng
+// (USER_BANKS: bank1 0xA0-0xEF, bank2 0x110-0x16F, bank3 0x190-0x1EF)
+// nhưng assembler gán symbol bank 2/3 về bank 0, làm biến cục bộ
+// (title[] 17B + i/j/len) CHỒNG lên biến tạm __C_T1/__C_T2/__C_T3 và
+// thanh ghi SFR: title[] ghi vào T1CON/TMR2..., len/i/j bị con trỏ
+// text[i+j] ghi đè (__C_T2 == j) nên vòng lặp cuộn kẹt trong delay,
+// LCD chỉ hiện 'c'. Chỉ cần khai báo thêm mảng thứ hai (dù không dùng)
+// cũng đủ gây kẹt vì nó đẩy i/j/len sang bank 2. Sửa: "v & 0x1ff"
+// (RAM 9-bit, 0x000-0x1FF).
+// (ae-a) Assembler: CBLOCK 0x110/0x190 gán đúng địa chỉ 9-bit.
+{
+  const asm = assemble(`
+    ORG 0
+    GOTO MAIN
+MAIN
+    BANKSEL FOO
+    MOVLW 0x55
+    MOVWF FOO
+    MOVLW 0x66
+    MOVWF BAR
+    MOVLW 0x77
+    MOVWF BAR+1
+    BANKSEL BAZ
+    MOVLW 0x99
+    MOVWF BAZ
+LOOP
+    GOTO LOOP
+CBLOCK 0x110
+FOO
+BAR:2
+ENDC
+CBLOCK 0x190
+BAZ
+ENDC
+    END`);
+  check('(ae-a) assemble CBLOCK bank 2/3 không lỗi', asm.errors.length === 0, JSON.stringify(asm.errors));
+  const cpu = createCPU();
+  cpu.loadProgram(asm.program);
+  for (let i = 0; i < 200; i++) cpu.step();
+  check('(ae-a) CBLOCK 0x110: FOO ở 0x110=0x55, BAR ở 0x111=0x66/0x112=0x77 (không rơi về bank 0)',
+    cpu.ram[0x110] === 0x55 && cpu.ram[0x111] === 0x66 && cpu.ram[0x112] === 0x77,
+    `ram[0x110]=${cpu.ram[0x110]} ram[0x111]=${cpu.ram[0x111]} ram[0x112]=${cpu.ram[0x112]}`);
+  check('(ae-a) CBLOCK 0x190 (bank 3): BAZ ở 0x190=0x99',
+    cpu.ram[0x190] === 0x99, `ram[0x190]=${cpu.ram[0x190]}`);
+  check('(ae-a) bank 0 không bị ghi đè: ram[0x10]=0, ram[0x11]=0 (chỗ FOO/BAR cũ khi lỗi)',
+    cpu.ram[0x10] === 0 && cpu.ram[0x11] === 0,
+    `ram[0x10]=${cpu.ram[0x10]} ram[0x11]=${cpu.ram[0x11]}`);
+}
+
+// (ae-b) C: 2 mảng cục bộ, mảng thứ hai KHÔNG dùng (Test E tối giản) —
+// không kẹt, title[]/len/i ở đúng bank 2, không chồng lên biến tạm.
+{
+  // Đọc địa chỉ symbol từ CBLOCK trong asm sinh ra (đỡ hardcode).
+  const cblockAddrs = (asmText) => {
+    const map = {};
+    let base = null;
+    for (const ln of asmText.split('\n')) {
+      const t = ln.trim();
+      const mC = t.match(/^CBLOCK\s+(0x[0-9A-Fa-f]+|\d+)$/i);
+      if (mC) { base = parseInt(mC[1], mC[1].toLowerCase().startsWith('0x') ? 16 : 10); continue; }
+      if (/^ENDC$/i.test(t)) { base = null; continue; }
+      if (base !== null) {
+        const mS = t.match(/^([A-Za-z_][A-Za-z0-9_]*)(?::(\d+))?$/);
+        if (mS) { map[mS[1]] = base; base += mS[2] ? parseInt(mS[2], 10) : 1; }
+      }
+    }
+    return map;
+  };
+  const src = `#include <xc.h>
+void main(void)
+{
+    const char text[] = "                cong hoa xa hoi chu nghia viet nam                ";
+    const char title[] = "    VIET NAM    ";
+    unsigned char len = 66;
+    unsigned char i = 0;
+    unsigned char j = 0;
+    while (1) { i++; j++; }
+}`;
+  const r = compileC(src);
+  check('(ae-b) 2 mảng cục bộ compile ok, 0 lỗi', r.ok, JSON.stringify(r.errors));
+  if (r.ok) {
+    const sym = cblockAddrs(r.asm);
+    // text[] ở bank 1, title[]/len/i/j ở bank 2 (>= 0x110).
+    const t1 = sym['__L_main_1'], tLen = sym['__L_main_2'], tI = sym['__L_main_3'], tJ = sym['__L_main_4'];
+    check('(ae-b) title[]/len/i/j cấp ở bank 2 (địa chỉ >= 0x110), text[] ở bank 1',
+      t1 >= 0x110 && tLen >= 0x110 && tI >= 0x110 && tJ >= 0x110 && sym['__L_main_0'] >= 0xA0 && sym['__L_main_0'] < 0x100,
+      `text=${sym['__L_main_0']?.toString(16)} title=${t1?.toString(16)} len=${tLen?.toString(16)} i=${tI?.toString(16)} j=${tJ?.toString(16)}`);
+    const cpu = createCPU();
+    cpu.loadProgram(r.program);
+    for (let s = 0; s < 200000; s++) cpu.step();
+    check('(ae-b) sau init: title[0]=32 (space), title[4]=86 (V), len=66 — không còn 0 do ghi nhầm bank 0',
+      cpu.ram[t1] === 32 && cpu.ram[t1 + 4] === 86 && cpu.ram[tLen] === 66,
+      `title[0]=${cpu.ram[t1]} title[4]=${cpu.ram[t1 + 4]} len=${cpu.ram[tLen]}`);
+    check('(ae-b) i/j tăng đồng bộ trong vòng lặp (|i-j| <= 1 do lấy mẫu giữa 2 lệnh tăng): 2 biến độc lập, không bị biến tạm ghi đè',
+      Math.abs(cpu.ram[tI] - cpu.ram[tJ]) <= 1,
+      `i=${cpu.ram[tI]} j=${cpu.ram[tJ]} len=${cpu.ram[tLen]}`);
+  }
+}
+
+// (ae-c) Code LCD 2 hàng thật của Điệp (/tmp/diep-xc8-v2-fixed.c):
+// hàng 1 "    VIET NAM    ", hàng 2 cuộn "cong hoa xa hoi chu nghia
+// viet nam", LED nháy mỗi bước, KHÔNG kẹt (2 ảnh chụp cách nhau 1 bước
+// cuộn phải khác nhau).
+{
+  let diepSrc = null;
+  try { diepSrc = readFileSync('/tmp/diep-xc8-v2-fixed.c', 'utf8'); } catch (e) { diepSrc = null; }
+  if (diepSrc) {
+    const r = compileC(diepSrc);
+    check('(ae-c) code 2 hàng của Điệp compile ok, 0 lỗi', r.ok, JSON.stringify(r.errors));
+    const { state } = buildLabState(getLab('led-lcd'));
+    const mapping = resolvePeripherals(benchToNetlist(state));
+    const cpu = createCPU();
+    cpu.setWiring(mapping);
+    if (r.ok && r.program) cpu.loadProgram(r.program);
+    const led1 = () => ledStates(cpu, mapping).find((s) => s.id === 'LED1').on;
+    // Chờ qua khởi tạo + ghi tiêu đề (tối đa ~2M chu kỳ).
+    let guard = 0;
+    while (guard++ < 100 && !cpu.lcd.getLines()[0].includes('VIET')) runUntil(cpu, cpu.cycles + 20000);
+    const l1 = cpu.lcd.getLines()[0];
+    check('(ae-c) hàng 1 hiện "    VIET NAM    " sau khởi tạo',
+      l1 === '    VIET NAM    ', JSON.stringify(l1));
+    // Chờ hàng 2 bắt đầu có chữ (cuộn vào từ phải) rồi mới chụp.
+    guard = 0;
+    while (guard++ < 100 && cpu.lcd.getLines()[1].trim().length === 0) runUntil(cpu, cpu.cycles + 20000);
+    // 2 ảnh chụp hàng 2 cách nhau 1 bước cuộn (~1,3M chu kỳ): phải khác
+    // nhau (chứng minh không kẹt trong delay). Đầu chuỗi cuộn chỉ lộ
+    // 1-2 chữ ('c' rồi 'co') nên kiểm tra: phần chữ hiện ra là tiền tố
+    // của "cong hoa xa hoi..." và dài ra theo từng bước (chữ chạy vào).
+    runUntil(cpu, cpu.cycles + 1300000);
+    const snap1 = cpu.lcd.getLines()[1];
+    const ledA = led1();
+    runUntil(cpu, cpu.cycles + 1300000);
+    const snap2 = cpu.lcd.getLines()[1];
+    const ledB = led1();
+    const strip = (s) => s.replace(/^ +/, '');
+    const isPrefix = (s) => 'cong hoa xa hoi chu nghia viet nam'.startsWith(strip(s)) && strip(s).length > 0;
+    check('(ae-c) hàng 2 cuộn, không kẹt: 2 ảnh chụp cách 1 bước cuộn khác nhau, chữ hiện ra là tiền tố "cong hoa..." và dài ra',
+      snap1 !== snap2 && isPrefix(snap1) && isPrefix(snap2) && strip(snap2).length > strip(snap1).length,
+      `snap1=${JSON.stringify(snap1)} snap2=${JSON.stringify(snap2)}`);
+    check('(ae-c) LED RB1 đổi trạng thái giữa 2 bước cuộn',
+      ledA !== ledB, `ledA=${ledA} ledB=${ledB}`);
+    check('(ae-c) hàng 1 vẫn giữ tiêu đề sau khi cuộn',
+      cpu.lcd.getLines()[0] === '    VIET NAM    ', JSON.stringify(cpu.lcd.getLines()[0]));
+  } else {
+    check('(ae-c) code 2 hàng của Điệp (bỏ qua: không đọc được /tmp/diep-xc8-v2-fixed.c)', false, 'không đọc được file');
   }
 }
 

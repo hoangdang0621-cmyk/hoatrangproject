@@ -158,19 +158,30 @@ export class LCD {
   constructor() { this.reset(); }
   reset() {
     this.ddram = new Uint8Array(128).fill(0x20);
-    this.addr = 0; this.displayOn = true; this.cursorOn = false; this.blink = false;
+    // CGRAM 64 byte: 8 ký tự tự tạo × 8 hàng, mỗi hàng chỉ 5 bit có nghĩa
+    // (bit 4 = cột trái nhất). Mất khi mất nguồn, giống HD44780 thật.
+    this.cgram = new Uint8Array(64);
+    this.addr = 0; this.addrIsCgram = false;
+    this.displayOn = true; this.cursorOn = false; this.blink = false;
     this.entryInc = true;
   }
   command(cmd) {
-    if (cmd === 0x01) { this.ddram.fill(0x20); this.addr = 0; } // Clear display
-    else if (cmd === 0x02) { this.addr = 0; } // Return home
+    if (cmd === 0x01) { this.ddram.fill(0x20); this.addr = 0; this.addrIsCgram = false; } // Clear display: chỉ DDRAM, CGRAM giữ nguyên
+    else if (cmd === 0x02) { this.addr = 0; this.addrIsCgram = false; } // Return home
     else if ((cmd & 0xfc) === 0x04) { this.entryInc = !!(cmd & 0x02); } // Entry mode
     else if ((cmd & 0xf8) === 0x08) { // Display on/off
       this.displayOn = !!(cmd & 0x04); this.cursorOn = !!(cmd & 0x02); this.blink = !!(cmd & 0x01);
-    } else if (cmd & 0x80) { this.addr = cmd & 0x7f; } // Set DDRAM address
-    // 0x20-0x3F function set, 0x10-0x1F shift, 0x40+ CGRAM: không cần cho bài lab
+    } else if (cmd & 0x80) { this.addr = cmd & 0x7f; this.addrIsCgram = false; } // Set DDRAM address
+    else if (cmd & 0x40) { this.addr = cmd & 0x3f; this.addrIsCgram = true; } // Set CGRAM address (0x40-0x7F)
+    // 0x20-0x3F function set, 0x10-0x1F shift: không cần cho bài lab
   }
   writeData(ch) {
+    if (this.addrIsCgram) {
+      this.cgram[this.addr & 0x3f] = ch & 0x1f; // mỗi hàng CGRAM chỉ 5 bit
+      if (this.entryInc) this.addr = (this.addr + 1) & 0x3f; // tự tăng, quay vòng trong 64 byte
+      else this.addr = (this.addr - 1) & 0x3f;
+      return;
+    }
     this.ddram[this.addr & 0x7f] = ch & 0xff;
     if (this.entryInc) {
       this.addr++;
@@ -181,6 +192,22 @@ export class LCD {
       if (this.addr === 0x3f) this.addr = 0x27;
       else if (this.addr < 0) this.addr = 0x67;
     }
+  }
+  // Pattern 8 hàng (mỗi hàng 5 bit) của ký tự tự tạo mã code (0-7). Trả về mảng mới.
+  getCustomChar(code) {
+    const base = (code & 0x07) * 8;
+    return Array.from(this.cgram.slice(base, base + 8));
+  }
+  // Mỗi ô màn hình: { ch, custom } — custom là mảng 8 hàng (5 bit) khi mã
+  // DDRAM < 0x10 (HD44780: mã 0-7 và 8-15 đều trỏ tới cùng ký tự CGRAM 0-7),
+  // ngược lại null. getLines() giữ nguyên (mã 0-7 vẫn là ' ') để test cũ không đổi.
+  getDisplayCells() {
+    const cell = (b) => {
+      const ch = (b >= 32 && b < 127) ? String.fromCharCode(b) : ' ';
+      return { ch, custom: b < 0x10 ? this.getCustomChar(b) : null };
+    };
+    const line = (base) => { const out = []; for (let i = 0; i < 16; i++) out.push(cell(this.ddram[base + i])); return out; };
+    return [line(0), line(0x40)];
   }
   getLines() {
     const dec = (b) => (b >= 32 && b < 127 ? String.fromCharCode(b) : ' ');
@@ -362,7 +389,12 @@ export function assemble(source) {
         const tailC = clean.slice(clean.split(/\s+/)[0].length).trim();
         const v = parseNumberToken(tailC, symbols, radix, pc);
         if (v === null || v === undefined) errors.push({ line: lineNo, message: `CBLOCK không hiểu "${tailC}"` });
-        else cblockAddr = v & 0xff;
+        // RAM là 9-bit (0x000-0x1FF, 4 bank): KHÔNG cắt còn 8-bit.
+        // Lỗi cũ: "v & 0xff" biến CBLOCK 0x110 (bank 2) thành 0x10
+        // (bank 0), làm biến bank 2/3 chồng lên biến tạm __C_T0.. và
+        // thanh ghi SFR, chương trình kẹt/currupt khi có 2 mảng cục bộ
+        // lớn (text[] + title[]) đẩy biến sang bank 2.
+        else cblockAddr = v & 0x1ff;
         lineInfo.push({ lineNo, directive: 'CBLOCK' }); continue;
       }
       if (firstTok === 'ENDC') {
