@@ -15,7 +15,7 @@
 import {
   DEFAULT_SIZE, legsFor, stripKey, parseHole, parsePsuPost, psuVolts,
   benchToNetlist, normalizeWireEnd, meterMode,
-} from './bench-model.js?v=20261125al';
+} from './bench-model.js?v=20261125av';
 import { resolvePeripherals, ledStates, PIC_PINS } from './wiring.js?v=20261125r';
 
 export const LED_FORWARD_VOLTS = 2.0;  // sụt áp thuận LED khi sáng
@@ -391,6 +391,46 @@ export function meterReadings(state, cpu, pressedIds = []) {
     }
   }
   return { voltmeters, ammeters };
+}
+
+// ---------------------------------------------------------------------------
+// Điện áp 2 kênh của mọi đồng hồ hiện sóng trên bàn. Cùng mẫu meterReadings
+// (chế độ V): CH1 = V(chân CH1) − V(chân GND), CH2 = V(chân CH2) −
+// V(chân GND). Trả [{id, ch1, ch2}] (mỗi kênh là số volt hoặc null).
+// - Chân GND floating (null) -> cả 2 kênh null (không có mốc đo).
+// - Chân kênh floating -> kênh đó null, kênh còn lại vẫn đọc được.
+// - 2 chân cùng 1 net -> hiệu 0V (kể cả net đó floating, vì 2 đầu đo là
+//   cùng 1 điểm). Chân rơi ngoài board (không có node) -> kênh đó null.
+// pressedIds: id các nút đang nhấn giữ (nút nhấn = công tắc đóng).
+// ---------------------------------------------------------------------------
+export const SCOPE_MAX_SAMPLES = 240; // bộ nhớ vòng: 240 mẫu × 50ms = 12 giây
+// Đẩy 1 mẫu [ch1, ch2] vào bộ nhớ vòng, cắt bớt đầu mảng khi vượt giới
+// hạn (mẫu mới nhất luôn ở cuối). Hàm thuần để test được ở Node.
+export function pushScopeSample(buf, sample) {
+  buf.push(sample);
+  if (buf.length > SCOPE_MAX_SAMPLES) buf.splice(0, buf.length - SCOPE_MAX_SAMPLES);
+  return buf;
+}
+export function scopeVoltages(state, cpu, pressedIds = []) {
+  const { nodeVoltage, nets } = solveCircuit(state, cpu, pressedIds);
+  const out = [];
+  for (const comp of state.components) {
+    if (comp.type !== 'oscilloscope') continue;
+    const nG = nets.nodeOfTerm(comp.id, 'GND');
+    const vG = (nG === null || nG === undefined) ? null : nodeVoltage.get(nG);
+    const gndV = (vG === null || vG === undefined) ? null : vG;
+    const readCh = (term) => {
+      if (gndV === null) return null; // GND floating: không có mốc đo
+      const n = nets.nodeOfTerm(comp.id, term);
+      if (!n) return null; // chân rơi ngoài board
+      if (n === nG) return 0; // 2 chân cùng 1 net
+      const v = nodeVoltage.get(n);
+      if (v === null || v === undefined) return null; // kênh floating
+      return v - gndV;
+    };
+    out.push({ id: comp.id, ch1: readCh('CH1'), ch2: readCh('CH2') });
+  }
+  return out;
 }
 
 

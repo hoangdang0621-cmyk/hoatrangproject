@@ -331,6 +331,11 @@ export const LEG_LAYOUTS = {
   // Mode 'A' (đo dòng): 0Ω, nối 2 strip như dây (xem buildBenchNets),
   // dòng đo từ P sang N. Mode nằm trong props.mode ('V' mặc định).
   multimeter: [{ term: 'P', dc: 0, dr: 0 }, { term: 'N', dc: 4, dr: 0 }],
+  // Đồng hồ hiện sóng (oscilloscope) 2 kênh: CH1/CH2 đo áp so với GND,
+  // cách nhau 2 cột (span 4 cột như multimeter). Trở kháng vô cùng như
+  // multimeter chế độ V: chỉ đọc điện áp, không ảnh hưởng mạch (không
+  // thêm terminal vào netlist CPU, xem buildBenchNets).
+  oscilloscope: [{ term: 'CH1', dc: 0, dr: 0 }, { term: 'CH2', dc: 2, dr: 0 }, { term: 'GND', dc: 4, dr: 0 }],
 };
 
 // Chế độ của đồng hồ đo: 'A' (đo dòng) hoặc 'V' (đo áp, mặc định khi
@@ -534,6 +539,9 @@ export function buildBenchNets(state, pressedIds = []) {
       continue;
     }
     if (comp.type === 'multimeter') continue;
+    // Đồng hồ hiện sóng cũng là quan sát thụ động (trở kháng vô cùng):
+    // không thêm terminal vào netlist (như multimeter chế độ V).
+    if (comp.type === 'oscilloscope') continue;
     for (const leg of legs) {
       const key = leg.hole ? stripKey(leg.hole, size) : null;
       if (!key) continue;
@@ -666,7 +674,7 @@ export function normalizeWireEnd(state, e) {
   return e;
 }
 
-const KIND_LABEL = { led: 'LED', button: 'Nút', pot: 'Chiết áp', lcd: 'LCD', buzzer: 'Còi', multimeter: 'Đồng hồ đo' };
+const KIND_LABEL = { led: 'LED', button: 'Nút', pot: 'Chiết áp', lcd: 'LCD', buzzer: 'Còi', multimeter: 'Đồng hồ đo', oscilloscope: 'Đồng hồ hiện sóng' };
 export function compLabel(comp) {
   const n = comp.id.replace(/^[A-Z]+/, '');
   if (comp.type === 'pic') return 'PIC16F877A';
@@ -679,11 +687,12 @@ export function benchToNetlist(state, pressedIds = []) {
   const { groups, termRoot, resistorRoots, find } = buildBenchNets(state, pressedIds);
   const components = [];
   for (const comp of state.components) {
-    // Đồng hồ đo không phải ngoại vi cho CPU nên không đưa vào netlist
-    // (tránh componentTerminals trong wiring.js thiếu định nghĩa cho
-    // loại này). Đồng hồ ở chế độ A vẫn nối mạch qua buildBenchNets
-    // (nối 2 strip như dây); chế độ V không nối gì.
-    if (comp.type === 'pic' || comp.type === 'psu' || comp.type === 'resistor' || comp.type === 'multimeter') continue;
+    // Đồng hồ đo và đồng hồ hiện sóng không phải ngoại vi cho CPU nên
+    // không đưa vào netlist (tránh componentTerminals trong wiring.js
+    // thiếu định nghĩa cho loại này). Đồng hồ đo ở chế độ A vẫn nối mạch
+    // qua buildBenchNets (nối 2 strip như dây); chế độ V và hiện sóng
+    // không nối gì.
+    if (comp.type === 'pic' || comp.type === 'psu' || comp.type === 'resistor' || comp.type === 'multimeter' || comp.type === 'oscilloscope') continue;
     const c = {
       id: comp.id, kind: comp.type, label: compLabel(comp),
       x: 0, y: 0, fixed: !!comp.fixed,
@@ -726,7 +735,7 @@ export function benchToNetlist(state, pressedIds = []) {
 // ---------------------------------------------------------------------------
 // Id linh kiện mới (khớp mẫu wiring.js: LED0, BTN0, POT0, LCD0, BUZ0, R0).
 // ---------------------------------------------------------------------------
-const ID_PREFIX = { led: 'LED', resistor: 'R', button: 'BTN', pot: 'POT', lcd: 'LCD', buzzer: 'BUZ', psu: 'PSU', multimeter: 'MM' };
+const ID_PREFIX = { led: 'LED', resistor: 'R', button: 'BTN', pot: 'POT', lcd: 'LCD', buzzer: 'BUZ', psu: 'PSU', multimeter: 'MM', oscilloscope: 'OSC' };
 export function nextComponentId(state, type) {
   const pre = ID_PREFIX[type] || 'C';
   let n = -1;

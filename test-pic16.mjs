@@ -5,7 +5,7 @@ import { assemble, createCPU, parseIntelHex, exportHex, disassemble, ProgramRunn
 import { defaultNetlist, resolvePeripherals, checkWiring, ledStates, buzzerStates, applyButtonToCpu, applyPotToCpu, PIC_PINS } from './public/wiring.js';
 import { PITCH, SEGMENT_GAP_MM, rowZ, HOLE_RADIUS, HOLE_HEIGHT, HOLE_TOP_ABOVE_BOARD, holeCenterY, depthPrecisionAt, MAX_CAMERA_DISTANCE, SEGMENT_LINE_WIDTH_MM, segmentBoundaries, allHoles, stripKey, parseHole, holePos, holeId, rowLabel, rowIndexFromLabel, migrateOldHoleId, picLegs, picLegsForAnchor, picAnchor, legsFor, canPlace, buildBenchNets, benchToNetlist, defaultBenchState, sanitizeState, boardSize, picCol, picRows, picBodyDepth, picBodyDepthForRows, bodyDepth, pruneStateForSize, validateWireEnd, retargetWireEnd, togglePlacement, normalizeSize, holeCount, sizeLabel, sameSize, compLabel, nextComponentId, defaultProps, psuVolts, validatePsuVolts, parsePsuPost, psuPostPos, PSU_SCALE, PSU_POST_DX, PSU_POST_Y, PSU_POST_DZ, normalizeWireEnd, clampCamTarget, zoomTowardPoint, panTarget, meterMode } from './public/bench-model.js';
 import { LABS, getLab, buildLabState } from './public/labs.js';
-import { buildSolverNets, solveLinear, solveCircuit, meterReadings, formatVolts, formatAmps, formatCurrentDirection, LED_FORWARD_VOLTS, LED_SERIES_OHMS, PIC_OUTPUT_VOLTS } from './public/circuit-solver.js';
+import { buildSolverNets, solveLinear, solveCircuit, meterReadings, scopeVoltages, pushScopeSample, SCOPE_MAX_SAMPLES, formatVolts, formatAmps, formatCurrentDirection, LED_FORWARD_VOLTS, LED_SERIES_OHMS, PIC_OUTPUT_VOLTS } from './public/circuit-solver.js';
 import { compileC, C_VERSION } from './public/c-compiler.js';
 
 // Fixture C thật của Điệp (khôi phục từ chat, lưu bền trong repo thay vì
@@ -4409,6 +4409,133 @@ void main(){
       t.r.ok && afRd(t.cpu, t.sym, 'l1') === 11 && afRd(t.cpu, t.sym, 'l2') === 5,
       t.r.ok ? `l1=${afRd(t.cpu, t.sym, 'l1')} l2=${afRd(t.cpu, t.sym, 'l2')}` : '');
   }
+}
+
+// Nhóm (ag): đồng hồ hiện sóng 2 kênh (oscilloscope) — scopeVoltages
+// (circuit-solver.js) + bộ nhớ vòng pushScopeSample. Điện áp kỳ vọng tính
+// theo mô hình solver: chân PIC output cao = 5V / thấp = 0V, PSU = 5V,
+// net floating thì điện áp null (không gán 0V bừa).
+{
+  // Bàn Lab 1 + scope neo a50: CH1 -> RB0, CH2 -> RB1, GND -> rail -.
+  // CH1 strip a50-e50 (dây b50->f29), CH2 strip a52-e52 (dây b52->f28),
+  // GND strip a54-e54 (dây b54->B-50). a50 nằm ngoài vùng chip (cột
+  // 22-41) và ngoài vùng R0/LED0 (hàng i) nên đặt được. Lưu ý: lỗ rail
+  // chỉ tới cột 50 (railCols của board 830) nên dây GND phải về B-50,
+  // không về B-54 được (parseHole('B-54') = null).
+  const lab1WithScope = () => {
+    const { state } = buildLabState(LABS[0]);
+    state.components.push({ id: 'OSC0', type: 'oscilloscope', anchor: 'a50', rot: 0, props: {} });
+    state.wires.push({ id: 'T-S1', a: 'b50', b: 'f29', color: '#DC2626' });
+    state.wires.push({ id: 'T-S2', a: 'b52', b: 'f28', color: '#DC2626' });
+    state.wires.push({ id: 'T-S3', a: 'b54', b: 'B-50', color: '#0F172A' });
+    return state;
+  };
+  // TRISB=0 (tất cả PORTB output), PORTB=0 (RB0=RB1=0) — như helper
+  // setRB0 ở nhóm (v), nhưng đặt cả 2 chân về 0 để đo CH2.
+  const setPortsB0 = (cpu) => {
+    cpu.writeFile(0x03, 0x20); cpu.writeFile(0x06, 0x00);
+    cpu.writeFile(0x03, 0x00); cpu.writeFile(0x06, 0x00);
+  };
+  const approx = (v, target, tol) => typeof v === 'number' && Number.isFinite(v) && Math.abs(v - target) <= tol;
+
+  // (ag-a) Scope trên Lab 1 chạy code thật: CH1 theo RB0 (5V khi RB0=1,
+  // 0V khi RB0=0), CH2 theo RB1 luôn 0V (TRISB=0, RB1 không bật).
+  check('(ag-a) scope Lab 1 chạy code thật: CH1 ~5V khi RB0=1, ~0V khi RB0=0, CH2 luôn 0V',
+    (() => {
+      const state = lab1WithScope();
+      const mapping = resolvePeripherals(benchToNetlist(state));
+      const cpu = createCPU();
+      cpu.setWiring(mapping);
+      const r = compileC(LABS[0].code);
+      if (!r.ok || !r.program) return false;
+      cpu.loadProgram(r.program);
+      // Chờ tới khi RB0 lên 1 (đầu pha ON), rồi đọc scope. Đọc PORTB
+      // bằng readPort(1) (pinLevel nhận chỉ số cổng dạng số, không phải
+      // chữ 'B' — dùng chữ thì luôn đọc 0). Chạy nóng 10k chu kỳ trước
+      // khi chờ: lúc reset PORTB đọc 0xFF (tất cả input đọc cao) nên
+      // RB0 "đọc" là 1 ngay từ chu kỳ 0 dù code chưa chạy; chạy nóng
+      // qua đoạn khởi động thì TRISB=0 và RB0=1 là thật (pha ON dài
+      // 500k chu kỳ nên 10k chu kỳ chạy nóng không bỏ lỡ pha ON).
+      runUntil(cpu, cpu.cycles + 10000);
+      let guard = 0;
+      while (((cpu.readPort(1) & 1) !== 1) && guard++ < 50) runUntil(cpu, cpu.cycles + 100000);
+      if ((cpu.readPort(1) & 1) !== 1) return false;
+      const on = scopeVoltages(state, cpu)[0];
+      // Chờ tới khi RB0 xuống 0 (pha OFF, ~2M chu kỳ delay), rồi đọc scope.
+      guard = 0;
+      while (((cpu.readPort(1) & 1) !== 0) && guard++ < 50) runUntil(cpu, cpu.cycles + 100000);
+      if ((cpu.readPort(1) & 1) !== 0) return false;
+      const off = scopeVoltages(state, cpu)[0];
+      return on && approx(on.ch1, 5, 0.05) && approx(on.ch2, 0, 0.05)
+        && off && approx(off.ch1, 0, 0.05) && approx(off.ch2, 0, 0.05);
+    })(), '');
+  // (ag-b) GND không nối (floating) -> cả 2 kênh null; CH1 không nối ->
+  // CH1 null, CH2 vẫn đọc được (RB1 output 0V).
+  check('(ag-b) GND floating (không nối dây T-S3) -> cả 2 kênh null',
+    (() => {
+      const state = lab1WithScope();
+      state.wires = state.wires.filter((w) => w.id !== 'T-S3');
+      const cpu = createCPU();
+      cpu.setWiring(resolvePeripherals(benchToNetlist(state)));
+      setPortsB0(cpu);
+      const r = scopeVoltages(state, cpu)[0];
+      return r && r.ch1 === null && r.ch2 === null;
+    })(), '');
+  check('(ag-b) CH1 floating (không nối dây T-S1) -> CH1 null, CH2 vẫn 0V',
+    (() => {
+      const state = lab1WithScope();
+      state.wires = state.wires.filter((w) => w.id !== 'T-S1');
+      const cpu = createCPU();
+      cpu.setWiring(resolvePeripherals(benchToNetlist(state)));
+      setPortsB0(cpu);
+      const r = scopeVoltages(state, cpu)[0];
+      return r && r.ch1 === null && r.ch2 === 0;
+    })(), '');
+  // (ag-c) CH1 và GND cùng 1 net (cả 2 về RAIL+) -> hiệu 0V; CH2 không
+  // nối -> null.
+  check('(ag-c) CH1 và GND cùng 1 net (cả 2 về RAIL+) -> CH1 = 0V; CH2 không nối -> null',
+    (() => {
+      const st = defaultBenchState(830);
+      st.components.push({ id: 'OSC0', type: 'oscilloscope', anchor: 'a10', rot: 0, props: {} });
+      st.wires.push({ id: 'T-C1', a: 'b10', b: 'T+10', color: '#DC2626' });
+      st.wires.push({ id: 'T-C2', a: 'b14', b: 'T+14', color: '#DC2626' });
+      const r = scopeVoltages(st, createCPU())[0];
+      return r && r.ch1 === 0 && r.ch2 === null;
+    })(), '');
+  // (ag-d) Bộ nhớ vòng: đẩy 300 mẫu (mô phỏng 300 nhịp sampleScopes) thì
+  // buffer giữ đúng 240 mẫu (SCOPE_MAX_SAMPLES), mẫu mới nhất ở cuối,
+  // mẫu cũ nhất là mẫu 61 (300-240+1).
+  check('(ag-d) bộ nhớ vòng: 300 mẫu -> giữ 240 mẫu, mới nhất ở cuối, cũ nhất là mẫu 61',
+    (() => {
+      const buf = [];
+      for (let i = 1; i <= 300; i++) pushScopeSample(buf, [i, -i]);
+      return SCOPE_MAX_SAMPLES === 240 && buf.length === 240
+        && buf[0][0] === 61 && buf[0][1] === -61
+        && buf[239][0] === 300 && buf[239][1] === -300;
+    })(), '');
+  // (ag-e) Scope: chân CH1=a10, CH2=a12, GND=a14; đặt được, id OSC0,
+  // nhãn "Đồng hồ hiện sóng 0", không props đặc biệt ({}).
+  check('(ag-e) scope chân CH1=a10, CH2=a12, GND=a14; đặt được, id OSC0, nhãn "Đồng hồ hiện sóng 0"',
+    JSON.stringify(legsFor({ type: 'oscilloscope', anchor: 'a10', rot: 0 }, 830)) === JSON.stringify([{ term: 'CH1', hole: 'a10' }, { term: 'CH2', hole: 'a12' }, { term: 'GND', hole: 'a14' }])
+    && canPlace(defaultBenchState(830), 'oscilloscope', 'a10').ok
+    && nextComponentId(defaultBenchState(830), 'oscilloscope') === 'OSC0'
+    && compLabel({ id: 'OSC0', type: 'oscilloscope' }) === 'Đồng hồ hiện sóng 0'
+    && JSON.stringify(defaultProps('oscilloscope')) === '{}', '');
+  // (ag-e2) Scope không nối strip nào trong netlist bench (2 LED ở 2
+  // strip vẫn tách net dù chân scope cùng strip với chúng) và không vào
+  // netlist CPU (wiring.js không có định nghĩa loại này).
+  check('(ag-e2) scope không nối strip (2 LED vẫn tách net) và không vào netlist CPU',
+    (() => {
+      const st = defaultBenchState(830);
+      st.components.push({ id: 'OSC0', type: 'oscilloscope', anchor: 'a10', rot: 0, props: {} });
+      st.components.push({ id: 'LED0', type: 'led', anchor: 'c10', rot: 0, props: { color: '#DC2626' } });
+      st.components.push({ id: 'LED1', type: 'led', anchor: 'c14', rot: 0, props: { color: '#DC2626' } });
+      const n = buildBenchNets(st);
+      const nl = benchToNetlist(st);
+      return n.termRoot.get('LED0.A') !== n.termRoot.get('LED1.A')
+        && !n.termRoot.has('OSC0.CH1')
+        && !nl.components.some((c) => c.id === 'OSC0');
+    })(), '');
 }
 
 console.log(`\nKết quả: ${pass} pass, ${fail} fail`);

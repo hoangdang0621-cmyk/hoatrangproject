@@ -8,8 +8,8 @@ import {
   resolvePeripherals, ledStates, buzzerStates,
   applyButtonToCpu, applyPotToCpu,
 } from './wiring.js?v=20261125r';
-import { defaultBenchState, benchToNetlist } from './bench-model.js?v=20261125al';
-import { meterReadings } from './circuit-solver.js?v=20261125al';
+import { defaultBenchState, benchToNetlist } from './bench-model.js?v=20261125av';
+import { meterReadings, scopeVoltages, pushScopeSample, SCOPE_MAX_SAMPLES } from './circuit-solver.js?v=20261125av';
 import { compileC } from './c-compiler.js?v=20261125ar';
 
 const cpu = createCPU();
@@ -59,6 +59,9 @@ setInterval(() => {
   lastTick = now;
   const cycles = cyclesForElapsedMs(elapsedMs, cpu.clockHz);
   if (cycles > 0) runner.tick(cycles);
+  // Lấy mẫu sóng cho đồng hồ hiện sóng (cả khi CPU pause: tín hiệu tĩnh
+  // thì sóng phẳng, đúng hành vi).
+  sampleScopes();
 }, 50);
 
 // --- Cầu nối cho bàn thực hành 3D (bench.js) ---
@@ -69,6 +72,27 @@ setInterval(() => {
 // gọi solver được; bench.js truyền 2 tham số này ở syncToCpu().
 let benchStateForMeters = null;
 let pressedIdsForMeters = [];
+// Bộ nhớ vòng của đồng hồ hiện sóng: id scope -> mảng mẫu [ch1, ch2]
+// (mỗi mẫu là [volt CH1, volt CH2], null = kênh floating). Lấy mẫu mỗi
+// nhịp 50ms (20 mẫu/giây), giữ tối đa SCOPE_MAX_SAMPLES mẫu = 12 giây.
+// SCOPE_MAX_SAMPLES lấy từ circuit-solver.js (1 chỗ duy nhất) để hàm
+// pushScopeSample dùng chung và test được ở Node.
+const scopeBuffers = new Map();
+function sampleScopes() {
+  if (!benchStateForMeters) return;
+  const scopes = benchStateForMeters.components.filter((c) => c.type === 'oscilloscope');
+  if (!scopes.length) { if (scopeBuffers.size) scopeBuffers.clear(); return; }
+  for (const id of [...scopeBuffers.keys()]) {
+    if (!scopes.some((c) => c.id === id)) scopeBuffers.delete(id);
+  }
+  let readings;
+  try { readings = scopeVoltages(benchStateForMeters, cpu, pressedIdsForMeters); } catch { return; }
+  for (const r of readings) {
+    const buf = scopeBuffers.get(r.id) || [];
+    pushScopeSample(buf, [r.ch1, r.ch2]);
+    scopeBuffers.set(r.id, buf);
+  }
+}
 window.HoaTrangBenchBridge = {
   applyBenchNetlist(nl, st, pressed) {
     mapping = resolvePeripherals(nl);
@@ -83,6 +107,10 @@ window.HoaTrangBenchBridge = {
     try { return meterReadings(benchStateForMeters, cpu, pressedIdsForMeters); }
     catch { return { voltmeters: [], ammeters: [] }; }
   },
+  // Đồng hồ hiện sóng: toàn bộ bộ nhớ vòng (để bench.js vẽ sóng), và xóa
+  // sóng 1 scope (nút "Xóa sóng" trong Inspector).
+  getScopeData: () => [...scopeBuffers.entries()].map(([id, samples]) => ({ id, samples })),
+  clearScope: (id) => { scopeBuffers.delete(id); },
   getLcd: () => ({ lines: cpu.lcd.getLines(), cells: cpu.lcd.getDisplayCells(), complete: !mapping.lcd.id || mapping.lcd.complete }),
   getPin: (port, bit) => ({ dir: cpu.pinDirection(port, bit), level: cpu.pinLevel(port, bit) }),
   getTris: () => cpu.tris,
