@@ -254,6 +254,8 @@ void main() {
     if (compTabEl) compTabEl.hidden = tab !== 'components';
     if (codeTabEl) codeTabEl.hidden = tab !== 'code';
     if (labsTabEl) labsTabEl.hidden = tab !== 'labs';
+    // Đổi tab thì Inspector đang mở (nếu có) tự đóng.
+    if (selected) select(null);
     // Chuyển tab thì panel về 20%; chỉ bấm vào phần code mới to lên 40%.
     setCodeWide(false);
     if (tab === 'code') initCodeTab();
@@ -2081,7 +2083,12 @@ void main() {
         if (typeof b.getLcd === 'function') {
           const lcd = b.getLcd();
           for (const [, t] of lcdTexs) {
-            const key = (lcd.complete ? '1' : '0') + '|' + lcd.lines[0] + '|' + lcd.lines[1];
+            // Key gồm cả pattern CGRAM: 2 trạng thái có cùng chuỗi lines
+            // nhưng pattern khác nhau (vd Đ vs ệ) vẫn phải vẽ lại.
+            const cellsKey = lcd.cells
+              ? lcd.cells.map((ln) => ln.map((c) => (c.custom ? '#' + c.custom.map((v) => v.toString(16)).join('') : c.ch)).join('')).join('|')
+              : lcd.lines[0] + '|' + lcd.lines[1];
+            const key = (lcd.complete ? '1' : '0') + '|' + cellsKey;
             if (key === t.last) continue;
             t.last = key;
             const ctx = t.ctx;
@@ -2090,8 +2097,13 @@ void main() {
             ctx.fillStyle = '#7CFFB2';
             ctx.font = '28px "Fira Code", monospace';
             ctx.textBaseline = 'middle';
-            ctx.fillText(lcd.complete ? lcd.lines[0] : 'CHUA NOI DU DAY', 8, 18);
-            ctx.fillText(lcd.complete ? lcd.lines[1] : '', 8, 48);
+            if (lcd.complete && lcd.cells) {
+              drawLcdLine(ctx, lcd.cells[0], 18);
+              drawLcdLine(ctx, lcd.cells[1], 48);
+            } else {
+              ctx.fillText(lcd.complete ? lcd.lines[0] : 'CHUA NOI DU DAY', 8, 18);
+              ctx.fillText(lcd.complete ? lcd.lines[1] : '', 8, 48);
+            }
             t.tex.needsUpdate = true;
           }
         }
@@ -2221,12 +2233,6 @@ void main() {
   // --- Trang chỉ còn bàn: áp netlist + tải scene ngay khi mở trang ---
   syncToCpu();
   ensureScene();
-
-  // --- Thanh gợi ý dưới bàn: bấm × để ẩn ---
-  $('benchHintClose')?.addEventListener('click', () => {
-    const hint = $('benchHint');
-    if (hint) hint.hidden = true;
-  });
 
   // --- Khởi động (chưa cần Three.js cho tới khi mở tab) ---
   renderPalette();

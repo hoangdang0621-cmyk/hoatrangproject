@@ -198,19 +198,6 @@ button { cursor: pointer; }
   background: #F8FAFC; color: var(--color-destructive); font-weight: 600; text-align: center; padding: 24px;
 }
 .bench-error[hidden] { display: none; }
-/* Thanh gợi ý nhỏ dưới cùng của bàn (kiểu thanh hint của ohmimic) */
-.bench-hint {
-  position: absolute; left: 50%; bottom: 12px; transform: translateX(-50%);
-  z-index: 6; display: flex; align-items: center; gap: 10px; max-width: calc(100% - 24px);
-  background: rgba(15, 23, 42, 0.88); color: #FFFFFF;
-  font-size: 0.85rem; font-weight: 500; text-align: center;
-  padding: 8px 14px; border-radius: 999px; box-shadow: var(--shadow-md);
-}
-.bench-hint[hidden] { display: none; }
-.bench-hint-close {
-  border: none; background: transparent; color: #FFFFFF;
-  font-size: 1.1rem; line-height: 1; cursor: pointer; padding: 2px 4px; flex: none;
-}
 /* Inspector: panel trượt từ phải sang */
 .bench-inspector {
   position: absolute; top: 0; right: 0; bottom: 0; z-index: 7; width: 290px;

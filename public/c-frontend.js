@@ -137,7 +137,7 @@ const SFR_NAMES = new Set([
 ]);
 
 // Hàm builtin do codegen xử lý riêng (không cần định nghĩa trong code C).
-const BUILTIN_FUNCS = new Set(['__delay_ms', '__delay_us']);
+const BUILTIN_FUNCS = new Set(['__delay_ms', '__delay_us', 'strlen', 'memset', 'memcpy', 'strcpy', 'strcat', 'strcmp']);
 
 const DEFAULT_XTAL_FREQ = 4000000;
 
@@ -751,8 +751,18 @@ export function tokenizeC(code) {
     errors.push({ line, message: `ký tự lạ "${ch}"` });
     i++;
   }
-  tokens.push({ type: 'eof', value: '', line });
-  return { tokens, errors };
+  // Nối chuỗi kề nhau (C chuẩn, translation phase 6): "a" "b" -> "ab".
+  // Lexer đã bỏ khoảng trắng/comment nên 2 token 'str' liên tiếp trong
+  // dòng token chính là 2 chuỗi kề nhau trong code gốc (kể cả khi chúng
+  // ở 2 dòng khác nhau hoặc có comment xen giữa). Giữ line của chuỗi đầu.
+  const merged = [];
+  for (const tk of tokens) {
+    const prev = merged[merged.length - 1];
+    if (tk.type === 'str' && prev && prev.type === 'str') prev.value += tk.value;
+    else merged.push(tk);
+  }
+  merged.push({ type: 'eof', value: '', line });
+  return { tokens: merged, errors };
 }
 
 // Tính giá trị biểu thức hằng từ node AST (dùng cho kích thước mảng và
@@ -797,6 +807,15 @@ function evalConstExpr(node) {
         case '||': return (a || b) ? 1 : 0;
         default: return null;
       }
+    }
+    case 'sizeof': {
+      // Chỉ tính được sizeof(kiểu) ở đây (không có thông tin biến/mảng).
+      if (node.sizeofType) {
+        if (node.pointer) return 2;
+        const w = { void: 1, char: 1, uchar: 1, int: 2, uint: 2 }[node.sizeofType];
+        return w !== undefined ? w : null;
+      }
+      return null;
     }
     default: return null;
   }
@@ -1270,6 +1289,22 @@ class Parser {
 
   parseUnary() {
     const t = this.peek();
+    // sizeof: toán tử một ngôi, trả kích thước theo byte (hằng số lúc
+    // biên dịch). Dạng: sizeof(kiểu) | sizeof expr | sizeof(expr).
+    // Nhận ra nhờ tên 'sizeof' (từ khoá C, lexer vẫn để dạng ident).
+    // Toán hạng kiểu: token sau '(' là từ khoá kiểu; ngược lại là biểu thức.
+    if (t.type === 'ident' && t.value === 'sizeof') {
+      this.next(); // sizeof
+      if (this.checkOp('(') && this.isTypeStart(this.peek(1))) {
+        this.next(); // (
+        const sizeofType = this.parseType();
+        const pointer = this.parsePointerStars();
+        this.expectOp(')', 'thiếu dấu )');
+        return { kind: 'sizeof', sizeofType, pointer: pointer || 0, line: t.line };
+      }
+      const expr = this.parseUnary();
+      return { kind: 'sizeof', expr, line: t.line };
+    }
     if (t.type === 'op'
       && ['-', '!', '~', '++', '--', '*', '&', '+'].includes(t.value)) {
       this.next();
@@ -1585,6 +1620,11 @@ function checkExpr(expr, scopes, errors, funcs) {
         errors.push({ line: expr.line, message: `chưa khai báo hàm ${expr.name}` });
       }
       for (const a of expr.args) checkExpr(a, scopes, errors, funcs);
+      break;
+    case 'sizeof':
+      // Toán hạng sizeof không được tính giá trị lúc chạy, nhưng tên biến
+      // trong đó vẫn phải đã khai báo (đúng ngữ nghĩa C).
+      if (expr.expr) checkExpr(expr.expr, scopes, errors, funcs);
       break;
     case 'index':
       checkExpr(expr.base, scopes, errors, funcs);

@@ -22,11 +22,11 @@
 // Lỗi ở tầng assemble (lẽ ra không xảy ra vì codegen chỉ sinh asm hợp lệ)
 // được map ngược về dòng C gần nhất qua g.asmLineToCLine.
 
-import { parseC } from './c-frontend.js?v=20261125ap';
-import { generateC } from './c-codegen.js?v=20261125aq';
+import { parseC } from './c-frontend.js?v=20261125ar';
+import { generateC } from './c-codegen.js?v=20261125ar';
 import { assemble } from './pic16.js?v=20261125aq';
 
-export const C_VERSION = '20261125aq';
+export const C_VERSION = '20261125ar';
 
 export function compileC(source) {
   // Bước 1: tiền xử lý + lexer + parser -> AST (lỗi: dòng C gốc).

@@ -3491,7 +3491,7 @@ function measureOnHalf(cpu, isOn) {
 
 // (aa-a) Lab 1 C: compile ok, LED0 SÁNG rồi TẮT, nửa chu kỳ ~500000 (±20%)
 {
-  check('(aa-a) C_VERSION = 20261125aq', C_VERSION === '20261125aq', String(C_VERSION));
+  check('(aa-a) C_VERSION = 20261125ar', C_VERSION === '20261125ar', String(C_VERSION));
   const { r, cpu, mapping } = runLabC(0, LAB1_C, 100000);
   const led0 = () => ledStates(cpu, mapping).find((s) => s.id === 'LED0').on;
   check('(aa-a) Lab 1 C: compileC ok, 0 lỗi, có program',
@@ -4227,6 +4227,183 @@ void main(void)
       cpu.lcd.getLines()[0] === '    VIET NAM    ', JSON.stringify(cpu.lcd.getLines()[0]));
   } else {
     check('(ae-c) code 2 hàng của Điệp (bỏ qua: không đọc được /tmp/diep-xc8-v2-fixed.c)', false, 'không đọc được file');
+  }
+}
+
+// (af) C chuẩn kiểu XC8 (v=20261125ar): nối chuỗi kề nhau, strlen,
+// truyền chuỗi literal vào hàm, sizeof, + strcpy/strcat/strcmp/memset/
+// memcpy. Mục tiêu Điệp chốt: sinh viên paste code XC8 vào là chạy.
+{
+  // Đọc địa chỉ symbol từ CBLOCK trong asm sinh ra (đỡ hardcode).
+  const afAddrs = (asmText) => {
+    const map = {};
+    let base = null;
+    for (const ln of asmText.split('\n')) {
+      const t = ln.trim();
+      const mC = t.match(/^CBLOCK\s+(0x[0-9A-Fa-f]+|\d+)$/i);
+      if (mC) { base = parseInt(mC[1], mC[1].toLowerCase().startsWith('0x') ? 16 : 10); continue; }
+      if (/^ENDC$/i.test(t)) { base = null; continue; }
+      if (base !== null) {
+        const mS = t.match(/^([A-Za-z_][A-Za-z0-9_]*)(?::(\d+))?$/);
+        if (mS) { map[mS[1]] = base; base += mS[2] ? parseInt(mS[2], 10) : 1; }
+      }
+    }
+    return map;
+  };
+  const afRun = (src, steps = 2000000) => {
+    const r = compileC(src);
+    const cpu = createCPU();
+    if (r.ok && r.program) { cpu.loadProgram(r.program); for (let s = 0; s < steps; s++) cpu.step(); }
+    return { r, cpu, sym: r.ok ? afAddrs(r.asm) : {} };
+  };
+  const afRd = (cpu, sym, name) => cpu.ram[sym[name]];
+  const afRd16 = (cpu, sym, name) => {
+    const v = cpu.ram[sym[name]] | (cpu.ram[sym[name] + 1] << 8);
+    return v >= 0x8000 ? v - 0x10000 : v;
+  };
+  const afRdStr = (cpu, addr, len) => {
+    let o = '';
+    for (let i = 0; i < len; i++) { const c = cpu.ram[addr + i]; if (c === 0) break; o += String.fromCharCode(c); }
+    return o;
+  };
+
+  // (af-a) Nối chuỗi kề nhau.
+  {
+    const r1 = compileC('void main(){ const char s[] = "ab" "cd"; while(1){} }');
+    check('(af-a) nối 2 literal kề nhau compile ok', r1.ok, JSON.stringify(r1.errors));
+    const r2 = compileC('void main(){ const char s[] =\n"ab"\n"cd"\n"ef"; while(1){} }');
+    check('(af-a) nối 3 literal xuống dòng compile ok', r2.ok, JSON.stringify(r2.errors));
+    const r3 = compileC('void main(){ const char s[] = "ab" /* gop */ "cd"; while(1){} }');
+    check('(af-a) nối chuỗi có comment xen giữa compile ok', r3.ok, JSON.stringify(r3.errors));
+    const t = afRun('#include <xc.h>\nvoid main(){ const char s[] = "ab" "cd" "ef"; while(1){} }');
+    check('(af-a) nội dung mảng nối = "abcdef" (+ byte 0)',
+      t.r.ok && afRdStr(t.cpu, t.sym['__L_main_0'], 7) === 'abcdef' && t.cpu.ram[t.sym['__L_main_0'] + 6] === 0,
+      t.r.ok ? JSON.stringify(afRdStr(t.cpu, t.sym['__L_main_0'], 7)) : JSON.stringify(t.r.errors));
+    const r4 = compileC('void f(const char *s){ while(*s){ s++; } }\nvoid main(){ f("ab" "cd"); while(1){} }');
+    check('(af-a) nối chuỗi trong tham số hàm compile ok', r4.ok, JSON.stringify(r4.errors));
+  }
+
+  // (af-b) strlen: literal, mảng, con trỏ giữa chuỗi, chuỗi rỗng.
+  {
+    const t = afRun('#include <xc.h>\nunsigned char v1, v2, v3, v4;\nvoid main(){ const char s[] = "Hello"; v1 = strlen("Hello"); v2 = strlen(s); v3 = strlen(s+2); char e[] = ""; v4 = strlen(e); while(1){} }');
+    check('(af-b) strlen chạy đúng: literal=5, mảng=5, p+2=3, rỗng=0',
+      t.r.ok && afRd(t.cpu, t.sym, 'v1') === 5 && afRd(t.cpu, t.sym, 'v2') === 5
+      && afRd(t.cpu, t.sym, 'v3') === 3 && afRd(t.cpu, t.sym, 'v4') === 0,
+      t.r.ok ? `v1=${afRd(t.cpu, t.sym, 'v1')} v2=${afRd(t.cpu, t.sym, 'v2')} v3=${afRd(t.cpu, t.sym, 'v3')} v4=${afRd(t.cpu, t.sym, 'v4')}` : JSON.stringify(t.r.errors));
+  }
+
+  // (af-c) Truyền chuỗi literal trực tiếp vào hàm (LCD).
+  {
+    const src = `#include <xc.h>
+#define LCD_RS PORTEbits.RE0
+#define LCD_EN PORTEbits.RE1
+void LCD_Enable(void){ LCD_EN=1; __delay_us(5); LCD_EN=0; __delay_us(50); }
+void LCD_Command(unsigned char c){ LCD_RS=0; PORTD=c; LCD_Enable(); __delay_ms(2); }
+void LCD_Char(unsigned char d){ LCD_RS=1; PORTD=d; LCD_Enable(); }
+void LCD_String(const char *s){ while(*s){ LCD_Char(*s++); } }
+void main(void){ TRISD=0; TRISE=0; ADCON1=0x06; __delay_ms(40); LCD_Command(0x38); LCD_Command(0x0C); LCD_Command(0x01); LCD_Command(0x80); LCD_String("HELLO"); LCD_Command(0xC0); LCD_String("WORLD"); while(1){} }`;
+    const { r, cpu } = runLabC(1, src, 2000000);
+    check('(af-c) LCD_String("HELLO")/("WORLD") compile ok', r.ok, JSON.stringify(r.errors));
+    check('(af-c) hàng 1 = "HELLO", hàng 2 = "WORLD" (2 literal khác nhau không ghi đè)',
+      r.ok && cpu.lcd.getLines()[0] === 'HELLO           ' && cpu.lcd.getLines()[1] === 'WORLD           ',
+      r.ok ? JSON.stringify(cpu.lcd.getLines()) : '');
+  }
+
+  // (af-d) sizeof: kiểu, biến, mảng, con trỏ, trong biểu thức.
+  {
+    const t = afRun('#include <xc.h>\nunsigned char v1, v2, v3, v4, v5, v6;\nunsigned int w1, w2;\nint arr[10];\nchar *p;\nvoid main(){ char s[] = "Hello"; v1 = sizeof(int); v2 = sizeof(char); v3 = sizeof(unsigned char); v4 = sizeof(s); v5 = sizeof(p); v6 = sizeof(s)-1; w1 = sizeof(arr); w2 = sizeof(unsigned char*); while(1){} }');
+    check('(af-d) sizeof đúng: int=2, char=1, uchar=1, char[6]=6, ptr=2, s-1=5, int[10]=20, uchar*=2',
+      t.r.ok && afRd(t.cpu, t.sym, 'v1') === 2 && afRd(t.cpu, t.sym, 'v2') === 1
+      && afRd(t.cpu, t.sym, 'v3') === 1 && afRd(t.cpu, t.sym, 'v4') === 6
+      && afRd(t.cpu, t.sym, 'v5') === 2 && afRd(t.cpu, t.sym, 'v6') === 5
+      && afRd16(t.cpu, t.sym, 'w1') === 20 && afRd16(t.cpu, t.sym, 'w2') === 2,
+      t.r.ok ? `v1=${afRd(t.cpu, t.sym, 'v1')} v2=${afRd(t.cpu, t.sym, 'v2')} v3=${afRd(t.cpu, t.sym, 'v3')} v4=${afRd(t.cpu, t.sym, 'v4')} v5=${afRd(t.cpu, t.sym, 'v5')} v6=${afRd(t.cpu, t.sym, 'v6')} w1=${afRd16(t.cpu, t.sym, 'w1')} w2=${afRd16(t.cpu, t.sym, 'w2')}` : JSON.stringify(t.r.errors));
+    const r2 = compileC('void main(){ char s[] = "Hello"; unsigned char n; n = sizeof(s); while(1){} }');
+    check('(af-d) sizeof(mảng) trong biểu thức compile ok', r2.ok, JSON.stringify(r2.errors));
+  }
+
+  // (af-e) Code gốc của Điệp (/tmp/diep-xc8-v2.c) NGUYÊN VẸN, không sửa.
+  {
+    let diepSrc = null;
+    try { diepSrc = readFileSync('/tmp/diep-xc8-v2.c', 'utf8'); } catch (e) { diepSrc = null; }
+    if (diepSrc) {
+      const r = compileC(diepSrc);
+      check('(af-e) code gốc Điệp compile ok, 0 lỗi (không sửa file)', r.ok, JSON.stringify(r.errors));
+      const { state } = buildLabState(getLab('led-lcd'));
+      const mapping = resolvePeripherals(benchToNetlist(state));
+      const cpu = createCPU();
+      cpu.setWiring(mapping);
+      if (r.ok && r.program) cpu.loadProgram(r.program);
+      const led1 = () => ledStates(cpu, mapping).find((s) => s.id === 'LED1').on;
+      // Chờ qua khởi tạo + ghi tiêu đề (tối đa ~2M chu kỳ).
+      let guard = 0;
+      while (guard++ < 100 && !cpu.lcd.getLines()[0].includes('VIET')) runUntil(cpu, cpu.cycles + 20000);
+      check('(af-e) hàng 1 = "    VIET NAM    " cố định',
+        cpu.lcd.getLines()[0] === '    VIET NAM    ', JSON.stringify(cpu.lcd.getLines()[0]));
+      // Chờ hàng 2 bắt đầu có chữ (cuộn vào từ phải) rồi mới chụp.
+      guard = 0;
+      while (guard++ < 100 && cpu.lcd.getLines()[1].trim().length === 0) runUntil(cpu, cpu.cycles + 20000);
+      // 2 ảnh chụp hàng 2 cách nhau 1 bước cuộn (~1,3M chu kỳ): phải khác
+      // nhau (chứng minh không kẹt trong delay). Đầu chuỗi cuộn chỉ lộ
+      // 1-2 chữ ('c' rồi 'co') nên kiểm tra: phần chữ hiện ra là tiền tố
+      // của "cong hoa xa hoi..." và dài ra theo từng bước (chữ chạy vào).
+      runUntil(cpu, cpu.cycles + 1300000);
+      const snap1 = cpu.lcd.getLines()[1];
+      const ledA = led1();
+      runUntil(cpu, cpu.cycles + 1300000);
+      const snap2 = cpu.lcd.getLines()[1];
+      const ledB = led1();
+      const strip = (s) => s.replace(/^ +/, '');
+      const isPrefix = (s) => 'cong hoa xa hoi chu nghia viet nam'.startsWith(strip(s)) && strip(s).length > 0;
+      check('(af-e) hàng 2 cuộn, không kẹt: 2 ảnh chụp cách 1 bước khác nhau, chữ là tiền tố "cong hoa..." và dài ra',
+        snap1 !== snap2 && isPrefix(snap1) && isPrefix(snap2) && strip(snap2).length > strip(snap1).length,
+        `snap1=${JSON.stringify(snap1)} snap2=${JSON.stringify(snap2)}`);
+      check('(af-e) LED RB1 đổi trạng thái giữa 2 bước cuộn',
+        ledA !== ledB, `ledA=${ledA} ledB=${ledB}`);
+    } else {
+      check('(af-e) code gốc Điệp (bỏ qua: không đọc được /tmp/diep-xc8-v2.c)', false, 'không đọc được file');
+    }
+  }
+
+  // (af-f) 5 hàm chuỗi/bộ nhớ: strcpy, strcat, strcmp, memset, memcpy.
+  {
+    const t = afRun(`#include <xc.h>
+char dst[20];
+char src[10];
+int c1, c2, c3, c4, c5, c6, c7;
+unsigned char l1, l2;
+void main(){
+  strcpy(dst, "Hello");
+  c1 = strcmp(dst, "Hello");
+  c2 = strcmp(dst, "Hellp");
+  c3 = strcmp("Abc", "Abd");
+  c6 = strcmp("Hellp", "Hello");
+  c7 = strcmp("b", "a");
+  strcat(dst, " World");
+  l1 = strlen(dst);
+  memcpy(src, dst, 5);
+  src[5] = 0;
+  memset(dst+6, (char)88, 3);
+  c4 = strcmp(src, "Hello");
+  c5 = strcmp("", "");
+  l2 = strlen(src);
+  while(1){}
+}`);
+    check('(af-f) strcpy+strcat+memset: dst = "Hello XXXld"',
+      t.r.ok && afRdStr(t.cpu, t.sym['dst'], 20) === 'Hello XXXld',
+      t.r.ok ? JSON.stringify(afRdStr(t.cpu, t.sym['dst'], 20)) : JSON.stringify(t.r.errors));
+    check('(af-f) memcpy 5 ký tự: src = "Hello"',
+      t.r.ok && afRdStr(t.cpu, t.sym['src'], 10) === 'Hello',
+      t.r.ok ? JSON.stringify(afRdStr(t.cpu, t.sym['src'], 10)) : '');
+    check('(af-f) strcmp: bằng=0, "Hello"/"Hellp"=-1, "Abc"/"Abd"=-1, ngược=+1, rỗng=0',
+      t.r.ok && afRd16(t.cpu, t.sym, 'c1') === 0 && afRd16(t.cpu, t.sym, 'c2') === -1
+      && afRd16(t.cpu, t.sym, 'c3') === -1 && afRd16(t.cpu, t.sym, 'c6') === 1
+      && afRd16(t.cpu, t.sym, 'c7') === 1 && afRd16(t.cpu, t.sym, 'c4') === 0
+      && afRd16(t.cpu, t.sym, 'c5') === 0,
+      t.r.ok ? `c1=${afRd16(t.cpu, t.sym, 'c1')} c2=${afRd16(t.cpu, t.sym, 'c2')} c3=${afRd16(t.cpu, t.sym, 'c3')} c6=${afRd16(t.cpu, t.sym, 'c6')} c7=${afRd16(t.cpu, t.sym, 'c7')} c4=${afRd16(t.cpu, t.sym, 'c4')} c5=${afRd16(t.cpu, t.sym, 'c5')}` : '');
+    check('(af-f) strlen sau strcat/memcpy: dst=11, src=5',
+      t.r.ok && afRd(t.cpu, t.sym, 'l1') === 11 && afRd(t.cpu, t.sym, 'l2') === 5,
+      t.r.ok ? `l1=${afRd(t.cpu, t.sym, 'l1')} l2=${afRd(t.cpu, t.sym, 'l2')}` : '');
   }
 }
 

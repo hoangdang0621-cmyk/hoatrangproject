@@ -10,7 +10,7 @@ import {
 } from './wiring.js?v=20261125r';
 import { defaultBenchState, benchToNetlist } from './bench-model.js?v=20261125al';
 import { meterReadings } from './circuit-solver.js?v=20261125al';
-import { compileC } from './c-compiler.js?v=20261125aq';
+import { compileC } from './c-compiler.js?v=20261125ar';
 
 const cpu = createCPU();
 cpu.clockHz = 4000000;

@@ -246,6 +246,15 @@ function evalConst(node) {
   if (!node) return null;
   switch (node.kind) {
     case 'num': return Math.trunc(node.value);
+    case 'sizeof': {
+      // Chỉ tính được sizeof(kiểu) ở đây (không có thông tin biến/mảng).
+      if (node.sizeofType) {
+        if (node.pointer) return 2;
+        const w = { void: 1, char: 1, uchar: 1, int: 2, uint: 2 }[node.sizeofType];
+        return w !== undefined ? w : null;
+      }
+      return null;
+    }
     case 'unary': {
       const v = evalConst(node.expr);
       if (v === null) return null;
@@ -313,6 +322,7 @@ class Codegen {
     this.loopStack = [];        // [{breakLabel, continueLabel}]
     this.funcs = new Map();     // tên hàm -> func info
     this.globals = [];          // [{decl, info}]
+    this.strLiterals = new Map(); // chuỗi literal dùng làm giá trị -> {addr, sym}
     this.usedMul = false;
     this.usedDiv = false;
     this.allocBankIdx = 0;      // con trỏ cấp phát biến người dùng
@@ -413,6 +423,17 @@ class Codegen {
       this.walkStmtForAlloc(fn.body, info);
     }
 
+    // Chuỗi literal dùng làm giá trị (vd truyền "abc" vào hàm, gán cho
+    // con trỏ): cấp 1 slot riêng cho mỗi chuỗi khác nhau. Nội dung được
+    // ghi vào slot lúc khởi động (__C_START, xem emitCode). Chuỗi khởi
+    // tạo mảng (char s[] = "abc") KHÔNG vào đây — nó nằm trong slot mảng.
+    const strFound = this.collectStrLiterals();
+    let strIdx = 0;
+    for (const [value, line] of strFound) {
+      const slot = this.allocNamed(`__C_S${strIdx++}`, value.length + 1, line);
+      if (slot) this.strLiterals.set(value, { addr: slot.addr, sym: slot.name });
+    }
+
     // Đồ thị gọi hàm -> phát hiện đệ quy (trực tiếp/gián tiếp).
     this.checkRecursion(funcDefs);
     // case trùng giá trị trong mỗi switch.
@@ -450,8 +471,12 @@ class Codegen {
         return null;
       }
     } else if (d.init && d.init.kind === 'str') {
-      this.err(d.line, 'chuỗi chỉ dùng để khởi tạo mảng char');
-      return null;
+      // Chuỗi literal chỉ khởi tạo được mảng char hoặc con trỏ (con trỏ
+      // nhận địa chỉ vùng nhớ tạm, genVarDeclInit xử lý qua genExpr).
+      if (!d.pointer) {
+        this.err(d.line, 'chuỗi chỉ dùng để khởi tạo mảng char hoặc con trỏ');
+        return null;
+      }
     }
     const total = d.isArray ? elemWidth * count : width;
     const slot = this.allocNamed(d.name, total, d.line);
@@ -517,7 +542,7 @@ class Codegen {
           stmt._info = { name: stmt.name, addr: 0, sym: '__C_T0', width: baseWidth, signed: typeSigned(stmt.type), isArray: !!stmt.isArray, elemWidth: baseWidth, elemSigned: typeSigned(stmt.type), count: 1, isPointer: !!stmt.pointer };
         }
         // Kiểm tra chuỗi / kích thước mảng như biến toàn cục.
-        if (!stmt.isArray && stmt.init && stmt.init.kind === 'str') this.err(stmt.line, 'chuỗi chỉ dùng để khởi tạo mảng char');
+        if (!stmt.isArray && stmt.init && stmt.init.kind === 'str' && !stmt.pointer) this.err(stmt.line, 'chuỗi chỉ dùng để khởi tạo mảng char hoặc con trỏ');
         if (stmt.isArray && stmt.arraySize === null && !(stmt.init && (stmt.init.kind === 'str' || Array.isArray(stmt.init)))) {
           this.err(stmt.line, `mảng ${stmt.name} chưa rõ kích thước`);
         }
@@ -594,6 +619,67 @@ class Codegen {
       case 'block': for (const s of stmt.stmts) this.collectCallsStmt(s, out); break;
       default: break;
     }
+  }
+
+  // Thu thập chuỗi literal dùng làm GIÁ TRỊ (trả Map value -> line xuất
+  // hiện đầu tiên). Khởi tạo mảng bằng chuỗi (char s[] = "abc") KHÔNG
+  // thu thập — chuỗi đó nằm trong slot của mảng. Toán hạng sizeof cũng
+  // không thu thập (sizeof không tính giá trị lúc chạy, chỉ cần độ dài).
+  collectStrLiterals() {
+    const found = new Map();
+    const expr = (node) => {
+      if (!node) return;
+      if (Array.isArray(node)) { for (const e of node) expr(e); return; }
+      switch (node.kind) {
+        case 'str':
+          if (!found.has(node.value)) found.set(node.value, node.line);
+          break;
+        case 'call': for (const a of node.args) expr(a); break;
+        case 'binary': expr(node.left); expr(node.right); break;
+        case 'unary': expr(node.expr); break;
+        case 'assign': expr(node.target); expr(node.value); break;
+        case 'index': expr(node.base); expr(node.index); break;
+        case 'ternary': expr(node.cond); expr(node.then); expr(node.else); break;
+        case 'sizeof': break; // không tính giá trị -> không cần vùng nhớ
+        default: break;
+      }
+    };
+    const stmt = (s) => {
+      if (!s) return;
+      if (Array.isArray(s)) { for (const x of s) stmt(x); return; }
+      switch (s.kind) {
+        case 'vardecl':
+          if (s.isArray && s.init && s.init.kind === 'str') break;
+          if (s.init) expr(s.init);
+          break;
+        case 'expr': if (s.expr) expr(s.expr); break;
+        case 'if': expr(s.cond); stmt(s.then); if (s.else) stmt(s.else); break;
+        case 'while': case 'dowhile': expr(s.cond); stmt(s.body); break;
+        case 'for':
+          if (s.init) stmt(s.init);
+          if (s.cond) expr(s.cond);
+          if (s.incr) expr(s.incr);
+          stmt(s.body);
+          break;
+        case 'switch':
+          expr(s.expr);
+          for (const c of s.cases) for (const x of c.stmts) stmt(x);
+          if (s.defaultStmts) for (const x of s.defaultStmts) stmt(x);
+          break;
+        case 'return': if (s.expr) expr(s.expr); break;
+        case 'block': for (const x of s.stmts) stmt(x); break;
+        default: break;
+      }
+    };
+    for (const d of this.ast.decls) {
+      if (d.kind === 'vardecl') {
+        if (d.isArray && d.init && d.init.kind === 'str') continue;
+        if (d.init) expr(d.init);
+      } else if (d.kind === 'func' && d.body) {
+        stmt(d.body);
+      }
+    }
+    return found;
   }
 
   checkRecursion(funcDefs) {
@@ -1055,7 +1141,7 @@ class Codegen {
     if (!node) return plain(1, false);
     switch (node.kind) {
       case 'num': return plain(node.type === 'char' ? 1 : 2, true);
-      case 'str': return plain(1, false);
+      case 'str': return ptr(1, false); // chuỗi literal decay thành char*
       case 'ident': {
         const v = this.lookupVar(node.name, node.line);
         if (v.isBit || v.isSFR) return plain(1, false);
@@ -1122,11 +1208,16 @@ class Codegen {
       case 'assign': return this.typeOf(node.target);
       case 'call': {
         if (node.name === '__delay_ms' || node.name === '__delay_us') return plain(1, false);
+        if (node.name === 'strlen') return plain(2, false); // size_t 16-bit
+        if (node.name === 'strcmp') return plain(2, true); // int có dấu
+        if (node.name === 'memset' || node.name === 'memcpy'
+          || node.name === 'strcpy' || node.name === 'strcat') return ptr(1, false);
         const fn = this.funcs.get(node.name);
         if (!fn) return plain(1, false);
         if (fn.retIsPointer) return ptr(fn.retElemWidth, fn.retElemSigned);
         return plain(fn.retWidth || 1, fn.retSigned);
       }
+      case 'sizeof': return plain(2, false); // sizeof trả size_t (16-bit)
       case 'ternary': {
         const tt = this.typeOf(node.then);
         const et = this.typeOf(node.else);
@@ -1144,6 +1235,35 @@ class Codegen {
 
   signedOf(node) {
     return this.typeOf(node).signed;
+  }
+
+  // Kích thước theo byte của toán hạng sizeof (tính lúc biên dịch).
+  // Trả null nếu không tính được (vd sizeof biến chưa khai báo — nhưng
+  // trường hợp đó lookupVar đã báo lỗi; sizeof trên bit/SFR cũng null).
+  //   sizeof(kiểu)      -> độ rộng kiểu (con trỏ -> 2)
+  //   sizeof(mảng)      -> elemWidth * số phần tử (KHÔNG decay thành 2)
+  //   sizeof(con trỏ)   -> 2
+  //   sizeof("abc")     -> 4 (kể cả '\0')
+  //   sizeof(biểu thức) -> độ rộng kiểu của biểu thức (typeOf)
+  sizeofValue(node) {
+    if (!node || node.kind !== 'sizeof') return null;
+    if (node.sizeofType) {
+      if (node.pointer) return 2;
+      const w = { void: 1, char: 1, uchar: 1, int: 2, uint: 2 }[node.sizeofType];
+      return w !== undefined ? w : null;
+    }
+    const e = node.expr;
+    if (!e) return null;
+    if (e.kind === 'str') return e.value.length + 1;
+    if (e.kind === 'ident') {
+      const v = this.lookupVar(e.name, e.line);
+      if (!v || v.isBit || v.isSFR) return null;
+      if (v.isArray) return v.elemWidth * v.count;
+      if (v.isPointer) return 2;
+      return v.width;
+    }
+    if (e.kind === 'unary' && e.op === '&') return 2; // sizeof(&x): con trỏ
+    return this.typeOf(e).width;
   }
 
   // Đổi độ rộng của biến tạm đang ở đỉnh ngăn xếp (lấp byte cao theo dấu
@@ -1176,9 +1296,29 @@ class Codegen {
         if (want === 2) this.setByte(r.addr, r.sym, 1, (v >> 8) & 0xff, line);
         return r;
       }
-      case 'str':
-        this.err(line, 'chuỗi chỉ dùng để khởi tạo mảng char');
-        return this.dummyTemp(want);
+      case 'sizeof': {
+        // sizeof là hằng số lúc biên dịch (xem sizeofValue): nạp trực tiếp.
+        const sz = this.sizeofValue(node);
+        if (sz === null) { this.err(line, 'không tính được sizeof'); return this.dummyTemp(want); }
+        const r = this.allocTemp(want);
+        r.signed = false;
+        this.setByte(r.addr, r.sym, 0, sz & 0xff, line);
+        if (want === 2) this.setByte(r.addr, r.sym, 1, (sz >> 8) & 0xff, line);
+        return r;
+      }
+      case 'str': {
+        // Chuỗi literal làm giá trị: decay thành con trỏ tới vùng nhớ tạm
+        // đã cấp ở prepass (collectStrLiterals) và ghi nội dung lúc khởi
+        // động. Trả địa chỉ 16-bit như mảng decay.
+        const slot = this.strLiterals.get(node.value);
+        if (!slot) { this.err(line, 'chuỗi không rõ'); return this.dummyTemp(want); }
+        const r = this.allocTemp(2);
+        r.signed = false;
+        this.setByte(r.addr, r.sym, 0, slot.addr & 0xff, line);
+        this.setByte(r.addr, r.sym, 1, (slot.addr >> 8) & 0xff, line);
+        this.adjustTempWidth(r, want, line);
+        return r;
+      }
       case 'ident': {
         const v = this.lookupVar(node.name, line);
         if (v.isArray) {
@@ -1936,6 +2076,50 @@ class Codegen {
       if (want === 2) this.emitClrf(r.addr, r.sym, 1, line);
       return r;
     }
+    // strlen(s): đếm byte tới '\0' lúc chạy (đúng với mọi chuỗi, kể cả
+    // con trỏ trỏ vào giữa chuỗi như strlen(p+2)). Trả size_t 16-bit.
+    // Không phải hằng lúc biên dịch: vòng lặp đọc qua FSR/INDF.
+    if (name === 'strlen') {
+      if (node.args.length !== 1) {
+        this.err(line, 'strlen cần 1 đối số');
+        return this.dummyTemp(want);
+      }
+      // Cấp kết quả TRƯỚC, con trỏ p sau (p nằm trên r -> free p xong r
+      // vẫn còn nguyên, đúng kỷ luật LIFO của ngăn xếp tạm).
+      const r = this.allocTemp(2);
+      r.signed = false;
+      const p = this.genExpr(node.args[0], 2, true);
+      this.emitClrf(r.addr, r.sym, 0, line);
+      this.emitClrf(r.addr, r.sym, 1, line);
+      const lLoop = this.newLabel(), lDone = this.newLabel();
+      this.emitLabel(lLoop, line);
+      this.setFsrFromTemp(p, line);
+      this.emit('MOVF INDF, W', line);
+      this.emit('BTFSC STATUS, Z', line);
+      this.emit(`GOTO ${lDone}`, line);
+      // count++ (16-bit): INCF thấp, nếu tràn (Z=1) thì INCF cao.
+      this.ensureBank(r.addr, r.sym, line);
+      this.emit(`INCF ${r.sym}, F`, line);
+      this.ensureBank(r.addr + 1, r.sym, line);
+      this.emit('BTFSC STATUS, Z', line);
+      this.emit(`INCF ${r.sym}+1, F`, line);
+      // p++ (16-bit): cùng mẫu.
+      this.ensureBank(p.addr, p.sym, line);
+      this.emit(`INCF ${p.sym}, F`, line);
+      this.ensureBank(p.addr + 1, p.sym, line);
+      this.emit('BTFSC STATUS, Z', line);
+      this.emit(`INCF ${p.sym}+1, F`, line);
+      this.emit(`GOTO ${lLoop}`, line);
+      this.emitLabel(lDone, line);
+      this.freeTemp(p.width);
+      this.adjustTempWidth(r, want, line);
+      return r;
+    }
+    // Các hàm chuỗi/bộ nhớ chuẩn C (xem genStrBuiltin).
+    if (name === 'memset' || name === 'memcpy' || name === 'strcpy'
+      || name === 'strcat' || name === 'strcmp') {
+      return this.genStrBuiltin(name, node, want, line);
+    }
     const fn = this.funcs.get(name);
     if (!fn) {
       this.err(line, `chưa khai báo hàm ${name}`);
@@ -1970,6 +2154,227 @@ class Codegen {
       if (want === 2) this.emitClrf(r.addr, r.sym, 1, line);
     }
     return r;
+  }
+
+  // Các hàm chuỗi/bộ nhớ chuẩn C, sinh vòng lặp FSR/INDF lúc chạy:
+  //   memset(p, val, n)  -> p (gốc)   | memcpy(dst, src, n) -> dst (gốc)
+  //   strcpy(dst, src)   -> dst (gốc) | strcat(dst, src)    -> dst (gốc)
+  //   strcmp(a, b)       -> int có dấu (a[i]-b[i], 0 nếu bằng nhau)
+  // FSR chỉ trỏ được 1 địa chỉ tại 1 thời điểm nên hàm 2 con trỏ phải
+  // luân phiên đặt lại FSR và giữ byte đang chép trong 1 biến tạm 1 byte.
+  // Kỷ luật tạm: kết quả r cấp TRƯỚC, đối số sau, scratch trên cùng;
+  // free ngược lại, r còn lại để trả về.
+  genStrBuiltin(name, node, want, line) {
+    const need = (n) => {
+      if (node.args.length !== n) {
+        this.err(line, `${name} cần ${n} đối số`);
+        return false;
+      }
+      return true;
+    };
+    // Kiểm tra n (16-bit) == 0: MOVF thấp,W; IORWF cao,W; Z=1 nếu cả 2 đều 0.
+    const checkZero16 = (t, lDone) => {
+      this.emitMovfW(t.addr, t.sym, 0, line);
+      this.ensureBank(t.addr + 1, t.sym, line);
+      this.emit(`IORWF ${t.sym}+1, W`, line);
+      this.emit('BTFSC STATUS, Z', line);
+      this.emit(`GOTO ${lDone}`, line);
+    };
+    if (name === 'memset') {
+      if (!need(3)) return this.dummyTemp(want);
+      const r = this.allocTemp(2); r.signed = false;
+      const p = this.genExpr(node.args[0], 2, true);
+      const v = this.genExpr(node.args[1], 1, true);
+      const n = this.genExpr(node.args[2], 2, true);
+      this.copyValue(p, r.addr, r.sym, 2, line); // r = p gốc
+      const lLoop = this.newLabel(), lDone = this.newLabel();
+      this.emitLabel(lLoop, line);
+      checkZero16(n, lDone);
+      this.setFsrFromTemp(p, line);
+      this.emitMovfW(v.addr, v.sym, 0, line);
+      this.emit('MOVWF INDF', line);
+      this.incTemp16(p, line);
+      this.decTemp16(n, line);
+      this.emit(`GOTO ${lLoop}`, line);
+      this.emitLabel(lDone, line);
+      this.freeTemp(n.width); this.freeTemp(v.width); this.freeTemp(p.width);
+      this.adjustTempWidth(r, want, line);
+      return r;
+    }
+    if (name === 'memcpy') {
+      if (!need(3)) return this.dummyTemp(want);
+      const r = this.allocTemp(2); r.signed = false;
+      const d = this.genExpr(node.args[0], 2, true);
+      const s = this.genExpr(node.args[1], 2, true);
+      const n = this.genExpr(node.args[2], 2, true);
+      const t = this.allocTemp(1); t.signed = false;
+      this.copyValue(d, r.addr, r.sym, 2, line); // r = dst gốc
+      const lLoop = this.newLabel(), lDone = this.newLabel();
+      this.emitLabel(lLoop, line);
+      checkZero16(n, lDone);
+      // t = *s
+      this.setFsrFromTemp(s, line);
+      this.emit('MOVF INDF, W', line);
+      this.emitMovwf(t.addr, t.sym, 0, line);
+      // *d = t
+      this.setFsrFromTemp(d, line);
+      this.emitMovfW(t.addr, t.sym, 0, line);
+      this.emit('MOVWF INDF', line);
+      this.incTemp16(d, line);
+      this.incTemp16(s, line);
+      this.decTemp16(n, line);
+      this.emit(`GOTO ${lLoop}`, line);
+      this.emitLabel(lDone, line);
+      this.freeTemp(t.width);
+      this.freeTemp(n.width);
+      this.freeTemp(s.width); this.freeTemp(d.width);
+      this.adjustTempWidth(r, want, line);
+      return r;
+    }
+    if (name === 'strcpy') {
+      if (!need(2)) return this.dummyTemp(want);
+      const r = this.allocTemp(2); r.signed = false;
+      const d = this.genExpr(node.args[0], 2, true);
+      const s = this.genExpr(node.args[1], 2, true);
+      const t = this.allocTemp(1); t.signed = false;
+      this.copyValue(d, r.addr, r.sym, 2, line); // r = dst gốc
+      const lLoop = this.newLabel(), lDone = this.newLabel();
+      this.emitLabel(lLoop, line);
+      // t = *s
+      this.setFsrFromTemp(s, line);
+      this.emit('MOVF INDF, W', line);
+      this.emitMovwf(t.addr, t.sym, 0, line);
+      // *d = t
+      this.setFsrFromTemp(d, line);
+      this.emitMovfW(t.addr, t.sym, 0, line);
+      this.emit('MOVWF INDF', line);
+      // Gặp '\0' (vừa chép xong) thì dừng — byte 0 đã được chép.
+      this.emitMovfW(t.addr, t.sym, 0, line);
+      this.emit('BTFSC STATUS, Z', line);
+      this.emit(`GOTO ${lDone}`, line);
+      this.incTemp16(d, line);
+      this.incTemp16(s, line);
+      this.emit(`GOTO ${lLoop}`, line);
+      this.emitLabel(lDone, line);
+      this.freeTemp(t.width);
+      this.freeTemp(s.width); this.freeTemp(d.width);
+      this.adjustTempWidth(r, want, line);
+      return r;
+    }
+    if (name === 'strcat') {
+      if (!need(2)) return this.dummyTemp(want);
+      const r = this.allocTemp(2); r.signed = false;
+      const d = this.genExpr(node.args[0], 2, true);
+      const s = this.genExpr(node.args[1], 2, true);
+      const t = this.allocTemp(1); t.signed = false;
+      this.copyValue(d, r.addr, r.sym, 2, line); // r = dst gốc
+      // Pha 1: d tiến tới byte '\0' cuối chuỗi đích.
+      const lScan = this.newLabel(), lCopy = this.newLabel(), lDone = this.newLabel();
+      this.emitLabel(lScan, line);
+      this.setFsrFromTemp(d, line);
+      this.emit('MOVF INDF, W', line);
+      this.emit('BTFSC STATUS, Z', line);
+      this.emit(`GOTO ${lCopy}`, line);
+      this.incTemp16(d, line);
+      this.emit(`GOTO ${lScan}`, line);
+      // Pha 2: chép như strcpy từ vị trí '\0' đó.
+      this.emitLabel(lCopy, line);
+      this.setFsrFromTemp(s, line);
+      this.emit('MOVF INDF, W', line);
+      this.emitMovwf(t.addr, t.sym, 0, line);
+      this.setFsrFromTemp(d, line);
+      this.emitMovfW(t.addr, t.sym, 0, line);
+      this.emit('MOVWF INDF', line);
+      this.emitMovfW(t.addr, t.sym, 0, line);
+      this.emit('BTFSC STATUS, Z', line);
+      this.emit(`GOTO ${lDone}`, line);
+      this.incTemp16(d, line);
+      this.incTemp16(s, line);
+      this.emit(`GOTO ${lCopy}`, line);
+      this.emitLabel(lDone, line);
+      this.freeTemp(t.width);
+      this.freeTemp(s.width); this.freeTemp(d.width);
+      this.adjustTempWidth(r, want, line);
+      return r;
+    }
+    // strcmp(a, b)
+    if (!need(2)) return this.dummyTemp(want);
+    const r = this.allocTemp(2); r.signed = true;
+    // r = 0 sẵn: chuỗi bằng nhau thì trả 0 mà không cần ghi lại.
+    this.emitClrf(r.addr, r.sym, 0, line);
+    this.emitClrf(r.addr, r.sym, 1, line);
+    const a = this.genExpr(node.args[0], 2, true);
+    const b = this.genExpr(node.args[1], 2, true);
+    const t1 = this.allocTemp(1); t1.signed = false;
+    const t2 = this.allocTemp(1); t2.signed = false;
+    const lLoop = this.newLabel(), lDone = this.newLabel();
+    const lEqual = this.newLabel(), lNeg = this.newLabel();
+    this.emitLabel(lLoop, line);
+    // t1 = *a ; t2 = *b
+    this.setFsrFromTemp(a, line);
+    this.emit('MOVF INDF, W', line);
+    this.emitMovwf(t1.addr, t1.sym, 0, line);
+    this.setFsrFromTemp(b, line);
+    this.emit('MOVF INDF, W', line);
+    this.emitMovwf(t2.addr, t2.sym, 0, line);
+    // W = t1 - t2 (MOVF t2,W rồi SUBWF t1,W). Nếu bằng nhau (Z=1) -> lEqual.
+    this.emitMovfW(t2.addr, t2.sym, 0, line);
+    this.ensureBank(t1.addr, t1.sym, line);
+    this.emit(`SUBWF ${t1.sym}, W`, line);
+    this.emit('BTFSC STATUS, Z', line);
+    this.emit(`GOTO ${lEqual}`, line);
+    // Khác nhau: r = (int8)(t1 - t2), mở rộng dấu lên 16-bit.
+    // Bit 7 của hiệu = 1 (âm) -> byte cao 0xFF; = 0 (dương) -> 0x00.
+    // BTFSC: bit 7 = 0 (dương) thì bỏ qua GOTO -> CLRF; = 1 (âm) thì vào lNeg.
+    this.emitMovwf(r.addr, r.sym, 0, line);
+    this.emit(`BTFSC ${r.sym}, 7`, line);
+    this.emit(`GOTO ${lNeg}`, line);
+    this.emitClrf(r.addr, r.sym, 1, line);
+    this.emit(`GOTO ${lDone}`, line);
+    this.emitLabel(lNeg, line);
+    this.emitMovlw(0xff, line);
+    this.emitMovwf(r.addr, r.sym, 1, line);
+    this.emit(`GOTO ${lDone}`, line);
+    // Bằng nhau: nếu t1 == 0 (cả 2 hết chuỗi) -> trả 0; không thì a++, b++.
+    this.emitLabel(lEqual, line);
+    this.emitMovfW(t1.addr, t1.sym, 0, line);
+    this.emit('BTFSC STATUS, Z', line);
+    this.emit(`GOTO ${lDone}`, line); // t1==0 -> r vẫn 0? (xem dưới)
+    this.incTemp16(a, line);
+    this.incTemp16(b, line);
+    this.emit(`GOTO ${lLoop}`, line);
+    this.emitLabel(lDone, line);
+    this.freeTemp(t2.width); this.freeTemp(t1.width);
+    this.freeTemp(b.width); this.freeTemp(a.width);
+    this.adjustTempWidth(r, want, line);
+    return r;
+  }
+
+  // Tăng 1 cho biến tạm 16-bit (có nhớ sang byte cao).
+  incTemp16(t, line) {
+    this.ensureBank(t.addr, t.sym, line);
+    this.emit(`INCF ${t.sym}, F`, line);
+    this.ensureBank(t.addr + 1, t.sym, line);
+    this.emit('BTFSC STATUS, Z', line);
+    this.emit(`INCF ${t.sym}+1, F`, line);
+  }
+
+  // Giảm 1 cho biến tạm 16-bit (có mượn sang byte cao).
+  decTemp16(t, line) {
+    const lNoBorrow = this.newLabel();
+    const lDone = this.newLabel();
+    this.emitMovfW(t.addr, t.sym, 0, line);
+    this.emit('BTFSC STATUS, Z', line);
+    this.emit(`GOTO ${lNoBorrow}`, line);
+    this.ensureBank(t.addr, t.sym, line);
+    this.emit(`DECF ${t.sym}, F`, line);
+    this.emit(`GOTO ${lDone}`, line);
+    this.emitLabel(lNoBorrow, line);
+    this.ensureBank(t.addr, t.sym, line);
+    this.emit(`DECF ${t.sym}, F`, line);
+    this.ensureBank(t.addr + 1, t.sym, line);
+    this.emit(`DECF ${t.sym}+1, F`, line);
+    this.emitLabel(lDone, line);
   }
 
   // Chọn (R, hi, lo) sao cho tổng chu kỳ R*(3*lo + 776*hi + 11) + 2 gần
@@ -2249,10 +2654,11 @@ class Codegen {
       this.err(line, 'khởi tạo mảng phải dùng { } hoặc chuỗi');
       return;
     }
-    if (decl.init.kind === 'str') {
-      this.err(line, 'chuỗi chỉ dùng để khởi tạo mảng char');
+    if (decl.init.kind === 'str' && !info.isPointer) {
+      this.err(line, 'chuỗi chỉ dùng để khởi tạo mảng char hoặc con trỏ');
       return;
     }
+    // Con trỏ khởi tạo bằng chuỗi: genExpr('str') trả địa chỉ vùng nhớ tạm.
     const v = this.genExpr(decl.init, info.width, true);
     this.copyValue(v, info.addr, info.sym, info.width, line);
     this.freeTemp(v.width);
@@ -2295,6 +2701,16 @@ class Codegen {
     this.curFunc = null;
     for (const { decl, info } of this.globals) {
       if (decl.init) this.genVarDeclInit(decl, info, decl.line);
+    }
+    // Ghi nội dung các chuỗi literal dùng làm giá trị vào vùng nhớ tạm
+    // (đã cấp slot ở prepass). Phải chạy trước main vì mọi hàm đều có
+    // thể dùng con trỏ tới các chuỗi này.
+    for (const [value, slot] of this.strLiterals) {
+      const bytes = [...value].map((c) => c.charCodeAt(0) & 0xff);
+      bytes.push(0); // '\0' kết chuỗi
+      for (let i = 0; i < bytes.length; i++) {
+        this.setByte(slot.addr, slot.sym, i, bytes[i], 1);
+      }
     }
     this.scopes = [];
     this.emit('CALL __C_FN_MAIN');
