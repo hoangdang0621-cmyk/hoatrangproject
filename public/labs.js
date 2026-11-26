@@ -11,6 +11,18 @@ export const LABS = [
     id: 'led-blink',
     title: 'Điều khiển LED',
     desc: 'LED nối vào chân RB0 của PIC qua điện trở 220Ω, cathode về GND. Sang tab "Nạp viết code" bấm Nạp & chạy để xem LED nhấp nháy theo nhịp chip.',
+    code: `#include <xc.h>
+#define _XTAL_FREQ 4000000
+
+void main() {
+  TRISB = 0;
+  while (1) {
+    RB0 = 1;
+    __delay_ms(500);
+    RB0 = 0;
+    __delay_ms(500);
+  }
+}`,
     size: 830,
     components: [
       { id: 'R0', type: 'resistor', anchor: 'i45', rot: 0, props: { value: 220 } },
@@ -27,6 +39,50 @@ export const LABS = [
     id: 'led-lcd',
     title: 'Điều khiển LED + LCD',
     desc: 'LCD 16x2 chế độ 8-bit đấu sẵn: RS→RE0 (chân 8), E→RE1 (chân 9), D0→RD0 (chân 19), D1→RD1 (chân 20), D2→RD2 (chân 21), D3→RD3 (chân 22), D4→RD4 (chân 27), D5→RD5 (chân 28), D6→RD6 (chân 29), D7→RD7 (chân 30). LED xanh lá → RB1 (chân 34) qua điện trở 220Ω, cathode về GND.',
+    code: `#include <xc.h>
+#define _XTAL_FREQ 4000000
+
+void LCD_WAIT() {
+  __delay_us(100);
+}
+
+void LCD_CMD(unsigned char c) {
+  RE0 = 0;
+  PORTD = c;
+  RE1 = 1;
+  RE1 = 0;
+  LCD_WAIT();
+}
+
+void LCD_DATA(unsigned char c) {
+  RE0 = 1;
+  PORTD = c;
+  RE1 = 1;
+  RE1 = 0;
+  LCD_WAIT();
+}
+
+void main() {
+  TRISB = 0;
+  TRISD = 0;
+  TRISE = 0;
+  RB1 = 0;
+  LCD_CMD(0x38);
+  LCD_CMD(0x0C);
+  LCD_CMD(0x01);
+  LCD_CMD(0x06);
+  LCD_DATA('H');
+  LCD_DATA('E');
+  LCD_DATA('L');
+  LCD_DATA('L');
+  LCD_DATA('O');
+  while(1) {
+    RB1 = 1;
+    __delay_ms(500);
+    RB1 = 0;
+    __delay_ms(500);
+  }
+}`,
     size: { cols: 100, rows: 20, rails: true },
     components: [
       { id: 'R1', type: 'resistor', anchor: 's45', rot: 0, props: { value: 220 } },

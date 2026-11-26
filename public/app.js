@@ -10,6 +10,7 @@ import {
 } from './wiring.js?v=20261125r';
 import { defaultBenchState, benchToNetlist } from './bench-model.js?v=20261125al';
 import { meterReadings } from './circuit-solver.js?v=20261125al';
+import { compileC } from './c-compiler.js?v=20261125ao';
 
 const cpu = createCPU();
 cpu.clockHz = 4000000;
@@ -26,32 +27,21 @@ function applyAllPots() {
 }
 applyAllPots();
 
-// Chương trình mẫu cho tab "Nạp viết code": nhấp nháy LED RB0.
-// Chỉ là code mẫu mở sẵn trong editor — chip không tự chạy nó.
-const DEFAULT_PROGRAM = `; Nhap nhay LED RB0 - chuong trinh mac dinh chay san tren ban
-    ORG 0
-    BANKSEL TRISB
-    CLRF TRISB
-    BANKSEL PORTB
-LOOP
-    BSF PORTB, 0
-    CALL DELAY
-    BCF PORTB, 0
-    CALL DELAY
-    GOTO LOOP
-DELAY
-    MOVLW 0xFF
-    MOVWF 0x20
-D1
-    MOVLW 0xFF
-    MOVWF 0x21
-D2
-    DECFSZ 0x21, F
-    GOTO D2
-    DECFSZ 0x20, F
-    GOTO D1
-    RETURN
-    END`;
+// Chương trình C mẫu cho tab "Nạp viết code": nhấp nháy LED RB0
+// (code mẫu Lab 1, nhiều dòng). Chỉ là code mẫu mở sẵn trong editor —
+// chip không tự chạy nó. Phải giống hệt FALLBACK_C trong bench.js.
+const DEFAULT_C_PROGRAM = `#include <xc.h>
+#define _XTAL_FREQ 4000000
+
+void main() {
+  TRISB = 0;
+  while (1) {
+    RB0 = 1;
+    __delay_ms(500);
+    RB0 = 0;
+    __delay_ms(500);
+  }
+}`;
 
 // Vòng lặp chạy 1x thời gian thực @4MHz (1 triệu lệnh/giây). ProgramRunner
 // chỉ step khi đang ở trạng thái running, còn lại tick là no-op.
@@ -97,9 +87,24 @@ window.HoaTrangBenchBridge = {
   getMapping: () => mapping,
   pressButton: (id, pressed) => applyButtonToCpu(cpu, mapping, id, pressed),
   setPot: (id, volts) => { potVoltsById[id] = volts; applyPotToCpu(cpu, mapping, id, volts); },
-  // --- Tab "Nạp viết code": soạn code hợp ngữ / nạp file .hex ---
-  defaultProgram: () => DEFAULT_PROGRAM,
-  loadAsm(source) { const r = runner.loadAsm(source); if (r.ok) applyAllPots(); return r; },
+  // --- Tab "Nạp viết code": soạn code C (XC8) / nạp file .hex ---
+  defaultProgram: () => DEFAULT_C_PROGRAM,
+  // Dịch code C trong editor rồi nạp vào CPU. compileC trả lineToAddr
+  // theo dòng C, nhưng runner.loadAsm tự set map theo dòng HỢP NGỮ đã
+  // sinh — nên BẮT BUỘC ghi đè lại bằng map dòng C, không thì breakpoint
+  // và dòng hiện tại sẽ chỉ sai dòng. Lỗi thì không nạp gì.
+  loadC(source) {
+    const r = compileC(source);
+    if (!r.ok) return { ok: false, errors: r.errors };
+    const loaded = runner.loadAsm(r.asm);
+    if (!loaded.ok) return { ok: false, errors: loaded.errors };
+    runner.lineToAddr = r.lineToAddr;
+    runner.addrToLine = new Map([...r.lineToAddr].map(([l, a]) => [a, l]));
+    applyAllPots();
+    return { ok: true, lineToAddr: r.lineToAddr };
+  },
+  // Chỉ dịch C, không nạp gì (để bench.js dùng cho gutter/breakpoint).
+  compileCOnly(source) { return compileC(source); },
   loadHex(text) { const r = runner.loadHex(text); if (r.ok) applyAllPots(); return r; },
   runProgram: () => runner.run(),
   pauseProgram: () => runner.pause(),

@@ -17,9 +17,8 @@ import {
   clampCamTarget, zoomTowardPoint, panTarget, meterMode,
 } from './bench-model.js?v=20261125al';
 import { checkWiring, SIGNAL_COLORS } from './wiring.js?v=20261125r';
-import { assemble } from './pic16.js?v=20261125ah';
 import { formatVolts, formatAmps, formatCurrentDirection } from './circuit-solver.js?v=20261125al';
-import { LABS, getLab, buildLabState } from './labs.js?v=20261125an';
+import { LABS, getLab, buildLabState } from './labs.js?v=20261125ao';
 
 const $ = (id) => document.getElementById(id);
 const benchView = $('benchView');
@@ -212,7 +211,7 @@ function main() {
   }
   $('btnWireCancel')?.addEventListener('click', () => { setWiringMode(false); setPlacementMode(null); setStatus('Đã hủy.'); });
 
-  // --- Tab "Nạp viết code": editor hợp ngữ + nạp file .hex + breakpoint ---
+  // --- Tab "Nạp viết code": editor C (XC8) + nạp file .hex + breakpoint ---
   const codeTabEl = $('benchTabCode');
   const compTabEl = $('benchTabComponents');
   const labsTabEl = $('benchTabLabs');
@@ -222,31 +221,20 @@ function main() {
   const codeStatusEl = $('benchCodeStatus');
   const hexFileInput = $('benchHexFile');
   const CODE_LS_KEY = 'hoatrang-code-v1';
-  // Code nhấp nháy mẫu dự phòng nếu bridge chưa có (app.js luôn có).
-  const FALLBACK_BLINK = `; Nhap nhay LED RB0 - chuong trinh mac dinh chay san tren ban
-    ORG 0
-    BANKSEL TRISB
-    CLRF TRISB
-    BANKSEL PORTB
-LOOP
-    BSF PORTB, 0
-    CALL DELAY
-    BCF PORTB, 0
-    CALL DELAY
-    GOTO LOOP
-DELAY
-    MOVLW 0xFF
-    MOVWF 0x20
-D1
-    MOVLW 0xFF
-    MOVWF 0x21
-D2
-    DECFSZ 0x21, F
-    GOTO D2
-    DECFSZ 0x20, F
-    GOTO D1
-    RETURN
-    END`;
+  // Code C mẫu dự phòng nếu bridge chưa có (app.js luôn có).
+  // Phải giống hệt DEFAULT_C_PROGRAM trong app.js.
+  const FALLBACK_C = `#include <xc.h>
+#define _XTAL_FREQ 4000000
+
+void main() {
+  TRISB = 0;
+  while (1) {
+    RB0 = 1;
+    __delay_ms(500);
+    RB0 = 0;
+    __delay_ms(500);
+  }
+}`;
   let sideTab = 'components';
   let codeInitDone = false;
   let codeBreakpoints = new Set();   // số dòng có breakpoint
@@ -284,8 +272,9 @@ D2
     setCodeWide(codeTabEl.contains(e.target));
   });
 
-  // --- Tab "Bài Lab": list bài lab mẫu, bấm "Mở lab" để nạp mạch lên bàn ---
-  // Chỉ nạp mạch (linh kiện + dây), không động vào code trong editor.
+  // --- Tab "Bài Lab": list bài lab mẫu, bấm "Mở lab" để nạp mạch + code mẫu lên bàn ---
+  // Nạp cả mạch (linh kiện + dây) lẫn code C mẫu của lab vào editor
+  // (chưa nạp vào CPU — user vẫn bấm Nạp & chạy để chạy).
   function renderLabList() {
     if (!labListEl) return;
     labListEl.innerHTML = LABS.map((lab) => `
@@ -317,21 +306,37 @@ D2
     save();
     if (sizeChanged) { rebuildBoard(); updateSizeUI(); }
     rebuildAll(); syncToCpu();
-    setStatus(`Đã mở lab ${lab.title} — mạch đã lên bàn. Sang tab "Nạp viết code" bấm Nạp & chạy để chạy chương trình.`);
+    // Nạp luôn code C mẫu của lab vào editor (ghi đè code hiện tại).
+    // codeInput vẫn tồn tại trong DOM dù tab code đang hidden; nếu tab
+    // code chưa init thì initCodeTab sau này phải giữ code này (xem bẫy
+    // trong initCodeTab — chỉ điền code mặc định khi editor còn trống).
+    if (typeof lab.code === 'string' && lab.code) {
+      codeInput.value = lab.code;
+      codeAssemble();
+      if (codeInitDone) { pruneBreakpoints(); renderGutter(); }
+      codeLoaded = false;
+    }
+    setStatus(`Đã mở lab ${lab.title} — mạch + code mẫu đã lên. Bấm Nạp & chạy để chạy chương trình.`);
   }
 
   // Code KHÔNG lưu localStorage nữa: refresh trang thì code về lại chương
-  // trình mẫu mặc định (FALLBACK_BLINK). Chỉ giữ trong bộ nhớ phiên làm việc.
+  // trình mẫu C mặc định (FALLBACK_C). Chỉ giữ trong bộ nhớ phiên làm việc.
   function loadSavedCode() {
     try { localStorage.removeItem(CODE_LS_KEY); } catch { /* bỏ qua */ }
     return null;
   }
   function saveCode() { /* không lưu nữa */ }
   function saveCodeSoon() { /* không lưu nữa */ }
-  // Dịch code hiện tại (chỉ để lấy bảng dòng->địa chỉ cho gutter, không nạp).
+  // Dịch code C hiện tại (chỉ để lấy bảng dòng C -> địa chỉ cho gutter,
+  // không nạp vào CPU). Lỗi thì codeLineToAddr rỗng — gutter vẫn hiện số
+  // dòng nhưng không đặt được breakpoint; lỗi hiện qua setCodeStatus ở
+  // chỗ gọi (Nạp & chạy). Trả nguyên kết quả compileC.
   function codeAssemble() {
-    const r = assemble(codeInput.value);
-    codeLineToAddr = r.lineToAddr || new Map();
+    const b = bridge();
+    const r = b && typeof b.compileCOnly === 'function'
+      ? b.compileCOnly(codeInput.value)
+      : { ok: false, errors: [{ line: 1, message: 'Chưa nối được CPU.' }], lineToAddr: new Map() };
+    codeLineToAddr = (r.ok && r.lineToAddr) ? r.lineToAddr : new Map();
     return r;
   }
   function renderGutter(curLine = null) {
@@ -405,10 +410,15 @@ D2
   function initCodeTab() {
     if (codeInitDone || !codeInput) return;
     codeInitDone = true;
-    const saved = loadSavedCode();
+    loadSavedCode();
     const b0 = bridge();
-    codeInput.value = saved ? saved.code : (b0 && typeof b0.defaultProgram === 'function' ? b0.defaultProgram() : FALLBACK_BLINK);
-    if (saved) codeBreakpoints = new Set(saved.breakpoints.filter((l) => Number.isInteger(l) && l > 0));
+    // BẪY: openLab có thể đã nạp code lab vào editor TRƯỚC khi tab code
+    // init lần đầu (user mở lab từ tab Bài Lab rồi mới sang tab code).
+    // Chỉ điền code mẫu mặc định khi editor còn trống — nếu đã có code
+    // (do openLab nạp) thì giữ nguyên, chỉ dịch + vẽ gutter.
+    if (!codeInput.value.trim()) {
+      codeInput.value = (b0 && typeof b0.defaultProgram === 'function' ? b0.defaultProgram() : FALLBACK_C);
+    }
     codeAssemble();
     pruneBreakpoints();
     renderGutter();
@@ -431,7 +441,7 @@ D2
       if (!row) return;
       const line = Number(row.dataset.line);
       codeAssemble();
-      if (!codeLineToAddr.has(line)) return; // dòng trống/chú thích/nhãn: không đặt được
+      if (!codeLineToAddr.has(line)) return; // dòng trống/chú thích/#include/#define: không sinh lệnh, không đặt được
       if (codeBreakpoints.has(line)) codeBreakpoints.delete(line);
       else codeBreakpoints.add(line);
       saveCode();
@@ -441,7 +451,7 @@ D2
     $('btnCodeLoadRun')?.addEventListener('click', () => {
       const b = bridge();
       if (!b) return;
-      const r = b.loadAsm(codeInput.value);
+      const r = b.loadC(codeInput.value);
       if (!r.ok) { setCodeStatus(codeErrorText(r.errors), true); return; }
       codeLineToAddr = r.lineToAddr || new Map();
       pruneBreakpoints();
