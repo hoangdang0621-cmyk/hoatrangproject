@@ -1269,7 +1269,7 @@ void main() {
     cv.addEventListener('wheel', (e) => {
       e.preventDefault();
       const oldR = orbitTarget.r;
-      const newR = clamp(oldR * Math.exp(e.deltaY * 0.001), 120, 900);
+      const newR = clamp(oldR * Math.exp(e.deltaY * 0.001), 60, 900);
       orbitTarget.r = newR;
       // Zoom vào thì target camera dịch dần về điểm trên mặt bàn dưới
       // con trỏ, để zoom được vào góc board chứ không chỉ về tâm.
@@ -2114,7 +2114,7 @@ void main() {
     if (isSel) {
       for (const [end, p] of [['a', a], ['b', b]]) {
         const knob = new THREE.Mesh(
-          new THREE.SphereGeometry(2.6, 14, 14),
+          new THREE.SphereGeometry(1.8, 14, 14),
           new THREE.MeshBasicMaterial({ color: 0x059669 }));
         knob.position.set(p.x, p.y + 2, p.z);
         knob.userData = { wireId: wire.id, wireEnd: end };
