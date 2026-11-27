@@ -1,7 +1,7 @@
 // test-pic16.mjs — Kiểm thử xác định cho lõi pic16.js (KHÔNG đưa vào public/).
 // Chạy: node test-pic16.mjs   (exit 0 = tất cả pass)
 import { readFileSync } from 'node:fs';
-import { assemble, createCPU, parseIntelHex, exportHex, disassemble, ProgramRunner, cyclesForElapsedMs, LCD, applySolvedVoltages, configFoscMode } from './public/pic16.js';
+import { assemble, createCPU, parseIntelHex, exportHex, disassemble, ProgramRunner, cyclesForElapsedMs, LCD, applySolvedVoltages, configFoscMode, cpuStateSnapshot } from './public/pic16.js';
 import { defaultNetlist, resolvePeripherals, checkWiring, ledStates, buzzerStates, sevenSegStates, SEVEN_SEG_TERMS, applyButtonToCpu, applyPotToCpu, applyKeypadToCpu, KEYPAD_KEYS, PIC_PINS, netLevel } from './public/wiring.js';
 import { PITCH, SEGMENT_GAP_MM, rowZ, HOLE_RADIUS, HOLE_HEIGHT, HOLE_TOP_ABOVE_BOARD, holeCenterY, depthPrecisionAt, MAX_CAMERA_DISTANCE, SEGMENT_LINE_WIDTH_MM, segmentBoundaries, allHoles, stripKey, parseHole, holePos, holeId, rowLabel, rowIndexFromLabel, migrateOldHoleId, picLegs, picLegsForAnchor, picAnchor, legsFor, canPlace, buildBenchNets, benchToNetlist, defaultBenchState, sanitizeState, boardSize, picCol, picRows, picBodyDepth, picBodyDepthForRows, bodyDepth, pruneStateForSize, validateWireEnd, retargetWireEnd, togglePlacement, normalizeSize, holeCount, sizeLabel, sameSize, compLabel, nextComponentId, defaultProps, psuVolts, validatePsuVolts, parsePsuPost, psuPostPos, PSU_SCALE, PSU_POST_DX, PSU_POST_Y, PSU_POST_DZ, parseScopePost, scopePostPos, SCOPE_POST_DX, SCOPE_POST_Y, SCOPE_POST_DZ, SCOPE_DEFAULT_TX, SCOPE_DEFAULT_TZ, parseSerialPost, serialPostPos, SERIAL_POST_DX, SERIAL_POST_Y, SERIAL_POST_DZ, SERIAL_DEFAULT_TX, SERIAL_DEFAULT_TZ, normalizeWireEnd, clampCamTarget, zoomTowardPoint, panTarget, meterMode, crystalFreq, crystalFreqOf, CRYSTAL_FREQS, cleanNewProps } from './public/bench-model.js';
 import { LABS, getLab, buildLabState } from './public/labs.js';
@@ -7358,6 +7358,184 @@ SEND_BYTE
     benchSrc.includes('id="inspPotNum"') && benchSrc.includes('applyPotPct')
     && benchSrc.includes('potNum.addEventListener') && benchSrc.includes('potRange.value = String(pct)')
     && benchSrc.includes('potNum.value = String(pct)'), '');
+}
+
+// ===========================================================================
+// Panel "Thanh ghi" (tab Nạp viết code, Điệp yêu cầu 27/11 15:24):
+// cpuStateSnapshot (pic16.js) đọc trạng thái CPU thật; app.js bridge
+// getCpuState() trả nó; bench.js renderCpuPanel() vẽ panel + cập nhật theo
+// nhịp poll 150ms (refreshCodeStatus). Lõi test trực tiếp từ CPU + runner
+// thật; bridge/UI (dùng window/DOM) kiểm tra bằng chuỗi nguồn như P2.
+// ===========================================================================
+{
+  const readSrc = (p) => readFileSync(new URL(p, import.meta.url), 'utf8');
+  const appSrc = readSrc('./public/app.js');
+  const benchSrc = readSrc('./public/bench.js');
+  const benchHtml = readSrc('./public/thuc-hanh/pic16f877a/index.html');
+  const stylesSrc = readSrc('./public/styles.css');
+
+  // (cp-a) Trạng thái reset: CPU mới + runner null -> đủ trường, số 0,
+  // STATUS reset 0x18 (TO=1, PD=1, còn lại 0), PORT/TRIS mặc định.
+  {
+    const cpu = createCPU();
+    const s = cpuStateSnapshot(cpu, null);
+    check('(cp-a) cpuStateSnapshot: đủ trường (w/status/pcl/pc/fsr/pclath/ports/tmr0/optionReg/intcon/cycles/stackDepth/state/sleeping/clockHz/hasProgram)',
+      s && typeof s.w === 'number' && typeof s.status === 'number' && typeof s.pcl === 'number'
+      && typeof s.pc === 'number' && typeof s.fsr === 'number' && typeof s.pclath === 'number'
+      && s.ports && s.ports.A && s.ports.B && s.ports.C && s.ports.D && s.ports.E
+      && typeof s.tmr0 === 'number' && typeof s.optionReg === 'number' && typeof s.intcon === 'number'
+      && typeof s.cycles === 'number' && typeof s.stackDepth === 'number' && typeof s.state === 'string'
+      && typeof s.sleeping === 'boolean' && typeof s.clockHz === 'number' && typeof s.hasProgram === 'boolean',
+      JSON.stringify(Object.keys(s || {})));
+    check('(cp-a) CPU mới: w=0, pc=0, cycles=0, stackDepth=0, hasProgram=false, state=idle, sleeping=false',
+      s.w === 0 && s.pc === 0 && s.cycles === 0 && s.stackDepth === 0 && s.hasProgram === false
+      && s.state === 'idle' && s.sleeping === false && s.clockHz === 4000000, JSON.stringify(s));
+    check('(cp-a) STATUS reset 0x18: TO=1, PD=1, C/DC/Z/RP0/RP1/IRP=0',
+      s.status === 0x18 && s.statusFlags.TO === true && s.statusFlags.PD === true
+      && s.statusFlags.C === false && s.statusFlags.DC === false && s.statusFlags.Z === false
+      && s.statusFlags.RP0 === false && s.statusFlags.RP1 === false && s.statusFlags.IRP === false,
+      `status=0x${s.status.toString(16)} flags=${JSON.stringify(s.statusFlags)}`);
+    check('(cp-a) TRIS mặc định [0x3f,0xff,0xff,0xff,0x07]; số bit PORTA=6, PORTB=8, PORTE=3',
+      s.ports.A.tris === 0x3f && s.ports.B.tris === 0xff && s.ports.C.tris === 0xff
+      && s.ports.D.tris === 0xff && s.ports.E.tris === 0x07
+      && s.ports.A.bits === 6 && s.ports.B.bits === 8 && s.ports.C.bits === 8
+      && s.ports.D.bits === 8 && s.ports.E.bits === 3, JSON.stringify(s.ports));
+  }
+
+  // (cp-b) Chạy code Lab 1 thật qua ProgramRunner: cycles tăng, PC khác 0,
+  // state='running', RB0=1 (đang trong nhịp 500ms đầu), TRISB=0.
+  {
+    const { state } = buildLabState(LABS[0]);
+    const mapping = resolvePeripherals(benchToNetlist(state));
+    const c = compileC(LABS[0].code);
+    const cpu = createCPU();
+    cpu.setWiring(mapping);
+    const runner = new ProgramRunner(cpu);
+    const loaded = runner.loadAsm(c.asm);
+    const ran = runner.run();
+    runner.tick(200000);
+    const s = cpuStateSnapshot(cpu, runner);
+    check('(cp-b) Lab 1 qua runner: nạp + chạy ok, cycles≈200000, state=running, hasProgram=true',
+      c.ok && loaded.ok && ran.ok && s.hasProgram === true && s.state === 'running'
+      && s.cycles >= 200000 && s.cycles <= 200010, `cycles=${s.cycles} state=${s.state}`);
+    check('(cp-b) Lab 1 sau 200k chu kỳ: PC khác 0, PCL = byte thấp của PC, RB0=1, TRISB=0',
+      s.pc !== 0 && s.pcl === (s.pc & 0xff) && (s.ports.B.port & 1) === 1 && s.ports.B.tris === 0,
+      `pc=0x${s.pc.toString(16)} pcl=0x${s.pcl.toString(16)} PORTB=0x${s.ports.B.port.toString(16)} TRISB=0x${s.ports.B.tris.toString(16)}`);
+    check('(cp-b) simTimeUs khớp cycles @4MHz (200k cycles = 200ms)',
+      Math.abs(s.simTimeUs - 200000) < 100, `simTimeUs=${s.simTimeUs}`);
+  }
+
+  // (cp-c) PORTB đổi theo code: RB0=1 thì port bit0=1, RB0=0 thì bit0=0.
+  {
+    const runRB0 = (val) => {
+      const { r, cpu } = runC(`void main(){ TRISB = 0; RB0 = ${val}; while(1){} }`, 2000);
+      return { r, s: cpuStateSnapshot(cpu, null) };
+    };
+    const on = runRB0(1);
+    const off = runRB0(0);
+    check('(cp-c) RB0=1: snapshot PORTB bit0=1, TRISB=0',
+      on.r.ok && (on.s.ports.B.port & 1) === 1 && on.s.ports.B.tris === 0,
+      `PORTB=0x${on.s.ports.B.port.toString(16)}`);
+    check('(cp-c) RB0=0: snapshot PORTB bit0=0',
+      off.r.ok && (off.s.ports.B.port & 1) === 0,
+      `PORTB=0x${off.s.ports.B.port.toString(16)}`);
+  }
+
+  // (cp-d) Ngăn xếp: CALL -> stackDepth=1, RETURN -> stackDepth=0.
+  {
+    const cpu = createCPU();
+    const r = assemble(`CALL SUB
+LOOP
+    GOTO LOOP
+SUB
+    RETURN`);
+    cpu.loadProgram(r.program);
+    cpu.step(); // CALL SUB
+    const s1 = cpuStateSnapshot(cpu, null);
+    cpu.step(); // RETURN
+    const s2 = cpuStateSnapshot(cpu, null);
+    check('(cp-d) CALL: stackDepth=1; RETURN: stackDepth=0',
+      r.errors.length === 0 && s1.stackDepth === 1 && s2.stackDepth === 0,
+      `after CALL sp=${s1.stackDepth}, after RETURN sp=${s2.stackDepth}, errors=${JSON.stringify(r.errors)}`);
+  }
+
+  // (cp-e) Cờ STATUS giải mã đúng: ghi trực tiếp STATUS rồi đọc lại.
+  {
+    const cpu = createCPU();
+    cpu.writeSFR('STATUS', 0b00000101); // C=1, Z=1
+    const s1 = cpuStateSnapshot(cpu, null);
+    cpu.writeSFR('STATUS', 0b11111000); // RP0/RP1/IRP/TO/PD=1, C/DC/Z=0
+    const s2 = cpuStateSnapshot(cpu, null);
+    check('(cp-e) STATUS=0b00000101: C=1, Z=1, DC/RP0/RP1/IRP/TO/PD=0',
+      s1.status === 0x05 && s1.statusFlags.C === true && s1.statusFlags.Z === true
+      && s1.statusFlags.DC === false && s1.statusFlags.RP0 === false && s1.statusFlags.RP1 === false
+      && s1.statusFlags.IRP === false && s1.statusFlags.TO === false && s1.statusFlags.PD === false,
+      JSON.stringify(s1.statusFlags));
+    check('(cp-e) STATUS=0b11111000: RP0/RP1/IRP/TO/PD=1, C/DC/Z=0',
+      s2.status === 0xf8 && s2.statusFlags.RP0 === true && s2.statusFlags.RP1 === true
+      && s2.statusFlags.IRP === true && s2.statusFlags.TO === true && s2.statusFlags.PD === true
+      && s2.statusFlags.C === false && s2.statusFlags.DC === false && s2.statusFlags.Z === false,
+      JSON.stringify(s2.statusFlags));
+  }
+
+  // (cp-f) SLEEP: lệnh SLEEP -> sleeping=true, state='sleep'.
+  {
+    const cpu = createCPU();
+    const r = assemble('SLEEP');
+    cpu.loadProgram(r.program);
+    cpu.step();
+    const s = cpuStateSnapshot(cpu, null);
+    check('(cp-f) SLEEP: sleeping=true, state=sleep',
+      r.errors.length === 0 && s.sleeping === true && s.state === 'sleep', `sleeping=${s.sleeping} state=${s.state}`);
+  }
+
+  // (cp-g) Không có thạch anh: đã nạp mà clockHz=0 -> state='no-crystal'.
+  {
+    const cpu = createCPU();
+    const runner = new ProgramRunner(cpu);
+    const loaded = runner.loadAsm('NOP');
+    cpu.clockHz = 0;
+    const s = cpuStateSnapshot(cpu, runner);
+    check('(cp-g) clockHz=0 sau khi nạp: state=no-crystal, hasProgram=true',
+      loaded.ok && s.state === 'no-crystal' && s.hasProgram === true, `state=${s.state} clockHz=${s.clockHz}`);
+  }
+
+  // (cp-h) INTCON + OPTION_REG + TMR0 đọc đúng; prescaler giải mã đúng.
+  {
+    const cpu = createCPU();
+    cpu.writeSFR('INTCON', 0xa0); // GIE=1, TMR0IE=1
+    cpu.writeSFR('OPTION_REG', 0x07); // PS=111, PSA=0 -> 1:256
+    cpu.writeSFR('TMR0', 0x42);
+    const s1 = cpuStateSnapshot(cpu, null);
+    cpu.writeSFR('OPTION_REG', 0x0f); // PSA=1 -> prescaler gán cho WDT
+    const s2 = cpuStateSnapshot(cpu, null);
+    check('(cp-h) INTCON=0xA0: GIE=1, TMR0IE=1, PEIE/INTE/RBIE/TMR0IF/INTF/RBIF=0; TMR0=0x42',
+      s1.intcon === 0xa0 && s1.intconFlags.GIE === true && s1.intconFlags.TMR0IE === true
+      && s1.intconFlags.PEIE === false && s1.intconFlags.INTE === false && s1.intconFlags.RBIE === false
+      && s1.intconFlags.TMR0IF === false && s1.intconFlags.INTF === false && s1.intconFlags.RBIF === false
+      && s1.tmr0 === 0x42, `intcon=0x${s1.intcon.toString(16)} tmr0=0x${s1.tmr0.toString(16)}`);
+    check('(cp-h) OPTION_REG=0x07 (PS=111, PSA=0): prescaler 1:256; OPTION_REG=0x0F (PSA=1): gán cho WDT',
+      s1.optionReg === 0x07 && s1.tmr0Prescaler === '1:256'
+      && s2.optionReg === 0x0f && s2.tmr0Prescaler.includes('WDT'),
+      `opt1=${s1.tmr0Prescaler} opt2=${s2.tmr0Prescaler}`);
+  }
+
+  // (cp-i) Bridge app.js: getCpuState() gọi cpuStateSnapshot(cpu, runner).
+  check('(cp-i) app.js: bridge có getCpuState() gọi cpuStateSnapshot(cpu, runner)',
+    appSrc.includes('getCpuState: () => cpuStateSnapshot(cpu, runner)')
+    && appSrc.includes('cpuStateSnapshot } from'), '');
+  // (cp-j) UI bench.js + HTML + CSS: panel #benchCpuPanel, renderCpuPanel
+  // nối vào refreshCodeStatus (poll 150ms + sau mỗi nút bấm), vẽ đủ 4 nhóm.
+  check('(cp-j) bench.js: renderCpuPanel + cpuPanelHtml + hook vào refreshCodeStatus, hiện đủ 4 nhóm (Thanh ghi chính/Cổng I/O/Timer/Thực thi)',
+    benchSrc.includes('function renderCpuPanel()') && benchSrc.includes('function cpuPanelHtml(st)')
+    && benchSrc.includes('renderCpuPanel();') && benchSrc.includes('getCpuState')
+    && benchSrc.includes('Thanh ghi chính') && benchSrc.includes('Cổng I/O')
+    && benchSrc.includes('Timer / Ngắt') && benchSrc.includes('Thực thi')
+    && benchSrc.includes('Chưa nạp chương trình.'), '');
+  check('(cp-j) index.html: có div #benchCpuPanel trong tab code; styles.css: có .cpu-panel/.cpu-flag/.cpu-num',
+    benchHtml.includes('id="benchCpuPanel"') && benchHtml.includes('class="cpu-panel"')
+    && stylesSrc.includes('.cpu-panel') && stylesSrc.includes('.cpu-flag')
+    && stylesSrc.includes('.cpu-flag.on') && stylesSrc.includes('.cpu-num'), '');
 }
 
 console.log(`\nKết quả: ${pass} pass, ${fail} fail`);

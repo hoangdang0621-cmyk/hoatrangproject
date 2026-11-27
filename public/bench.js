@@ -399,6 +399,7 @@ function main() {
   const codeInput = $('benchCodeInput');
   const codeGutter = $('benchCodeGutter');
   const codeStatusEl = $('benchCodeStatus');
+  const cpuPanelEl = $('benchCpuPanel');
   const hexFileInput = $('benchHexFile');
   const CODE_LS_KEY = 'hoatrang-code-v1';
   // Code C mẫu dự phòng nếu bridge chưa có (app.js luôn có).
@@ -421,6 +422,7 @@ void main() {
   let codeLineToAddr = new Map();    // dòng -> địa chỉ (lần dịch gần nhất)
   let codeLoaded = false;            // đã nạp chương trình từ editor chưa
   let codeStatusSig = '';
+  let cpuPanelSig = '';              // chữ ký trạng thái CPU của panel Thanh ghi
   let codeSaveTimer = null;
   // _XTAL_FREQ của code vừa nạp thành công (để renderChecks cảnh báo khi
   // thạch anh trên bàn lệch với code) + cờ lần nạp gần nhất thiếu thạch
@@ -597,6 +599,11 @@ void main() {
   // thông báo lỗi dịch vừa hiện.
   function refreshCodeStatus(force = false) {
     if (!codeInitDone || !codeStatusEl) return;
+    // Panel "Thanh ghi" cập nhật cùng nhịp poll 150ms + ngay sau mỗi nút
+    // bấm (các nút đều gọi refreshCodeStatus(true)). Đặt TRƯỚC chữ ký
+    // trạng thái chạy: panel phải đổi cả khi PC/dòng không đổi (vd bấm
+    // nút trên bàn làm mức PORT đổi trong lúc chương trình đang dừng).
+    renderCpuPanel();
     const b = bridge();
     if (!b || typeof b.getRunStatus !== 'function') return;
     const st = b.getRunStatus();
@@ -646,6 +653,77 @@ void main() {
       if (y < top || y > bottom - lineH) codeInput.scrollTop = Math.max(0, y - codeInput.clientHeight / 3);
       codeGutter.scrollTop = codeInput.scrollTop;
     }
+  }
+
+  // --- Panel "Thanh ghi": trạng thái CPU trực tiếp (tab Nạp viết code) ---
+  // Chỉ vẽ lại khi chữ ký trạng thái đổi (poll 150ms gọi liên tục, và
+  // refreshCodeStatus(true) gọi ngay sau mỗi nút bấm). Chưa nạp chương
+  // trình thì hiện "Chưa nạp chương trình.", không hiện số 0 giả.
+  // Giá trị lấy từ bridge getCpuState() (CPU thật, xem cpuStateSnapshot
+  // trong pic16.js); số hiển thị dạng HEX, PORT/TRIS thêm nhị phân.
+  const CPU_STATE_LABEL = {
+    idle: 'Đã nạp — chưa chạy', running: 'Đang chạy', paused: 'Đã dừng',
+    sleep: 'SLEEP', 'no-crystal': 'Chờ thạch anh', reset: 'Giữ reset',
+  };
+  function cpuHex(v, digits = 2) {
+    return '0x' + (v & ((1 << (digits * 4)) - 1)).toString(16).toUpperCase().padStart(digits, '0');
+  }
+  function cpuBin(v, bits) {
+    return '0b' + (v & ((1 << bits) - 1)).toString(2).padStart(bits, '0');
+  }
+  function cpuFlagsHtml(flags) {
+    return Object.entries(flags).map(([k, on]) =>
+      `<span class="cpu-flag${on ? ' on' : ''}">${k}</span>`).join('');
+  }
+  function cpuSimTime(us) {
+    if (!Number.isFinite(us) || us <= 0) return '0 µs';
+    if (us >= 1e6) return (us / 1e6).toFixed(3) + ' s';
+    if (us >= 1000) return (us / 1000).toFixed(3) + ' ms';
+    return Math.round(us) + ' µs';
+  }
+  function cpuPanelHtml(st) {
+    const portRows = ['A', 'B', 'C', 'D', 'E'].map((L) => {
+      const p = st.ports[L];
+      return `<tr><td>PORT${L}</td><td class="cpu-num">${cpuHex(p.port)}</td><td class="cpu-num">${cpuBin(p.port, p.bits)}</td><td class="cpu-num">${cpuHex(p.tris)}</td><td class="cpu-num">${cpuBin(p.tris, p.bits)}</td></tr>`;
+    }).join('');
+    return `<h2 class="cpu-panel-h">Thanh ghi <span class="cpu-state st-${st.state}">${CPU_STATE_LABEL[st.state] || st.state}</span></h2>
+  <h3 class="cpu-sec">Thanh ghi chính</h3>
+  <table class="cpu-table"><tbody>
+    <tr><td>W</td><td class="cpu-num">${cpuHex(st.w)}</td><td>STATUS</td><td class="cpu-num">${cpuHex(st.status)}</td></tr>
+    <tr><td>PCL</td><td class="cpu-num">${cpuHex(st.pcl)}</td><td>PC</td><td class="cpu-num">${cpuHex(st.pc, 4)}</td></tr>
+    <tr><td>FSR</td><td class="cpu-num">${cpuHex(st.fsr)}</td><td>PCLATH</td><td class="cpu-num">${cpuHex(st.pclath)}</td></tr>
+  </tbody></table>
+  <div class="cpu-flags"><span class="cpu-flags-label">STATUS:</span>${cpuFlagsHtml(st.statusFlags)}</div>
+  <h3 class="cpu-sec">Cổng I/O</h3>
+  <table class="cpu-table"><thead><tr><th>Cổng</th><th>PORT</th><th>Nhị phân</th><th>TRIS</th><th>Nhị phân</th></tr></thead><tbody>${portRows}</tbody></table>
+  <p class="sub cpu-note">TRIS: 1 = input, 0 = output.</p>
+  <h3 class="cpu-sec">Timer / Ngắt</h3>
+  <table class="cpu-table"><tbody>
+    <tr><td>TMR0</td><td class="cpu-num">${cpuHex(st.tmr0)}</td><td>OPTION_REG</td><td class="cpu-num">${cpuHex(st.optionReg)}</td></tr>
+    <tr><td>Prescaler TMR0</td><td class="cpu-num" colspan="3">${st.tmr0Prescaler}</td></tr>
+    <tr><td>INTCON</td><td class="cpu-num">${cpuHex(st.intcon)}</td><td></td><td></td></tr>
+  </tbody></table>
+  <div class="cpu-flags"><span class="cpu-flags-label">INTCON:</span>${cpuFlagsHtml(st.intconFlags)}</div>
+  <h3 class="cpu-sec">Thực thi</h3>
+  <table class="cpu-table"><tbody>
+    <tr><td>Chu kỳ lệnh</td><td class="cpu-num">${st.cycles.toLocaleString('en-US')}</td><td>Thời gian mô phỏng</td><td class="cpu-num">${cpuSimTime(st.simTimeUs)}</td></tr>
+    <tr><td>Ngăn xếp</td><td class="cpu-num">${st.stackDepth} / 8</td><td>Xung nhịp</td><td class="cpu-num">${st.clockHz ? (st.clockHz / 1e6) + ' MHz' : '—'}</td></tr>
+  </tbody></table>`;
+  }
+  function renderCpuPanel() {
+    if (!cpuPanelEl) return;
+    const b = bridge();
+    const st = (b && typeof b.getCpuState === 'function') ? b.getCpuState() : null;
+    if (!st || !st.hasProgram) {
+      if (cpuPanelSig === 'none') return;
+      cpuPanelSig = 'none';
+      cpuPanelEl.innerHTML = '<h2 class="cpu-panel-h">Thanh ghi</h2><p class="sub">Chưa nạp chương trình.</p>';
+      return;
+    }
+    const sig = JSON.stringify(st);
+    if (sig === cpuPanelSig) return;
+    cpuPanelSig = sig;
+    cpuPanelEl.innerHTML = cpuPanelHtml(st);
   }
   function initCodeTab() {
     if (codeInitDone || !codeInput) return;

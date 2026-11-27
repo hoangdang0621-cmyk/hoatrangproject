@@ -3,14 +3,14 @@
 // chưa nạp chương trình nào; code mẫu nằm sẵn trong tab "Nạp viết code",
 // người dùng bấm "Nạp & chạy" thì chip mới chạy. ProgramRunner điều khiển
 // chạy/tạm dừng/chạy từng lệnh/breakpoint.
-import { createCPU, ProgramRunner, cyclesForElapsedMs, applySolvedVoltages, parsePicPinId } from './pic16.js?v=20261125bp';
+import { createCPU, ProgramRunner, cyclesForElapsedMs, applySolvedVoltages, parsePicPinId, cpuStateSnapshot } from './pic16.js?v=20261125br';
 import {
   resolvePeripherals, ledStates, buzzerStates, sevenSegStates,
   applyButtonToCpu, applyPotToCpu, applyKeypadToCpu,
 } from './wiring.js?v=20261125bp';
 import { defaultBenchState, benchToNetlist, crystalFreq } from './bench-model.js?v=20261125bp';
 import { meterReadings, motorReadings, scopeVoltages, pushScopeSample, SCOPE_MAX_SAMPLES, solveCircuit, serialWiringMap } from './circuit-solver.js?v=20261125bp';
-import { compileC } from './c-compiler.js?v=20261125bn';
+import { compileC } from './c-compiler.js?v=20261125br';
 
 const cpu = createCPU();
 cpu.clockHz = 4000000;
@@ -443,4 +443,10 @@ window.HoaTrangBenchBridge = {
   stepProgram: () => runner.stepOnce(),
   setBreakpointLines: (lines) => runner.setBreakpointLines(lines),
   getRunStatus: () => runner.getStatus(),
+  // Trạng thái CPU cho panel "Thanh ghi" (tab Nạp viết code): W, STATUS +
+  // từng cờ, PCL/PC, FSR, PCLATH, PORT/TRIS A–E, TMR0 + prescaler,
+  // INTCON + từng cờ ngắt, cycles, độ sâu ngăn xếp, trạng thái chạy.
+  // Đọc từ CPU thật qua cpuStateSnapshot (pic16.js); hasProgram=false
+  // khi chưa nạp chương trình (panel hiện "Chưa nạp chương trình.").
+  getCpuState: () => cpuStateSnapshot(cpu, runner),
 };

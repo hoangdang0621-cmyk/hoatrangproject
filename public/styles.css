@@ -301,6 +301,25 @@ button { cursor: pointer; }
 .bench-code-status { margin-top: 8px; }
 .bench-code-status.err { color: var(--color-destructive); font-weight: 600; }
 
+/* --- Panel "Thanh ghi": trạng thái CPU trực tiếp (tab Nạp viết code) --- */
+/* Nằm trong .bench-side (đã cuộn nội bộ) nên panel cứ chảy tự nhiên, không
+   cần cuộn riêng; nội dung gọn bằng bảng nhỏ + chip cờ. */
+.cpu-panel { margin-top: 12px; border: 1px solid var(--color-border); border-radius: 8px; background: var(--color-card); padding: 12px; }
+.cpu-panel-h { font-size: 1rem; display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-bottom: 4px; }
+.cpu-state { font-family: var(--font-body); font-size: 0.8rem; font-weight: 600; color: var(--color-muted-foreground); background: var(--color-muted); border-radius: 999px; padding: 2px 8px; white-space: nowrap; }
+.cpu-state.st-running { color: var(--color-on-accent); background: var(--color-accent); }
+.cpu-state.st-sleep, .cpu-state.st-no-crystal, .cpu-state.st-reset { color: #92400E; background: #FEF3C7; }
+.cpu-sec { font-size: 0.9rem; margin: 10px 0 4px; color: var(--color-primary); }
+.cpu-table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+.cpu-table td, .cpu-table th { padding: 2px 4px; text-align: left; border-bottom: 1px solid var(--color-border); }
+.cpu-table th { color: var(--color-muted-foreground); font-weight: 600; }
+.cpu-num { font-family: "Fira Code", monospace; text-align: right; white-space: nowrap; }
+.cpu-flags { display: flex; flex-wrap: wrap; gap: 4px; align-items: center; margin-top: 6px; font-size: 0.85rem; }
+.cpu-flags-label { color: var(--color-muted-foreground); font-weight: 600; }
+.cpu-flag { font-family: "Fira Code", monospace; font-size: 0.75rem; border: 1px solid var(--color-border); border-radius: 4px; padding: 1px 5px; color: var(--color-muted-foreground); background: var(--color-muted); }
+.cpu-flag.on { color: var(--color-on-accent); background: var(--color-accent); border-color: var(--color-accent); font-weight: 700; }
+.cpu-note { margin: 4px 0 0; font-size: 0.8rem; }
+
 /* Link quay ve trang chinh (thuc-hanh/). */
 .bench-back { display: inline-block; color: var(--color-primary); font-weight: 600; text-decoration: none; font-size: 14px; margin-bottom: 10px; }
 .bench-back:hover { text-decoration: underline; }

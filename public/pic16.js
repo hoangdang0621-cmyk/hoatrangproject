@@ -1750,6 +1750,78 @@ export class ProgramRunner {
   }
 }
 
+// --- Trạng thái CPU cho panel "Thanh ghi" (tab Nạp viết code) ---
+// Chỉ đọc từ CPU thật (readSFR/thuộc tính); không bịa số. runner null
+// thì hasProgram=false, state='idle'. Trả:
+// { w, status, statusFlags:{C,DC,Z,PD,TO,RP0,RP1,IRP}, pcl, pc, fsr,
+//   pclath, ports:{A:{port,tris,bits},B,C,D,E}, tmr0, optionReg,
+//   tmr0Prescaler, intcon,
+//   intconFlags:{GIE,PEIE,TMR0IE,INTE,RBIE,TMR0IF,INTF,RBIF},
+//   cycles, simTimeUs, stackDepth, state, sleeping, clockHz, hasProgram }
+// state: 'idle' (đã nạp, chưa chạy) | 'running' | 'paused' | 'sleep'
+// (lệnh SLEEP) | 'no-crystal' (đã nạp mà không có xung thạch anh) |
+// 'reset' (chip đang giữ reset: mất nguồn hoặc MCLR thấp). Số lệnh đã
+// thực thi KHÔNG có trong CPU (chỉ có cycles) nên không trả trường đó.
+export function cpuStateSnapshot(cpu, runner) {
+  const status = cpu.readSFR('STATUS');
+  const ports = {};
+  for (let i = 0; i < PORT_NAMES.length; i++) {
+    const letter = PORT_NAMES[i].slice(4);
+    ports[letter] = {
+      port: cpu.readSFR(PORT_NAMES[i]),
+      tris: cpu.readSFR('TRIS' + letter),
+      bits: PORT_BITS[i],
+    };
+  }
+  const option = cpu.readSFR('OPTION_REG');
+  const intcon = cpu.readSFR('INTCON');
+  const runSt = runner ? runner.getStatus() : null;
+  const hasProgram = !!(runSt && runSt.hasProgram);
+  let state = 'idle';
+  if (cpu.sleeping) state = 'sleep';
+  else if (cpu.isHeldInReset()) state = 'reset';
+  else if (hasProgram && (!Number.isFinite(cpu.clockHz) || cpu.clockHz <= 0)) state = 'no-crystal';
+  else if (runSt) state = runSt.state;
+  return {
+    w: cpu.w & 0xff,
+    status,
+    statusFlags: {
+      C: !!(status & 0x01), DC: !!(status & 0x02), Z: !!(status & 0x04),
+      PD: !!(status & 0x08), TO: !!(status & 0x10), RP0: !!(status & 0x20),
+      RP1: !!(status & 0x40), IRP: !!(status & 0x80),
+    },
+    pcl: cpu.readSFR('PCL'),
+    pc: cpu.pc & 0x1fff,
+    fsr: cpu.readSFR('FSR'),
+    pclath: cpu.readSFR('PCLATH'),
+    ports,
+    tmr0: cpu.readSFR('TMR0'),
+    optionReg: option,
+    tmr0Prescaler: tmr0PrescalerText(option),
+    intcon,
+    intconFlags: {
+      GIE: !!(intcon & 0x80), PEIE: !!(intcon & 0x40), TMR0IE: !!(intcon & 0x20),
+      INTE: !!(intcon & 0x10), RBIE: !!(intcon & 0x08), TMR0IF: !!(intcon & 0x04),
+      INTF: !!(intcon & 0x02), RBIF: !!(intcon & 0x01),
+    },
+    cycles: cpu.cycles,
+    simTimeUs: cpu.simTimeUs,
+    stackDepth: cpu.sp,
+    state,
+    sleeping: cpu.sleeping,
+    clockHz: cpu.clockHz,
+    hasProgram,
+  };
+}
+
+// OPTION_REG: PSA (bit 3) = 1 thì prescaler gán cho WDT (TMR0 chạy 1:1),
+// = 0 thì gán cho TMR0 với tỉ lệ theo PS2:PS0 (bit 0-2): 000=1:2, ...,
+// 111=1:256 (theo datasheet PIC16F877A).
+function tmr0PrescalerText(option) {
+  if ((option & 0x08) !== 0) return '1:1 (gán cho WDT)';
+  return '1:' + (2 << (option & 0x07));
+}
+
 export function createCPU() { return new PIC16F877A(); }
 
 // Áp trạng thái nguồn của chip từ kết quả solveCircuit (Issue 8): chip
