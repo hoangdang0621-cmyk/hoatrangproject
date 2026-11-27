@@ -3585,10 +3585,17 @@ void main() {
 
   // Deep-link ?lab=<id>: mở thẳng lab đó (trang Lý thuyết link tới lab
   // cụ thể, vd /thuc-hanh/pic16f877a/?lab=chay-tung-lenh). Id lạ thì bỏ
-  // qua, mở bàn như thường.
+  // qua, mở bàn như thường. ?from=<trang lý thuyết>: hiện nút quay lại
+  // đúng trang đó (chỉ chấp nhận đường dẫn nội bộ /ly-thuyet/...).
   try {
-    const deepLab = new URLSearchParams(location.search).get('lab');
+    const params = new URLSearchParams(location.search);
+    const deepLab = params.get('lab');
     if (deepLab && getLab(deepLab)) openLab(deepLab);
+    const from = params.get('from');
+    if (from && from.startsWith('/ly-thuyet/')) {
+      const backEl = document.getElementById('benchBackTheory');
+      if (backEl) { backEl.href = from; backEl.hidden = false; }
+    }
   } catch { /* URL lạ: bỏ qua */ }
 }
 
