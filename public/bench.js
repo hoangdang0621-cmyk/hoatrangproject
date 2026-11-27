@@ -307,11 +307,22 @@ void main() {
   // ngoài -> 20%. Tab Linh Kiện đang mở thì luôn 20%.
   document.addEventListener('pointerdown', (e) => {
     if (sideTab !== 'code' || !codeTabEl) return;
+    // Bấm nút trong tab code (Dừng, Nạp & chạy...): đừng mở rộng panel
+    // ngay — panel to lên (grid animate 250ms) làm nút dịch khỏi con trỏ
+    // nên click trượt, bấm phát đầu chỉ mở rộng mà không dừng/chạy được.
+    // Để click chạy xong rồi mới mở rộng (handler click bên dưới).
+    if (codeTabEl.contains(e.target) && e.target.closest('button')) return;
     setCodeWide(codeTabEl.contains(e.target));
   });
   document.addEventListener('focusin', (e) => {
     if (sideTab !== 'code' || !codeTabEl) return;
+    if (codeTabEl.contains(e.target) && e.target.closest('button')) return;
     setCodeWide(codeTabEl.contains(e.target));
+  });
+  // Bấm nút trong tab code: click (hành động của nút) đã chạy xong thì
+  // mới mở rộng panel — 1 lần bấm vừa dừng/chạy vừa mở rộng.
+  codeTabEl.addEventListener('click', (e) => {
+    if (e.target.closest('button')) setCodeWide(true);
   });
 
   // --- Tab "Bài Lab": list bài lab mẫu, bấm "Mở lab" để nạp mạch + code mẫu lên bàn ---

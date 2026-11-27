@@ -106,12 +106,16 @@ button { cursor: pointer; }
 .bench-side {
   background: var(--color-card); border-right: 1px solid var(--color-border);
   padding: var(--space-md) var(--space-md) var(--space-lg);
-  overflow-y: auto; min-width: 0;
+  /* min-height: 0 để panel co lại trong viewport và cuộn nội bộ thay vì
+     đẩy cả grid cao quá màn hình (khi tab Linh Kiện dài hơn màn hình thì
+     panel không cuộn được và chân Inspector — nút Xoá — bị đẩy xuống dưới
+     nếp gấp, không nhìn thấy dù đã dừng code). */
+  overflow-y: auto; min-width: 0; min-height: 0;
 }
 .bench-side h2 { font-size: 1.05rem; margin-bottom: var(--space-sm); }
 .bb-side-h { margin-top: var(--space-lg); }
 .bench-main {
-  display: flex; flex-direction: column; min-width: 0;
+  display: flex; flex-direction: column; min-width: 0; min-height: 0;
   padding: var(--space-md) var(--space-lg) var(--space-lg); gap: var(--space-sm);
 }
 .bench-main h1 { font-size: 1.2rem; }
