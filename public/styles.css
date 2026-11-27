@@ -103,6 +103,13 @@ button { cursor: pointer; }
 }
 /* Tab code đang bấm vào phần code: panel trái tự to lên 40%, bàn còn 60%. */
 .bench-page.code-wide { grid-template-columns: minmax(260px, 40%) minmax(0, 60%); }
+/* Tab Bài Lab: ẩn hẳn bàn thực hành 3D, panel trái trải full chiều rộng,
+   các card lab xếp lưới 4 cột, trải đều. */
+.bench-page.labs-full { grid-template-columns: 1fr; }
+.bench-page.labs-full .bench-main { display: none; }
+.bench-page.labs-full .bench-side { border-right: none; }
+.bench-page.labs-full #benchLabList { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: var(--space-md); }
+.bench-page.labs-full .bench-lab { margin-bottom: 0; min-height: 120px; }
 .bench-side {
   background: var(--color-card); border-right: 1px solid var(--color-border);
   padding: var(--space-md) var(--space-md) var(--space-lg);

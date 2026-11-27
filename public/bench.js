@@ -318,6 +318,9 @@ void main() {
     if (selected) select(null);
     // Chuyển tab thì panel về 20%; chỉ bấm vào phần code mới to lên 40%.
     setCodeWide(false);
+    // Tab Bài Lab: ẩn hẳn bàn thực hành 3D, panel trái trải full chiều
+    // rộng, các card lab xếp lưới 4 cột (xem CSS .bench-page.labs-full).
+    benchView.classList.toggle('labs-full', tab === 'labs');
     if (tab === 'code') initCodeTab();
     if (tab === 'labs') renderLabList();
   }
