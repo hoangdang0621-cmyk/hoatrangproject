@@ -1,0 +1,120 @@
+/* chuong.css — style chung cho các trang chương (Lý thuyết / Kỹ Thuật Vi Xử Lý).
+   Ngôn ngữ thiết kế thống nhất: nền #F8FAFC, hộp navy #1E3A5F, accent #059669,
+   chữ Fira Sans, code Fira Code. Dùng kèm /landing.css (header, hero, nút back). */
+
+.lesson{max-width:860px;margin:0 auto;padding:0 4px 32px}
+.lesson h2{color:#1E3A5F;font-size:26px;margin:36px 0 12px}
+.lesson h3{color:#1E3A5F;font-size:20px;margin:28px 0 10px}
+.lesson h4{color:#1E3A5F;font-size:17px;margin:22px 0 8px}
+.lesson p{line-height:1.75;font-size:16px;color:#1F2937;margin:0 0 12px}
+.lesson ul,.lesson ol{line-height:1.75;font-size:16px;color:#1F2937}
+.lesson code{font-family:"Fira Code",monospace;background:#F1F5F9;padding:1px 5px;border-radius:4px;font-size:14px}
+.lesson figure{margin:24px 0;text-align:center}
+.lesson figcaption{font-size:14px;color:#64748B;margin-top:8px}
+.lesson strong{color:#1F2937}
+
+/* Thuật ngữ cốt lõi: in đậm + màu accent (chỉ dùng cho khái niệm then chốt). */
+.term{font-weight:700;color:#047857}
+
+/* Định nghĩa/khái niệm cốt lõi mở đầu mỗi mục — nhìn vào là thấy ngay ý chính.
+   Dòng dẫn riêng, chữ lớn hơn một chút, nền xanh lá nhạt, viền accent trái. */
+.key-def{
+  border:1px solid #A7F3D0;border-left:5px solid #059669;background:#ECFDF5;
+  border-radius:8px;padding:14px 18px;margin:16px 0 20px;
+  font-size:17px;line-height:1.7;color:#1F2937;
+}
+.key-def .term{font-size:17px}
+.key-def p{margin:0}
+.key-def p + p{margin-top:6px}
+
+/* Ý chính dạng gạch đầu dòng ngắn (dùng khi định nghĩa có nhiều ý). */
+.key-def ul{margin:6px 0 0;padding-left:20px}
+.key-def li{margin:2px 0}
+
+/* Hộp lưu ý / liên hệ thực hành (link sang bench). */
+.callout{border:1px solid #059669;border-left:4px solid #059669;background:#ECFDF5;border-radius:8px;padding:14px 18px;margin:20px 0}
+.callout a{color:#047857;font-weight:600}
+
+/* Sơ đồ hộp/mũi tên đơn giản (HTML/CSS): Đầu vào → Quá trình → Đầu ra. */
+.sys-diagram{display:flex;align-items:stretch;justify-content:center;gap:0;flex-wrap:wrap;margin:20px 0 4px}
+.sys-box{border:2px solid #1E3A5F;border-radius:8px;padding:14px 18px;font-weight:600;color:#1E3A5F;background:#fff;text-align:center;min-width:120px}
+.sys-box small{display:block;font-weight:400;font-size:14px;margin-top:4px}
+.sys-arrow{display:flex;align-items:center;padding:0 10px;font-size:22px;color:#059669;font-weight:700}
+.sys-mem{display:flex;flex-direction:column;align-items:center}
+.sys-v-arrow{font-size:20px;color:#059669;font-weight:700;line-height:1.4}
+.fig-caption{font-size:14px;color:#64748B;margin-top:8px;text-align:center}
+
+/* Sơ đồ SVG thống nhất: nền trắng, khung navy, khối accent, mũi tên xanh lá. */
+.diagram{background:#fff;border:1px solid #E2E8F0;border-radius:12px;padding:16px 8px 8px;margin:20px 0}
+.diagram svg{display:block;max-width:100%;height:auto;margin:0 auto}
+.diagram .d-box{fill:#fff;stroke:#1E3A5F;stroke-width:2}
+.diagram .d-box-navy{fill:#1E3A5F;stroke:#1E3A5F;stroke-width:2}
+.diagram .d-box-green{fill:#ECFDF5;stroke:#059669;stroke-width:2}
+.diagram .d-box-blue{fill:#EFF6FF;stroke:#2563EB;stroke-width:2}
+.diagram .d-box-amber{fill:#FFFBEB;stroke:#D97706;stroke-width:2}
+.diagram .d-title{fill:#1E3A5F;font-weight:700;font-size:15px;text-anchor:middle;font-family:"Fira Sans",sans-serif}
+.diagram .d-label{fill:#1F2937;font-size:13.5px;text-anchor:middle;font-family:"Fira Sans",sans-serif}
+.diagram .d-label-l{fill:#1F2937;font-size:13.5px;font-family:"Fira Sans",sans-serif}
+.diagram .d-small{fill:#64748B;font-size:12px;text-anchor:middle;font-family:"Fira Sans",sans-serif}
+.diagram .d-num{fill:#059669;font-weight:700;font-size:13px;text-anchor:middle;font-family:"Fira Code",monospace}
+.diagram .d-arrow{stroke:#059669;stroke-width:2;fill:none}
+.diagram .d-arrow-dark{stroke:#1E3A5F;stroke-width:2;fill:none}
+.diagram .d-wire{stroke:#334155;stroke-width:1.6;fill:none}
+.diagram .d-bus{stroke:#1E3A5F;stroke-width:3;fill:none}
+.diagram .d-hl{stroke:#059669;stroke-width:3;fill:none}
+.diagram .d-hl-box{fill:#D1FAE5;stroke:#059669;stroke-width:2.5}
+
+/* Thẻ chip thống nhất (SVG DIP + tên + năm + thông số). */
+.fig-row{display:flex;gap:16px;justify-content:center;flex-wrap:wrap;margin:24px 0}
+.fig-row figure{flex:1 1 220px;max-width:380px;margin:0}
+.chip-card{background:#fff;border:1px solid #E2E8F0;border-radius:12px;padding:18px 12px 12px;text-align:center}
+.chip-card svg{display:block;margin:0 auto}
+.chip-card .chip-name{font-weight:700;color:#1E3A5F;font-size:16px;margin-top:10px}
+.chip-card .chip-year{color:#059669;font-weight:600;font-size:13px;margin-top:2px}
+.chip-card .chip-spec{color:#64748B;font-size:13px;line-height:1.6;margin-top:6px}
+.chip-card .chip-spec b{color:#1F2937}
+
+/* Bảng (cuộn ngang trên điện thoại). */
+.table-wrap{overflow-x:auto;margin:16px 0}
+.lesson table{border-collapse:collapse;width:100%;font-size:15px;min-width:520px}
+.lesson th,.lesson td{border:1px solid #CBD5E1;padding:8px 10px;text-align:left;vertical-align:top}
+.lesson th{background:#F1F5F9;color:#1E3A5F}
+.lesson td code{font-size:13px}
+/* Bảng đối chiếu: cột đầu (khái niệm) nổi bật. */
+.lesson table.compare td:first-child{font-weight:600;color:#1E3A5F;white-space:nowrap}
+
+/* 4 pha Fetch–Decode–Execute–Write back: 4 bước ngang. */
+.phase-flow{display:flex;align-items:stretch;justify-content:center;gap:0;flex-wrap:wrap;margin:20px 0}
+.phase{flex:1 1 150px;min-width:140px;max-width:200px;border:2px solid #1E3A5F;border-radius:10px;padding:12px 10px;text-align:center;background:#fff}
+.phase .phase-num{display:inline-block;background:#059669;color:#fff;font-weight:700;font-size:13px;border-radius:999px;padding:2px 10px;margin-bottom:6px}
+.phase .phase-name{font-weight:700;color:#1E3A5F;font-size:16px}
+.phase .phase-en{color:#64748B;font-size:13px;font-style:italic}
+.phase .phase-desc{font-size:13.5px;color:#1F2937;line-height:1.55;margin-top:6px;text-align:left}
+
+/* Điều hướng trang (prev/next + chỉ số + mini mục lục). */
+.page-nav{max-width:860px;margin:0 auto;padding:24px 4px 8px;border-top:1px solid #E2E8F0}
+.page-nav-top{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap}
+.page-nav a{color:#2563EB;text-decoration:none;font-size:15px}
+.page-nav a:hover{text-decoration:underline}
+.page-nav .page-indicator{font-size:14px;color:#64748B;font-weight:600;white-space:nowrap}
+.page-nav .page-btn{display:inline-block;border:1.5px solid #1E3A5F;border-radius:8px;padding:8px 14px;font-weight:600;color:#1E3A5F;background:#fff}
+.page-nav .page-btn:hover{background:#F1F5F9;text-decoration:none}
+.page-nav .page-btn.disabled{visibility:hidden}
+.page-toc{display:flex;flex-wrap:wrap;gap:8px;margin-top:16px}
+.page-toc a{display:inline-block;border:1px solid #E2E8F0;border-radius:999px;padding:4px 12px;font-size:13.5px;color:#475569;background:#fff}
+.page-toc a:hover{border-color:#059669;color:#047857;text-decoration:none}
+.page-toc a.current{background:#059669;border-color:#059669;color:#fff;font-weight:600}
+.page-next-chapter{margin-top:20px;padding-top:16px;border-top:1px dashed #E2E8F0;font-size:16px}
+.page-next-chapter a{font-weight:700;color:#047857}
+
+@media (max-width:640px){
+  .lesson h2{font-size:22px}
+  .lesson p,.lesson ul,.lesson ol{font-size:15px}
+  .key-def{font-size:16px}
+  .page-nav-top{justify-content:center;text-align:center}
+  .page-nav .page-indicator{order:-1;width:100%;text-align:center}
+}
+
+/* Link quay ve trang mon hoc trong header (landing.css khong dinh nghia class nay). */
+.hub-back{font-size:15px;color:var(--landing-blue);text-decoration:none;white-space:nowrap}
+.hub-back:hover{text-decoration:underline}
