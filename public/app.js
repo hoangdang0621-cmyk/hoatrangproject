@@ -3,13 +3,13 @@
 // chưa nạp chương trình nào; code mẫu nằm sẵn trong tab "Nạp viết code",
 // người dùng bấm "Nạp & chạy" thì chip mới chạy. ProgramRunner điều khiển
 // chạy/tạm dừng/chạy từng lệnh/breakpoint.
-import { createCPU, ProgramRunner, cyclesForElapsedMs, applySolvedVoltages, parsePicPinId } from './pic16.js?v=20261125bn';
+import { createCPU, ProgramRunner, cyclesForElapsedMs, applySolvedVoltages, parsePicPinId } from './pic16.js?v=20261125bp';
 import {
   resolvePeripherals, ledStates, buzzerStates, sevenSegStates,
   applyButtonToCpu, applyPotToCpu, applyKeypadToCpu,
-} from './wiring.js?v=20261125bn';
-import { defaultBenchState, benchToNetlist, crystalFreq } from './bench-model.js?v=20261125bn';
-import { meterReadings, motorReadings, scopeVoltages, pushScopeSample, SCOPE_MAX_SAMPLES, solveCircuit } from './circuit-solver.js?v=20261125bn';
+} from './wiring.js?v=20261125bp';
+import { defaultBenchState, benchToNetlist, crystalFreq } from './bench-model.js?v=20261125bp';
+import { meterReadings, motorReadings, scopeVoltages, pushScopeSample, SCOPE_MAX_SAMPLES, solveCircuit, serialWiringMap } from './circuit-solver.js?v=20261125bp';
 import { compileC } from './c-compiler.js?v=20261125bn';
 
 const cpu = createCPU();
@@ -17,16 +17,27 @@ cpu.clockHz = 4000000;
 const runner = new ProgramRunner(cpu);
 
 // Màn hình Serial: bộ đệm văn bản đã nhận của từng màn hình (id -> chuỗi
-// ký tự). CPU phát ký tự qua TX (onTx) thì nối vào bộ đệm của MỌI màn
-// hình đang có trên bàn (thường chỉ 1 cái). Giới hạn 4000 ký tự/màn hình
-// (cắt bớt đầu khi vượt). Ghi chú: dữ liệu KHÔNG đi qua dây/cọc — dây
-// TX/RX/GND chỉ để mạch trông đầy đủ (xem bench-model.js).
+// ký tự). CPU phát ký tự qua TX (onTx) thì chỉ nối vào bộ đệm của màn
+// hình ĐẤU ĐÚNG DÂY: cọc TX nối PIC.RC6 và cọc GND nối GND (Issue 6) —
+// UART cần chung mass mới truyền được, như mạch thật. Màn hình chưa nối
+// TX/GND thì không nhận. Giới hạn 4000 ký tự/màn hình (cắt bớt đầu khi
+// vượt). Gửi từ màn hình vào CPU (sendSerial) cũng vậy: chỉ khi cọc RX
+// nối PIC.RC7 và cọc GND nối GND.
 const SERIAL_BUFFER_MAX = 4000;
 const serialBuffers = new Map();
+// Đấu nối của từng màn hình Serial (id -> {tx, rx, gnd}, xem
+// serialWiringMap trong circuit-solver.js) — tính lại mỗi lần đồng bộ
+// netlist (applyBenchNetlist). onTx/sendSerial đọc map này để quyết
+// định giao ký tự cho màn hình nào.
+const serialWiring = new Map();
 cpu.onTx = (code) => {
   if (typeof code !== 'number' || code < 0 || code > 255) return;
   const ch = String.fromCharCode(code);
   for (const [id, buf] of serialBuffers) {
+    // Chỉ giao cho màn hình đấu đúng: cọc TX nối PIC.RC6 và cọc GND
+    // nối GND. Màn hình chưa nối TX/GND thì không nhận (như mạch thật).
+    const w = serialWiring.get(id);
+    if (!w || !w.tx || !w.gnd) continue;
     let next = buf + ch;
     if (next.length > SERIAL_BUFFER_MAX) next = next.slice(next.length - SERIAL_BUFFER_MAX);
     serialBuffers.set(id, next);
@@ -246,6 +257,13 @@ window.HoaTrangBenchBridge = {
       for (const id of serialIds) {
         if (!serialBuffers.has(id)) serialBuffers.set(id, '');
       }
+      // Đấu nối từng màn hình Serial (Issue 6): cọc TX/RX/GND nối tới
+      // đâu — onTx/sendSerial chỉ giao ký tự cho màn hình đấu đúng.
+      // solved tính ở trên (từ benchStateForMeters = st).
+      serialWiring.clear();
+      try {
+        for (const [id, w] of serialWiringMap(solved, st)) serialWiring.set(id, w);
+      } catch { /* solver lỗi: coi như chưa nối dây */ }
       // Xung nhịp lấy từ thạch anh trên bàn (tần số của thạch anh đầu
       // tiên, null nếu chưa có). Đổi/thêm/bớt thạch anh thì lần nạp
       // chương trình sau mới áp dụng tần số mới.
@@ -290,6 +308,18 @@ window.HoaTrangBenchBridge = {
       return solverWiperVolts(solved, id);
     } catch { return null; }
   },
+  // Xung đột nguồn áp trong mạch đã giải (Issue 18): 2 nguồn áp khác
+  // nhau trên cùng 1 net (vd chân PIC output 0V nối tắt tới rail +5V).
+  // Trả [{nodeA, nodeB, firstKey, firstKind, firstVolts, key, kind, volts}]
+  // (xem solveCircuit trong circuit-solver.js); [] nếu mạch không có
+  // xung đột hoặc chưa đồng bộ.
+  getSourceConflicts: () => {
+    if (!benchStateForMeters) return [];
+    try {
+      const solved = solveCircuit(benchStateForMeters, cpu, pressedIdsForMeters, pressedKeypadForMeters);
+      return solved.sourceConflicts || [];
+    } catch { return []; }
+  },
   // Động cơ DC: điện áp, dòng, tốc độ quay (để bench.js vẽ cánh quạt
   // quay và Inspector hiện V/A/RPM). Trả [{id, volts, amps, rpm}].
   getMotorState: () => {
@@ -320,11 +350,18 @@ window.HoaTrangBenchBridge = {
   // Màn hình Serial: văn bản đã nhận (để bench.js vẽ màn hình 3D và
   // Inspector hiện log). Trả chuỗi ký tự của màn hình id ('' nếu không
   // có). sendSerial gửi từng ký tự người dùng gõ vào CPU qua receiveChar
-  // (vào RCREG, đặt RCIF, ngắt nếu bật); chỉ gửi ký tự ASCII 0..255.
+  // (vào RCREG, đặt RCIF, ngắt nếu bật); chỉ gửi ký tự ASCII 0..255, và
+  // chỉ gửi khi màn hình đấu đúng dây (cọc RX nối PIC.RC7, cọc GND nối
+  // GND — Issue 6; chưa nối thì trả 0 để UI báo "chưa nối dây").
   // clearSerial xóa log 1 màn hình (nút "Xóa" trong Inspector).
+  // getSerialWiring trả đấu nối của màn hình {tx, rx, gnd} (null nếu
+  // chưa đồng bộ) để Inspector hiện trạng thái nối dây.
   getSerialText: (id) => serialBuffers.get(id) || '',
+  getSerialWiring: (id) => serialWiring.get(id) || null,
   sendSerial: (id, text) => {
     if (typeof text !== 'string' || !text.length) return 0;
+    const w = serialWiring.get(id);
+    if (!w || !w.rx || !w.gnd) return 0;
     let sent = 0;
     for (const ch of text) {
       const code = ch.charCodeAt(0);
@@ -380,6 +417,10 @@ window.HoaTrangBenchBridge = {
     runner.lineToAddr = r.lineToAddr;
     runner.addrToLine = new Map([...r.lineToAddr].map(([l, a]) => [a, l]));
     applyAllPots();
+    // Nạp chương trình mới thì xóa hết log Serial đã nhận (Issue 15):
+    // log cũ là của chương trình cũ, giữ lại sẽ nhầm là chương trình mới
+    // vừa phát ra.
+    for (const id of serialBuffers.keys()) serialBuffers.set(id, '');
     return { ok: true, lineToAddr: r.lineToAddr, noCrystal, xtalFreq: r.xtalFreq };
   },
   // Chỉ dịch C, không nạp gì (để bench.js dùng cho gutter/breakpoint).
@@ -390,6 +431,9 @@ window.HoaTrangBenchBridge = {
       const noCrystal = !(benchCrystalFreq && benchCrystalFreq > 0);
       cpu.clockHz = noCrystal ? 0 : benchCrystalFreq;
       applyAllPots();
+      // Nạp chương trình mới thì xóa hết log Serial đã nhận (Issue 15),
+      // như loadC ở trên.
+      for (const id of serialBuffers.keys()) serialBuffers.set(id, '');
       return { ...r, noCrystal };
     }
     return r;

@@ -285,12 +285,21 @@ export function resolvePeripherals(netlist, pressedKeypad = null) {
   // cách chốt dữ liệu (lcdTick: 4-bit chốt từng nibble trên D4–D7).
   // Chưa đủ dây nào: missing liệt kê theo hướng gần đủ hơn (thiếu ít
   // đầu hơn) để thông báo "thiếu: ..." chỉ đúng chỗ cần nối thêm.
-  let lcd = { id: null, rs: null, e: null, d: [null, null, null, null, null, null, null, null], complete: false, missing: [], mode: null };
+  let lcd = { id: null, rs: null, e: null, d: [null, null, null, null, null, null, null, null], complete: false, missing: [], mode: null, fixed: {} };
   if (lcdComp) {
     const rs = picPinInNet(lcdComp.id + '.RS');
     const e = picPinInNet(lcdComp.id + '.E');
     const d = [];
     for (let i = 0; i < 8; i++) d.push(picPinInNet(lcdComp.id + '.D' + i));
+    // Đầu nối LCD nối tới rail cố định (VCC/GND) mà không phải chân PIC:
+    // RS/E/Dx có mức cố định, không điều khiển được bằng code — ghi lại
+    // để checkWiring báo "đã nối tới +5V (mức cố định)" thay vì "thiếu
+    // RS" (Issue 14c: RS→VCC có mặt, chỉ cố định mức, không phải thiếu).
+    const fixed = {};
+    for (const t of ['RS', 'E', 'D0', 'D1', 'D2', 'D3', 'D4', 'D5', 'D6', 'D7']) {
+      if (hasTerm(lcdComp.id + '.' + t, 'VCC')) fixed[t] = 'VCC';
+      else if (hasTerm(lcdComp.id + '.' + t, 'GND')) fixed[t] = 'GND';
+    }
     const missing8 = [];
     if (!rs) missing8.push('RS');
     if (!e) missing8.push('E');
@@ -300,11 +309,11 @@ export function resolvePeripherals(netlist, pressedKeypad = null) {
     if (!e) missing4.push('E');
     d.slice(4).forEach((p, i) => { if (!p) missing4.push('D' + (i + 4)); });
     if (missing8.length === 0) {
-      lcd = { id: lcdComp.id, rs, e, d, complete: true, missing: [], mode: '8bit' };
+      lcd = { id: lcdComp.id, rs, e, d, complete: true, missing: [], mode: '8bit', fixed };
     } else if (missing4.length === 0) {
-      lcd = { id: lcdComp.id, rs, e, d, complete: true, missing: [], mode: '4bit' };
+      lcd = { id: lcdComp.id, rs, e, d, complete: true, missing: [], mode: '4bit', fixed };
     } else {
-      lcd = { id: lcdComp.id, rs, e, d, complete: false, missing: missing4.length < missing8.length ? missing4 : missing8, mode: null };
+      lcd = { id: lcdComp.id, rs, e, d, complete: false, missing: missing4.length < missing8.length ? missing4 : missing8, mode: null, fixed };
     }
   }
   const buzzers = netlist.components.filter((c) => c.kind === 'buzzer').map((c) => ({
@@ -522,12 +531,26 @@ export function applyPotToCpu(cpu, mapping, potId, volts) {
 
 // Bàn phím ma trận: phím đang nhấn (nhấn giữ) của 1 bàn phím. key =
 // {row, col} (0..3) hoặc null (không nhấn phím nào). Chỉ ghi lại phím
-// đang nhấn vào CPU (cpu.setKeypadPressed); mức cột tính ngay lúc CPU
-// đọc chân (pinLevel) nên không cần cập nhật portInput ở đây. Trả false
-// nếu không có bàn phím đó trong mapping.
+// đang nhấn vào CPU (cpu.setKeypadPressed) khi hàng VÀ cột của phím đó
+// đều chạm tới chân PIC — keypad chưa nối dây (hàng/cột treo) thì CPU
+// không đọc được phím nên không ghi, tránh Inspector hiện "Đang nhấn"
+// dù phím chưa nối gì (Issue 16). Mức cột tính ngay lúc CPU đọc chân
+// (pinLevel) nên không cần cập nhật portInput ở đây. Trả false nếu
+// không có bàn phím đó trong mapping; trả true khi bàn phím có mặt
+// (kể cả khi phím chưa nối dây — công tắc hàng/cột vẫn đóng về mặt vật
+// lý nên solver/bridge vẫn dùng pressedKeypad để nối mạch, chỉ CPU là
+// không ghi phím).
 export function applyKeypadToCpu(cpu, mapping, keypadId, key) {
-  if (!mapping.keypads || !mapping.keypads.some((x) => x.id === keypadId)) return false;
+  const kp = (mapping.keypads || []).find((x) => x.id === keypadId);
+  if (!kp) return false;
   if (typeof cpu.setKeypadPressed !== 'function') return false;
+  if (key) {
+    const r = Number(key.row), c = Number(key.col);
+    if (!Number.isInteger(r) || !Number.isInteger(c) || r < 0 || r > 3 || c < 0 || c > 3) return false;
+    // Hàng hoặc cột chưa tới chân PIC thì phím này CPU không đọc được:
+    // xóa phím đang nhấn (nếu có) thay vì ghi phím mới.
+    if (!kp.rows[r] || !kp.cols[c]) { cpu.setKeypadPressed(keypadId, null); return true; }
+  }
   cpu.setKeypadPressed(keypadId, key || null);
   return true;
 }
@@ -561,14 +584,18 @@ export function checkWiring(netlist, tris = null) {
     return out;
   };
   const driverTermsInNet = (members) => {
-    // Đầu nối "lái" tín hiệu: anode LED, 2 đầu nút nhấn, wiper chiết áp, chân + còi.
-    // 2 đầu của CÙNG 1 nút bấm chỉ tính là 1 nguồn (nút là công tắc, không
-    // phải 2 nguồn tín hiệu): nhấn nút nối T1–T2 vào cùng net thì không được
-    // báo chân PIC xung đột với chính cái nút đó.
+    // Đầu nối "lái" tín hiệu: wiper chiết áp (nguồn áp thật) và 2 đầu
+    // nút nhấn (công tắc nối tới nguồn khác). Anode LED và chân + còi
+    // là TẢI (chỉ hút dòng, không lái mức) nên KHÔNG tính: 2 LED cùng
+    // 1 chân PIC (vd 2 anode vào RB0) là bình thường, không phải xung
+    // đột (Issue 14b). 2 đầu của CÙNG 1 nút bấm chỉ tính là 1 nguồn
+    // (nút là công tắc, không phải 2 nguồn tín hiệu): nhấn nút nối
+    // T1–T2 vào cùng net thì không được báo chân PIC xung đột với
+    // chính cái nút đó.
     const seen = new Set();
     const out = [];
     for (const m of members) {
-      const mm = m.match(/^(LED\d+)\.A$|^(BTN\d+)\.T[12]$|^(POT\d+)\.W$|^(BUZ\d+)\.P$/);
+      const mm = m.match(/^(BTN\d+)\.T[12]$|^(POT\d+)\.W$/);
       if (mm) {
         const compId = mm.slice(1).find(Boolean);
         if (!seen.has(compId)) { seen.add(compId); out.push(m); }
@@ -647,12 +674,14 @@ export function checkWiring(netlist, tris = null) {
         wireIds: [], compIds: [c.id], terminalIds: [c.id + '.A', c.id + '.K'],
       });
     }
-    // Nguồn quá 10V: LED nối VCC tắt trong lúc điện áp cao (chưa cháy),
-    // nhắc hạ điện áp xuống ≤10V. Ghi điện áp thật vào thông báo.
+    // Nguồn quá 10V: LED nối VCC tắt trong lúc điện áp cao (solver giữ
+    // lý tưởng, không cháy), nhưng mạch thật thì LED/còi CÓ THỂ CHÁY ở
+    // áp này — cảnh báo đúng bản chất đó thay vì chỉ nói "LED không
+    // sáng" (Issue 14d). Ghi điện áp thật vào thông báo.
     if (psuOverVolts && aNet && aNet.members.includes('VCC')) {
       warnings.push({
         id: 'ledover-' + c.id, kind: 'warn',
-        message: `Nguồn đang ở ${String(Math.round(psuVoltsRaw * 100) / 100)}V, vượt quá 10V nên LED ${c.label} không sáng — hạ điện áp xuống 10V trở xuống.`,
+        message: `Nguồn đang ở ${String(Math.round(psuVoltsRaw * 100) / 100)}V, vượt quá 10V — LED ${c.label} có thể cháy trong mạch thật (mô phỏng chỉ tắt LED khi quá 10V, hạ xuống 10V trở xuống thì sáng lại).`,
         wireIds: [], compIds: [c.id], terminalIds: [c.id + '.A', c.id + '.K'],
       });
     }
@@ -671,19 +700,52 @@ export function checkWiring(netlist, tris = null) {
     }
   }
 
+  // Còi nối VCC ở nguồn quá 10V: như LED (Issue 14d) — mô phỏng tắt còi
+  // khi quá 10V, mạch thật thì còi có thể cháy.
+  for (const c of netlist.components.filter((x) => x.kind === 'buzzer')) {
+    if (!psuOverVolts) continue;
+    const pNet = buildNets(netlist).nets.find((n) => n.members.includes(c.id + '.P'));
+    if (pNet && pNet.members.includes('VCC')) {
+      warnings.push({
+        id: 'buzover-' + c.id, kind: 'warn',
+        message: `Nguồn đang ở ${String(Math.round(psuVoltsRaw * 100) / 100)}V, vượt quá 10V — còi ${c.label} có thể cháy trong mạch thật (mô phỏng chỉ tắt còi khi quá 10V, hạ xuống 10V trở xuống thì kêu lại).`,
+        wireIds: [], compIds: [c.id], terminalIds: [c.id + '.P', c.id + '.N'],
+      });
+    }
+  }
+
   // 4. LCD thiếu dây (lcdMap dùng lại ở quy tắc 7: LCD 4-bit thì D0–D3
   // không nối là đúng, không cảnh báo "chưa nối dây").
+  // Đầu nối đã nối tới rail cố định (vd RS→VCC) thì KHÔNG phải "thiếu"
+  // — nó có mặt, chỉ ở mức cố định (không điều khiển được bằng code):
+  // chỉ còn đầu cố định thì ghi chú info, không cảnh báo thiếu (Issue
+  // 14c); còn đầu thật sự thiếu thì cảnh báo thiếu + ghi chú kèm.
   const lcdComp = netlist.components.find((x) => x.kind === 'lcd');
   let lcdMap = null;
   if (lcdComp) {
     lcdMap = resolvePeripherals(netlist);
     if (!lcdMap.lcd.complete) {
-      warnings.push({
-        id: 'lcd-' + lcdComp.id, kind: 'warn',
-        message: `LCD ${lcdComp.label} chưa nối đủ dây — thiếu: ${lcdMap.lcd.missing.join(', ')}. Nối đủ RS, E và D0–D7 (8-bit) hoặc RS, E và D4–D7 (4-bit) thì LCD hiện chữ.`,
-        wireIds: [], compIds: [lcdComp.id],
-        terminalIds: lcdMap.lcd.missing.map((t) => lcdComp.id + '.' + t),
-      });
+      const fixed = lcdMap.lcd.fixed || {};
+      const trulyMissing = lcdMap.lcd.missing.filter((t) => !fixed[t]);
+      const fixedNote = Object.entries(fixed)
+        .filter(([t]) => lcdMap.lcd.missing.includes(t))
+        .map(([t, lvl]) => `${t} đã nối tới ${lvl === 'VCC' ? '+5V' : 'GND'} (mức cố định, không điều khiển được bằng code)`)
+        .join('; ');
+      if (trulyMissing.length > 0) {
+        warnings.push({
+          id: 'lcd-' + lcdComp.id, kind: 'warn',
+          message: `LCD ${lcdComp.label} chưa nối đủ dây — thiếu: ${trulyMissing.join(', ')}. Nối đủ RS, E và D0–D7 (8-bit) hoặc RS, E và D4–D7 (4-bit) thì LCD hiện chữ.` + (fixedNote ? ` ${fixedNote}.` : ''),
+          wireIds: [], compIds: [lcdComp.id],
+          terminalIds: trulyMissing.map((t) => lcdComp.id + '.' + t),
+        });
+      } else if (fixedNote) {
+        warnings.push({
+          id: 'lcd-fixed-' + lcdComp.id, kind: 'info',
+          message: `LCD ${lcdComp.label}: ${fixedNote} — LCD vẫn hiện được chữ dữ liệu, nhưng không gửi được lệnh qua chân đó (vd lệnh xóa màn hình cần RS ở mức 0).`,
+          wireIds: [], compIds: [lcdComp.id],
+          terminalIds: Object.keys(fixed).filter((t) => lcdMap.lcd.missing.includes(t)).map((t) => lcdComp.id + '.' + t),
+        });
+      }
     }
   }
 
@@ -722,14 +784,24 @@ export function checkWiring(netlist, tris = null) {
     }
   }
 
-  // 7. Đầu nối linh kiện chưa nối dây nào
+  // 7. Đầu nối linh kiện chưa nối dây nào.
+  // Đầu nối chỉ tính là "chưa nối" khi net của nó chỉ có 1 thành viên
+  // VÀ nó không xuất hiện trong dây nào của netlist. Netlist từ
+  // benchToNetlist có dây tới cả đầu nối "thụ động" (chân điện trở/tụ/
+  // thạch anh, chân đồng hồ chế độ V, cọc scope/Serial — xem
+  // buildBenchNets): đầu nối chỉ nối tới những đầu đó (vd chân PIC chỉ
+  // nối dây tới cọc CH1 của scope) thì net vẫn chỉ có 1 thành viên
+  // (buildNets bỏ qua đầu thụ động) nhưng thực tế đã nối — không được
+  // báo "chưa nối" (Issue 13).
+  const wiredTerms = new Set();
+  for (const w of netlist.wires || []) { wiredTerms.add(w.a); wiredTerms.add(w.b); }
   for (const c of netlist.components) {
     for (const t of componentTerminals(c)) {
       // LCD 4-bit: D0–D3 không nối là đúng (không phải "chưa nối dây").
       if (c.kind === 'lcd' && lcdMap && lcdMap.lcd.mode === '4bit' && /^D[0-3]$/.test(t.split('.')[1] || '')) continue;
       const root = netOf.get(t);
       const net = nets.find((n) => n.id === root);
-      if (net && net.members.length === 1) {
+      if (net && net.members.length === 1 && !wiredTerms.has(t)) {
         warnings.push({
           id: 'open-' + t, kind: 'warn',
           message: `${c.label}: đầu nối ${t.split('.')[1]} chưa nối dây nào.`,

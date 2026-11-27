@@ -1644,12 +1644,67 @@ export class ProgramRunner {
     return this.getStatus();
   }
 
+  // Bước 1 DÒNG nguồn (không phải 1 lệnh máy): chạy cho tới khi dòng
+  // nguồn (addrToLine) đổi. Lý do: 1 dòng C thường dịch ra nhiều lệnh
+  // máy (vd `kq = a + b;` là nạp a, nạp b, cộng, cất), và vòng lặp trên
+  // 1 dòng như `while (1) {}` chỉ là 1 lệnh GOTO nhảy vào chính nó —
+  // bước 1 lệnh máy thì PC không đổi, dòng vẫn 55 mãi, bấm hoài không
+  // qua được (Lab 5 "Chạy từng lệnh" kẹt ở dòng 55, Điệp báo 27/11).
+  // - startLine null (vd nạp .hex, không có bảng dòng) hoặc CPU không
+  //   tiến được (không xung / SLEEP / halt / giữ reset): bước 1 lệnh
+  //   máy như cũ.
+  // - Lệnh đầu tiên luôn chạy: breakpoint chỉ kiểm tra trên PC mà lệnh
+  //   vừa nhảy TỚI (pcAfter), không kiểm tra PC lúc bắt đầu — kẻo đang
+  //   dừng ở breakpoint mà bấm bước thì kẹt tại chỗ (giống justResumed
+  //   của tick()). Từ lệnh thứ 2 trở đi, chạm breakpoint thì dừng TRƯỚC
+  //   lệnh đó (pauseReason = 'breakpoint', như tick()).
+  // - Trần 2.000.000 lệnh: hết trần mà dòng chưa đổi thì dừng luôn ở
+  //   dòng hiện tại (chương trình đang lặp trên 1 dòng, vd while(1) hay
+  //   vòng trễ dài) — không treo trình duyệt. Vòng trễ __delay_ms/us
+  //   sinh code với cùng line của lệnh gọi (emitDelay) nên bước qua
+  //   delay sẽ chạy hết vòng trễ rồi dừng ở dòng kế.
+  // - Dừng khi dòng đổi, CPU ngủ/halt, hoặc chạm breakpoint. Không đổi
+  //   hành vi nút "Nạp & chạy" / tick() / breakpoint.
   stepOnce() {
     if (!this.hasProgram) return { ok: false, error: 'Chưa nạp chương trình.' };
     if (this.state === 'running') return { ok: false, error: 'Đang chạy — bấm Dừng trước.' };
-    this.cpu.step();
+    const startLine = this.addrToLine.get(this.cpu.pc & 0x1fff);
+    // CPU không tiến được thì cpu.step() cũng không đổi PC (không xung
+    // thì đóng băng, SLEEP thì chờ ngắt, giữ reset thì PC về 0) — bước
+    // 1 lệnh như cũ, không lặp vô ích tới trần.
+    const stuck = this.cpu.sleeping || this.cpu.halted || this.cpu.isHeldInReset()
+      || !Number.isFinite(this.cpu.clockHz) || this.cpu.clockHz <= 0;
+    if (startLine === undefined || stuck) {
+      this.cpu.step();
+      this.state = 'paused';
+      this.pauseReason = 'step';
+      return { ok: true, ...this.getStatus() };
+    }
+    const bps = this.breakpointAddrs;
+    let n = 0;
+    const MAX_STEP_INSTRS = 2000000;
+    let hitBreakpoint = false;
+    while (n < MAX_STEP_INSTRS) {
+      const pcBefore = this.cpu.pc & 0x1fff;
+      this.cpu.step();
+      n++;
+      if (this.cpu.sleeping || this.cpu.halted) break;
+      const pcAfter = this.cpu.pc & 0x1fff;
+      // Chạm breakpoint thì dừng TRƯỚC lệnh ở đó (như tick()). Kiểm tra
+      // ngay sau mỗi lệnh, TRƯỚC khi xét đổi dòng — kẻo PC vừa tới dòng
+      // có breakpoint thì vòng lặp break vì "đổi dòng" mà báo 'step',
+      // lần bước sau lại chạy qua lệnh breakpoint (lệnh đầu luôn chạy).
+      // Chỉ tính khi PC vừa TỚI địa chỉ breakpoint từ 1 địa chỉ khác
+      // (pcAfter !== pcBefore): lệnh tự nhảy vào chính nó (GOTO $) mà
+      // đặt breakpoint thì PC không đổi, không phải là "tới" breakpoint.
+      if (pcAfter !== pcBefore && bps.has(pcAfter)) { hitBreakpoint = true; break; }
+      // Dòng nguồn đổi thì dừng (PC đang ở lệnh đầu của dòng mới, chưa
+      // chạy). Địa chỉ không có dòng (vd nhãn vòng lặp) thì chạy tiếp.
+      const line = this.addrToLine.get(pcAfter);
+      if (line !== undefined && line !== startLine) break;
+    }
     this.state = 'paused';
-    this.pauseReason = 'step';
+    this.pauseReason = hitBreakpoint ? 'breakpoint' : 'step';
     return { ok: true, ...this.getStatus() };
   }
 

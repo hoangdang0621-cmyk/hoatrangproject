@@ -22,8 +22,8 @@
 import {
   DEFAULT_SIZE, legsFor, stripKey, parseHole, parsePsuPost, parseScopePost, parseSerialPost, psuVolts,
   normalizeWireEnd, meterMode,
-} from './bench-model.js?v=20261125bn';
-import { netLevel, sevenSegStates, SEVEN_SEG_TERMS, PIC_PINS } from './wiring.js?v=20261125bn';
+} from './bench-model.js?v=20261125bp';
+import { netLevel, sevenSegStates, SEVEN_SEG_TERMS, PIC_PINS } from './wiring.js?v=20261125bp';
 
 export const LED_FORWARD_VOLTS = 2.0;  // sụt áp thuận LED khi sáng
 export const LED_SERIES_OHMS = 10;     // điện trở nối tiếp trong mô hình LED
@@ -203,6 +203,14 @@ export function solveLinear(A, b) {
 //                            // điện áp thuận đã giải, xem dưới)
 //   segOn: Map,               // 'SEG0.a' -> boolean (đoạn 7 thanh đang sáng?)
 //   buzzerOn: Map,            // id còi -> boolean (đang kêu? V(P)−V(N) ≥ 2V)
+//   sourceConflicts: [{      // xung đột nguồn áp (Issue 18): 2 nguồn áp
+//     nodeA, nodeB,           // khác nhau trên cùng 1 cặp node — nguồn đầu
+//     firstKey, firstKind, firstVolts, // thắng, nguồn sau bị bỏ qua (ghi
+//     key, kind, volts }]     // lại để hiện cảnh báo, không bỏ lặng).
+//                            // volts là điện áp theo chiều chuẩn (nodeA ->
+//                            // nodeB, nodeA < nodeB theo thứ tự chuỗi).
+//                            // Ampe kế (nguồn 0V để đo) không tính là xung
+//                            // đột — chập ampe kế đã có cảnh báo riêng.
 // }
 // Dòng qua điện trở / còi = (V_A − V_B)/R; dòng qua LED/đồng hồ đo chế độ A =
 // biến dòng của nguồn áp tương ứng trong MNA (chiều từ chân +/P sang
@@ -267,22 +275,39 @@ export function solveCircuit(state, cpu, pressedIds = [], pressedKeypad = null) 
     // Nguồn áp trùng nhau trên cùng 1 cặp node thì chỉ giữ cái đầu tiên
     // (ưu tiên PSU, rồi chân PIC, đồng hồ đo chế độ A, LED). Cái bị loại
     // có dòng không xác định (2 nguồn áp lý tưởng song song) -> Infinity.
+    // Xung đột nguồn (Issue 18): 2 nguồn áp KHÁC NHAU trên cùng 1 cặp
+    // node — nguồn đầu thắng (giữ hành vi cũ), nguồn sau bị bỏ qua, và
+    // ghi lại vào sourceConflicts để hiện cảnh báo (trước đây bỏ lặng).
+    // Ampe kế (nguồn 0V để đo dòng) không tính là xung đột nguồn — chập
+    // ampe kế qua PSU đã có cảnh báo riêng (dòng OL + nối tắt VCC–GND).
     const sourceByPair = new Map();
+    const sourceConflicts = [];
     const addVSource = (nodeP, nodeN, volts, key, kind) => {
       if (!nodeP || !nodeN || nodeP === nodeN) {
         if (kind === 'ammeter' || kind === 'led') shorted.add(key);
         return false;
       }
       const pair = [nodeP, nodeN].sort().join('|');
-      // Điện áp theo chiều chuẩn (node nhỏ -> node lớn theo thứ tự chuỗi).
-      const canon = nodeP < nodeN ? volts : -volts;
+      // Điện áp theo chiều chuẩn để so sánh + ghi ra (Issue 18): nếu 1
+      // đầu là GND (RAIL-) thì lấy GND làm mốc — điện áp ghi ra là điện
+      // áp của đầu còn lại so với GND (dễ đọc: chân PIC mức cao ghi 5V
+      // chứ không phải -5V như khi chuẩn hoá theo thứ tự chuỗi, vì
+      // 'RAIL-' < 'S...' nên chiều chuẩn bị đảo). Cặp không có GND thì
+      // theo thứ tự chuỗi (V(đầu nhỏ) − V(đầu lớn)).
+      const hasGnd = nodeP === 'RAIL-' || nodeN === 'RAIL-';
+      const canon = hasGnd
+        ? (nodeP === 'RAIL-' ? -volts : volts)
+        : (nodeP < nodeN ? volts : -volts);
       const prev = sourceByPair.get(pair);
       if (prev !== undefined) {
-        if (Math.abs(canon - prev) > 1e-9) { /* xung đột: nguồn đầu thắng */ }
+        if (Math.abs(canon - prev.canon) > 1e-9 && kind !== 'ammeter' && prev.kind !== 'ammeter') {
+          const [nodeA, nodeB] = [nodeP, nodeN].sort();
+          sourceConflicts.push({ nodeA, nodeB, firstKey: prev.key, firstKind: prev.kind, firstVolts: prev.canon, key, kind, volts: canon });
+        }
         if (kind === 'ammeter' || kind === 'led') shorted.add(key);
         return false;
       }
-      sourceByPair.set(pair, canon);
+      sourceByPair.set(pair, { canon, key, kind, volts });
       vSources.push({ nodeP, nodeN, volts, key, kind });
       return true;
     };
@@ -472,7 +497,7 @@ export function solveCircuit(state, cpu, pressedIds = [], pressedKeypad = null) 
       if (s.kind === 'ammeter' || s.kind === 'led') branchCurrent.set(s.key, 0);
     }
     for (const id of shorted) branchCurrent.set(id, Infinity);
-    if (x === null) return { ok: false, nodeVoltage, branchCurrent };
+    if (x === null) return { ok: false, nodeVoltage, branchCurrent, sourceConflicts };
     for (const [node, i] of nodeIndex) nodeVoltage.set(node, x[i]);
     // Dòng qua điện trở / động cơ DC / còi = (V_A − V_B) × g (0 nếu 1 đầu
     // floating). Dòng qua LED lấy từ biến dòng của nguồn áp 2V ở dưới
@@ -491,7 +516,7 @@ export function solveCircuit(state, cpu, pressedIds = [], pressedKeypad = null) 
     liveSources.forEach((s, k) => {
       if (s.kind === 'ammeter' || s.kind === 'led') branchCurrent.set(s.key, x[n + k]);
     });
-    return { ok: true, nodeVoltage, branchCurrent };
+    return { ok: true, nodeVoltage, branchCurrent, sourceConflicts };
   };
 
   // --- Quyết định LED / đoạn 7 thanh / còi bật hay tắt từ ĐIỆN ÁP ĐÃ GIẢI ---
@@ -617,7 +642,7 @@ export function solveCircuit(state, cpu, pressedIds = [], pressedKeypad = null) 
   // Lần 1: hở mạch toàn bộ diode -> điện áp hở mạch -> tập bật ban đầu.
   const open = runMna(new Set(), new Set(), potVolts);
   if (!open.ok) {
-    return { ok: false, nodeVoltage: open.nodeVoltage, branchCurrent: open.branchCurrent, nets, ledOn, segOn, buzzerOn, ...powerInfo };
+    return { ok: false, nodeVoltage: open.nodeVoltage, branchCurrent: open.branchCurrent, nets, ledOn, segOn, buzzerOn, sourceConflicts: open.sourceConflicts || [], ...powerInfo };
   }
   decideDiodes(open.nodeVoltage);
   decideBuzzers(open.nodeVoltage);
@@ -638,7 +663,30 @@ export function solveCircuit(state, cpu, pressedIds = [], pressedKeypad = null) 
     const solved = runMna(ledSet(), segSet(), potVolts);
     if (solved.ok) { result = solved; decideBuzzers(solved.nodeVoltage); }
   }
-  return { ok: result.ok, nodeVoltage: result.nodeVoltage, branchCurrent: result.branchCurrent, nets, ledOn, segOn, buzzerOn, ...powerInfo };
+  return { ok: result.ok, nodeVoltage: result.nodeVoltage, branchCurrent: result.branchCurrent, nets, ledOn, segOn, buzzerOn, sourceConflicts: result.sourceConflicts || [], ...powerInfo };
+}
+
+// ---------------------------------------------------------------------------
+// Đấu nối của từng màn hình Serial trên bàn (Issue 6): cọc TX có nối tới
+// chân PIC.RC6 (TX của UART) không, cọc RX có nối PIC.RC7 (RX) không,
+// cọc GND có nối về GND (chung mass) không. Trả Map id -> {tx, rx, gnd}.
+// Dùng cho app.js (chỉ giao ký tự TX/RX cho màn hình đấu đúng dây) và
+// test được ở Node. Cọc chưa nối dây thì cả 3 đều false.
+// ---------------------------------------------------------------------------
+export function serialWiringMap(solved, state) {
+  const out = new Map();
+  if (!solved || !solved.nets || !state || !Array.isArray(state.components)) return out;
+  for (const comp of state.components.filter((c) => c.type === 'serial')) {
+    const txNode = solved.nets.nodeOfSerialTerm(comp.id, 'TX');
+    const rxNode = solved.nets.nodeOfSerialTerm(comp.id, 'RX');
+    const gndNode = solved.nets.nodeOfSerialTerm(comp.id, 'GND');
+    out.set(comp.id, {
+      tx: !!txNode && txNode === solved.nets.nodeOfPicPin('RC6'),
+      rx: !!rxNode && rxNode === solved.nets.nodeOfPicPin('RC7'),
+      gnd: !!gndNode && gndNode === solved.nets.railMinus,
+    });
+  }
+  return out;
 }
 
 // ---------------------------------------------------------------------------

@@ -152,6 +152,7 @@ button { cursor: pointer; }
 .bench-lab strong { display: block; font-size: 1rem; margin-bottom: 4px; }
 .bench-lab .sub { margin-bottom: var(--space-sm); }
 .bench-lab-go { display: block; font-size: 0.85rem; font-weight: 600; color: var(--color-accent); }
+.bench-lab-note { color: #92400E; font-style: italic; }
 .bench-pal-item:active { cursor: grabbing; }
 .bench-pal-item.wiring { border-color: var(--color-accent); box-shadow: 0 0 0 2px var(--color-accent); }
 /* Thẻ khay đang chọn để đặt 1 lần: giữ trạng thái chọn cho tới khi đặt xong hoặc bấm lại. */
@@ -188,6 +189,8 @@ button { cursor: pointer; }
 .check-short:hover { background: #FEE2E2; }
 .check-warn { background: #FFFBEB; border: 1px solid #FDE68A; color: #92400E; }
 .check-warn:hover { background: #FEF3C7; }
+.check-info { background: #EFF6FF; border: 1px solid #BFDBFE; color: #1E40AF; }
+.check-info:hover { background: #DBEAFE; }
 
 .pot-slider { width: 100%; accent-color: var(--color-primary); min-height: 44px; }
 

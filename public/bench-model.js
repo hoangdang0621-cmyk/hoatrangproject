@@ -551,6 +551,19 @@ export function buildBenchNets(state, pressedIds = [], pressedKeypad = null) {
   ensure('RAIL-');
   const termStrip = new Map();
   const resistorStrips = new Set();
+  // Nhãn kề (adjacency) của các đầu nối "thụ động" — chân điện trở/tụ/
+  // thạch anh, chân đồng hồ đo, cọc scope/Serial: chúng không phải
+  // terminal netlist CPU (không vào termStrip) nhưng là đầu nối thật
+  // trên strip. Ghi lại để describeTerminal liệt kê chúng làm "hàng
+  // xóm" và benchToNetlist nối dây tới chúng (Issue 13): đầu nối chỉ
+  // nối tới những đầu này (vd chân PIC chỉ nối dây tới cọc CH1 của
+  // scope) thì không còn báo "chưa nối" sai. stripKey -> Set(nhãn).
+  const stripLabels = new Map();
+  const addLabel = (strip, label) => {
+    if (!strip || !label) return;
+    if (!stripLabels.has(strip)) stripLabels.set(strip, new Set());
+    stripLabels.get(strip).add(label);
+  };
   for (const comp of state.components) {
     if (comp.type === 'pic') {
       // Chân chip theo lỗ neo của chip trên bàn (legsFor dùng anchor).
@@ -564,6 +577,17 @@ export function buildBenchNets(state, pressedIds = [], pressedKeypad = null) {
     }
     if (comp.type === 'psu') continue;
     const legs = legsFor(comp, size);
+    // Chân của linh kiện "thụ động": ghi nhãn kề lên strip của nó
+    // (điện trở, tụ gốm, thạch anh, đồng hồ đo cả 2 chế độ). Riêng điện
+    // trở và đồng hồ chế độ A vẫn nối 2 strip như dây (khối dưới).
+    if (comp.type === 'resistor' || comp.type === 'capacitor' || comp.type === 'crystal' || comp.type === 'multimeter') {
+      for (const leg of legs) {
+        const key = leg.hole ? stripKey(leg.hole, size) : null;
+        if (!key) continue;
+        ensure(key);
+        addLabel(key, comp.id + '.' + leg.term);
+      }
+    }
     // Điện trở nối 2 strip của nó (như 1 dây). Đồng hồ đo ở chế độ A
     // cũng vậy (0Ω, dòng chạy qua như dây) nhưng KHÔNG tính là điện trở
     // hạn dòng cho LED (không vào resistorStrips) — LED chỉ có đồng hồ
@@ -637,10 +661,32 @@ export function buildBenchNets(state, pressedIds = [], pressedKeypad = null) {
     }
     return null;
   };
+  // Cọc scope/Serial của 1 đầu dây (id cọc, hoặc null nếu đầu dây không
+  // phải cọc): đầu {x,y,z} cũ thì normalizeWireEnd đổi thành id cọc
+  // rồi mới xét.
+  const postOfEnd = (e) => {
+    if (typeof e === 'string') {
+      if (parseScopePost(e)) return e;
+      if (parseSerialPost(e)) return e;
+      return null;
+    }
+    const norm = normalizeWireEnd(state, e);
+    if (typeof norm === 'string') {
+      if (parseScopePost(norm)) return norm;
+      if (parseSerialPost(norm)) return norm;
+    }
+    return null;
+  };
   for (const w of state.wires) {
     const ka = endStripKey(w.a);
     const kb = endStripKey(w.b);
     if (ka && kb) { ensure(ka); ensure(kb); union(ka, kb); }
+    // Cọc scope/Serial: dây từ lỗ tới cọc thì cọc là đầu nối thật trên
+    // strip của lỗ đó (chỉ quan sát, không nối mạch) — ghi nhãn kề để
+    // đầu nối ở lỗ đó không báo "chưa nối" sai (Issue 13).
+    const postA = postOfEnd(w.a), postB = postOfEnd(w.b);
+    if (postA && kb) { ensure(kb); addLabel(kb, postA); }
+    if (postB && ka) { ensure(ka); addLabel(ka, postB); }
   }
   const groups = new Map();
   for (const [term, key] of termStrip) {
@@ -648,6 +694,18 @@ export function buildBenchNets(state, pressedIds = [], pressedKeypad = null) {
     if (!groups.has(root)) groups.set(root, { terms: [], vcc: false, gnd: false, strips: new Set() });
     groups.get(root).terms.push(term);
     groups.get(root).strips.add(key);
+  }
+  // Ghi nhãn kề vào nhóm: mỗi strip có nhãn thì nhãn đó thành thành viên
+  // của nhóm chứa strip (để describeTerminal liệt kê + benchToNetlist
+  // nối dây tới nó). Strip không thuộc nhóm nào (không có terminal thật
+  // trên strip đó) thì bỏ nhãn (không có gì để mô tả).
+  for (const [strip, labels] of stripLabels) {
+    const root = find(strip);
+    const g = groups.get(root);
+    if (!g) continue;
+    for (const label of labels) {
+      if (!g.terms.includes(label)) g.terms.push(label);
+    }
   }
   const vccRoot = find('RAIL+');
   const gndRoot = find('RAIL-');
@@ -970,6 +1028,41 @@ export function crystalFreq(state) {
     if ((s1 === osc1Strip && s2 === osc2Strip) || (s1 === osc2Strip && s2 === osc1Strip)) return f;
   }
   return unplacedFreq;
+}
+// Tần số của 1 thạch anh cụ thể (theo id) NẾU nó nối đúng mạch dao động
+// (2 chân chung strip với OSC1/OSC2 của PIC), null nếu nó chưa nối đúng
+// (đặt ở chỗ khác trên bàn, chân rơi ngoài board, hoặc không có chip).
+// Dùng cho Inspector thạch anh hiện "Xung đang dùng: 4 MHz" / "chưa có
+// thạch anh" (Issue 17). Thạch anh chưa có anchor (fixture rút gọn) thì
+// giữ hành vi cũ — trả tần số của nó, như crystalFreq.
+// crystalFreq(state) trả tần số của thạch anh ĐẦU TIÊN nối đúng (xung
+// nhịp cho CPU); hàm này trả theo từng thạch anh để Inspector biết
+// chính xác thạch anh nào đang cấp xung.
+export function crystalFreqOf(state, crystalId) {
+  const size = state.size ?? DEFAULT_SIZE;
+  const comps = state.components || [];
+  let osc1Strip = null, osc2Strip = null;
+  const pic = comps.find((c) => c.type === 'pic');
+  if (pic) {
+    const picLegs_ = legsFor(pic, size);
+    const o1 = picLegs_.find((l) => l.term === 'PIC.OSC1');
+    const o2 = picLegs_.find((l) => l.term === 'PIC.OSC2');
+    osc1Strip = o1 && o1.hole ? stripKey(o1.hole, size) : null;
+    osc2Strip = o2 && o2.hole ? stripKey(o2.hole, size) : null;
+  }
+  const x = comps.find((c) => c.type === 'crystal' && c.id === crystalId);
+  if (!x) return null;
+  const f = Number(x.props?.freq);
+  if (!Number.isFinite(f) || f <= 0) return null;
+  const legs = legsFor(x, size);
+  const l1 = legs.find((l) => l.term === 'OSC1');
+  const l2 = legs.find((l) => l.term === 'OSC2');
+  if (!l1 || !l2) return f; // chưa có anchor (fixture rút gọn): giữ hành vi cũ
+  const s1 = l1.hole ? stripKey(l1.hole, size) : null;
+  const s2 = l2.hole ? stripKey(l2.hole, size) : null;
+  if (!s1 || !s2 || !osc1Strip || !osc2Strip) return null;
+  if ((s1 === osc1Strip && s2 === osc2Strip) || (s1 === osc2Strip && s2 === osc1Strip)) return f;
+  return null;
 }
 // Chuẩn hóa props của 3 loại mới khi đọc state đã lưu: tụ phải là số
 // pF dương, thạch anh phải là 1 trong 3 tần số cho phép, LED 7 thanh

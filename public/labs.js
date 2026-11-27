@@ -4,7 +4,7 @@
 // Thêm lab mới chỉ cần thêm 1 phần tử vào mảng LABS.
 // Lỗ chân RB0 (h29), vị trí điện trở/LED và dây nối đã tính bằng legsFor /
 // canPlace trên board mặc định 830 và kiểm chứng bằng netlist (test q).
-import { defaultBenchState, defaultProps, canPlace, parseHole, parsePsuPost } from './bench-model.js?v=20261125bn';
+import { defaultBenchState, defaultProps, canPlace, parseHole, parsePsuPost } from './bench-model.js?v=20261125bp';
 
 export const LABS = [
   {
@@ -54,6 +54,12 @@ void main() {
     id: 'led-lcd',
     title: 'Điều khiển LED + LCD',
     desc: 'LCD 16x2 chế độ 8-bit đấu sẵn: RS→RE0 (chân 8), E→RE1 (chân 9), D0→RD0 (chân 19), D1→RD1 (chân 20), D2→RD2 (chân 21), D3→RD3 (chân 22), D4→RD4 (chân 27), D5→RD5 (chân 28), D6→RD6 (chân 29), D7→RD7 (chân 30). LED xanh lá → RB1 (chân 34) qua điện trở 220Ω, cathode về GND. Thạch anh 4MHz nối OSC1 (chân 13) – OSC2 (chân 14), mỗi chân thạch anh có 1 tụ gốm 22pF về GND.',
+    // Lưu ý ngoài desc (desc chỉ liệt kê linh kiện + đấu nối): LCD trong
+    // mô phỏng chạy không cần nối nguồn vì chân VDD/VSS chưa có trong mô
+    // phỏng (LEG_LAYOUTS.lcd không có 2 chân này; làm đúng cần đổi
+    // bench-model.js — việc này ĐỂ SAU, chỉ ghi chú trước, Issue 19b).
+    // Mạch thật phải nối VDD→+5V và VSS→GND thì LCD mới hiện chữ.
+    note: 'Lưu ý: LCD trong mô phỏng chạy không cần nối nguồn (chân VDD/VSS chưa có trong mô phỏng); mạch thật phải nối VDD→+5V và VSS→GND.',
     code: `#include <xc.h>
 #define _XTAL_FREQ 4000000
 
@@ -144,6 +150,11 @@ void main() {
     id: 'count-2x7seg',
     title: 'Đếm 00–99 trên 2 LED 7 thanh',
     desc: 'LED 7 thanh hàng chục (chung cathode) nối RD0–RD7: a→RD0, b→RD1, c→RD2, d→RD3, e→RD4, f→RD5, g→RD6, dp→RD7; LED 7 thanh hàng đơn vị nối RB0–RB7: a→RB0, b→RB1, c→RB2, d→RB3, e→RB4, f→RB5, g→RB6, dp→RB7; chân chung cả 2 về GND. Thạch anh 4MHz nối OSC1 (chân 13) – OSC2 (chân 14), mỗi chân thạch anh có 1 tụ gốm 22pF về GND.',
+    // Lưu ý ngoài desc: lab này dạy 7 thanh KHÔNG có điện trở hạn dòng —
+    // chỉ đúng trong mô phỏng (đoạn 7 thanh trong solver đã có điện trở
+    // 10Ω nội bộ); mạch thật phải thêm điện trở hạn dòng cho từng đoạn,
+    // không thì cháy đoạn/chân PIC (Issue 19a).
+    note: 'Lưu ý: chỉ đúng trong mô phỏng — mạch thật cần điện trở hạn dòng cho từng đoạn 7 thanh.',
     code: `#include <xc.h>
 #define _XTAL_FREQ 4000000
 

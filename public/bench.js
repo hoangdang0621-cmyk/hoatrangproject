@@ -16,11 +16,12 @@ import {
   psuVolts, validatePsuVolts, parsePsuPost, psuPostPos, PSU_SCALE, PSU_POST_DX, PSU_POST_Y, PSU_POST_DZ,
   parseScopePost, scopePostPos, SCOPE_POST_DX, SCOPE_POST_Y, SCOPE_POST_DZ, SCOPE_DEFAULT_TX, SCOPE_DEFAULT_TZ,
   parseSerialPost, serialPostPos, SERIAL_POST_DX, SERIAL_POST_Y, SERIAL_POST_DZ, SERIAL_DEFAULT_TX, SERIAL_DEFAULT_TZ,
-  clampCamTarget, zoomTowardPoint, panTarget, meterMode, crystalFreq,
-} from './bench-model.js?v=20261125bn';
-import { checkWiring, SIGNAL_COLORS, SEVEN_SEG_TERMS, KEYPAD_KEYS } from './wiring.js?v=20261125bn';
-import { formatVolts, formatAmps, formatCurrentDirection, sevenSegDigit } from './circuit-solver.js?v=20261125bn';
-import { LABS, getLab, buildLabState } from './labs.js?v=20261125bo';
+  clampCamTarget, zoomTowardPoint, panTarget, meterMode, crystalFreq, crystalFreqOf,
+  stripKey, buildBenchNets,
+} from './bench-model.js?v=20261125bp';
+import { checkWiring, SIGNAL_COLORS, SEVEN_SEG_TERMS, KEYPAD_KEYS } from './wiring.js?v=20261125bp';
+import { formatVolts, formatAmps, formatCurrentDirection, sevenSegDigit } from './circuit-solver.js?v=20261125bp';
+import { LABS, getLab, buildLabState } from './labs.js?v=20261125bp';
 
 const $ = (id) => document.getElementById(id);
 const benchView = $('benchView');
@@ -145,6 +146,27 @@ function main() {
     }
     renderChecks();
   }
+  // 1 chân của đồng hồ đo (P/N) có nối tới mạch không. Chân đồng hồ chỉ
+  // có nhãn stripLabels (không vào termStrip) nên describeTerminal không
+  // thấy — xét trực tiếp strip của lỗ chân: có dây cắm vào strip đó,
+  // hoặc strip đó chung nhóm với terminal khác (vd chân PIC, chân điện
+  // trở đặt cùng strip — không cần dây) thì tính là đã nối.
+  function isMeterLegWired(comp, term) {
+    const leg = legsFor(comp, state.size).find((l) => l.term === term);
+    if (!leg || !leg.hole) return false;
+    const key = stripKey(leg.hole, state.size);
+    for (const w of state.wires) {
+      for (const e of [w.a, w.b]) {
+        if (typeof e !== 'string') continue;
+        if (parsePsuPost(e) || parseScopePost(e) || parseSerialPost(e)) continue;
+        if (stripKey(e, state.size) === key) return true;
+      }
+    }
+    const { groups, find } = buildBenchNets(state, pressedIds());
+    const g = groups.get(find(key));
+    if (g && (g.terms.some((t) => t !== comp.id + '.' + term) || g.vcc || g.gnd)) return true;
+    return false;
+  }
   function renderChecks() {
     if (!checksEl) return;
     const netlist = benchToNetlist(state, pressedIds(), pressedKeypad);
@@ -152,17 +174,21 @@ function main() {
     const warns = checkWiring(netlist, b && typeof b.getTris === 'function' ? b.getTris() : null);
     // Cảnh báo thạch anh (đứng trước các cảnh báo đấu nối): không có
     // thạch anh thì chip không có xung, chương trình không chạy được.
-    // Không gắn linh kiện nào nên bấm vào không chọn gì (xem
-    // compIdFromWarning — trả null cho cảnh báo này).
+    // CHỈ cảnh báo khi đã nạp chương trình (Issue 14a): board thụ động
+    // (chưa nạp gì, vd chỉ cắm LED/nút để thử mạch) không có thạch anh
+    // là bình thường, không được báo. Không gắn linh kiện nào nên bấm
+    // vào không chọn gì (xem compIdFromWarning — trả null cho cảnh báo này).
     const extra = [];
+    const runSt = b && typeof b.getRunStatus === 'function' ? b.getRunStatus() : null;
+    const hasProgram = !!(runSt && runSt.hasProgram);
     const cf = crystalFreq(state);
-    if (cf === null || cf === undefined) {
+    if (hasProgram && (cf === null || cf === undefined)) {
       extra.push({
         id: 'no-crystal', kind: 'warn',
         message: 'Chưa có thạch anh — chip không có xung, chương trình không chạy được.',
         compIds: [], terminalIds: [],
       });
-    } else if (lastCodeXtalFreq && cf !== lastCodeXtalFreq) {
+    } else if (hasProgram && lastCodeXtalFreq && cf !== lastCodeXtalFreq) {
       // Thạch anh trên bàn lệch với _XTAL_FREQ của code vừa nạp: xung
       // nhịp thật theo thạch anh, vòng delay sinh theo _XTAL_FREQ nên
       // delay sẽ sai tỉ lệ (vd thạch anh 4MHz mà code 20MHz thì delay
@@ -173,18 +199,119 @@ function main() {
         compIds: [], terminalIds: [],
       });
     }
+    // Xung đột nguồn áp (Issue 18): 2 nguồn áp khác nhau trên cùng 1 net
+    // (vd chân PIC output 0V nối tắt tới rail +5V) — solver chỉ tính
+    // nguồn đầu, nguồn sau bị bỏ qua. Mỗi xung đột 1 cảnh báo, ghi rõ 2
+    // nguồn và điện áp của chúng.
+    if (b && typeof b.getSourceConflicts === 'function') {
+      let conflicts = [];
+      try { conflicts = b.getSourceConflicts() || []; } catch { conflicts = []; }
+      for (const c of conflicts) {
+        extra.push({
+          id: 'src-conflict-' + c.firstKey + '-' + c.key, kind: 'warn',
+          message: `Xung đột nguồn: ${c.firstKey} (${c.firstVolts}V) và ${c.key} (${c.volts}V) cùng lái 1 net — chỉ ${c.firstKey} được tính, ${c.key} bị bỏ qua. Tách 2 nguồn ra khỏi cùng 1 net.`,
+          compIds: [compIdFromKey(c.firstKey), compIdFromKey(c.key)].filter(Boolean),
+          terminalIds: [],
+        });
+      }
+    }
+    // Rule cho dụng cụ (Issue 14): đồng hồ đo / hiện sóng / Serial /
+    // động cơ không có trong netlist CPU nên checkWiring không thấy —
+    // xét riêng ở đây (bench.js có đủ state + bridge). Dụng cụ chưa nối
+    // thì không làm gì được (đồng hồ hiện "—", scope không thấy sóng,
+    // Serial không gửi/nhận, motor không quay) nên báo để nối dây lại.
+    for (const comp of state.components) {
+      if (comp.type === 'serial') {
+        let sw = null;
+        try { sw = b && typeof b.getSerialWiring === 'function' ? b.getSerialWiring(comp.id) : null; } catch { sw = null; }
+        if (sw && !sw.tx && !sw.rx && !sw.gnd) {
+          extra.push({
+            id: 'serial-nowire-' + comp.id, kind: 'warn',
+            message: `Màn hình Serial ${comp.id} chưa nối dây nào — nối cọc TX→RC6, RX→RC7, GND→GND thì mới gửi/nhận được.`,
+            compIds: [comp.id], terminalIds: [],
+          });
+        } else if (sw && (sw.tx || sw.rx) && !sw.gnd) {
+          const dir = (sw.tx ? 'TX' : '') + ((sw.tx && sw.rx) ? '/' : '') + (sw.rx ? 'RX' : '');
+          extra.push({
+            id: 'serial-nognd-' + comp.id, kind: 'warn',
+            message: `Màn hình Serial ${comp.id} đã nối ${dir} nhưng chưa nối GND — UART cần chung mass, nối cọc GND→GND thì mới gửi/nhận được.`,
+            compIds: [comp.id], terminalIds: [],
+          });
+        }
+      } else if (comp.type === 'oscilloscope') {
+        const wired = state.wires.some((w) => [w.a, w.b].some((e) => {
+          if (typeof e !== 'string') return false;
+          const sp = parseScopePost(e);
+          return !!sp && sp.scopeId === comp.id;
+        }));
+        if (!wired) {
+          extra.push({
+            id: 'scope-nowire-' + comp.id, kind: 'warn',
+            message: `Đồng hồ hiện sóng ${comp.id} chưa nối dây nào — nối cọc CH1/CH2 tới điểm cần xem và cọc GND về GND thì mới thấy sóng.`,
+            compIds: [comp.id], terminalIds: [],
+          });
+        }
+      } else if (comp.type === 'motor') {
+        // Chân motor có trong termStrip nên describeTerminal thấy được.
+        const un = [];
+        for (const t of ['+', '-']) {
+          const d = describeTerminal(state, comp.id + '.' + t, pressedIds());
+          if (d.members.length <= 1 && !d.vcc && !d.gnd) un.push(t);
+        }
+        if (un.length === 2) {
+          extra.push({
+            id: 'motor-nowire-' + comp.id, kind: 'warn',
+            message: `Động cơ ${comp.id} chưa nối dây nào — nối 2 chân +/− tới nguồn hoặc chân PIC thì mới quay.`,
+            compIds: [comp.id], terminalIds: [],
+          });
+        } else if (un.length === 1) {
+          extra.push({
+            id: 'motor-half-' + comp.id, kind: 'warn',
+            message: `Động cơ ${comp.id} mới nối 1 chân (chân ${un[0]} chưa nối) — nối nốt chân còn lại thì mới quay.`,
+            compIds: [comp.id], terminalIds: [],
+          });
+        }
+      } else if (comp.type === 'multimeter') {
+        const un = [];
+        for (const t of ['P', 'N']) {
+          if (!isMeterLegWired(comp, t)) un.push(t);
+        }
+        if (un.length === 2) {
+          extra.push({
+            id: 'meter-nowire-' + comp.id, kind: 'warn',
+            message: `Đồng hồ đo ${comp.id} chưa nối dây nào — nối 2 chân P/N tới điểm cần đo thì mới hiện số (đo áp: song song; đo dòng: nối tiếp qua tải).`,
+            compIds: [comp.id], terminalIds: [],
+          });
+        } else if (un.length === 1) {
+          extra.push({
+            id: 'meter-half-' + comp.id, kind: 'warn',
+            message: `Đồng hồ đo ${comp.id} mới nối 1 chân (chân ${un[0]} chưa nối) — nối nốt chân còn lại thì mới đo được.`,
+            compIds: [comp.id], terminalIds: [],
+          });
+        }
+      }
+    }
     const all = [...extra, ...warns];
     if (!all.length) {
       checksEl.innerHTML = '<li class="check-ok">Mạch ổn — không phát hiện vấn đề đấu nối.</li>';
       return;
     }
     checksEl.innerHTML = all.map((w, i) =>
-      `<li><button type="button" class="check-item ${w.kind === 'short' ? 'check-short' : 'check-warn'}" data-warn="${i}">${esc(w.message)}</button></li>`).join('');
+      `<li><button type="button" class="check-item ${w.kind === 'short' ? 'check-short' : w.kind === 'info' ? 'check-info' : 'check-warn'}" data-warn="${i}">${esc(w.message)}</button></li>`).join('');
     checksEl.querySelectorAll('.check-item').forEach((btn) => btn.addEventListener('click', () => {
       const w = all[Number(btn.dataset.warn)];
       const compId = compIdFromWarning(w);
       if (compId) select({ kind: 'comp', id: compId });
     }));
+  }
+  // Id linh kiện từ key nguồn trong xung đột (vd 'PIC.RB0' -> 'PIC1',
+  // 'PSU1' -> 'PSU1', 'POT0' -> 'POT0'): để bấm cảnh báo thì chọn đúng
+  // linh kiện liên quan (xem compIdFromWarning).
+  function compIdFromKey(key) {
+    if (!key) return null;
+    if (key.startsWith('PIC.')) return 'PIC1';
+    const m = key.match(/^(LED\d+|BTN\d+|POT\d+|LCD\d+|BUZ\d+|VM\d+|AM\d+|MM\d+|OSC\d+|SEG\d+|KP\d+|M\d+|SER\d+|PSU\d+)/);
+    return m ? m[1] : null;
   }
   function compIdFromWarning(w) {
     for (const id of [...(w.compIds || []), ...(w.terminalIds || [])]) {
@@ -366,6 +493,7 @@ void main() {
       <div class="bench-lab" data-lab="${esc(lab.id)}" role="button" tabindex="0" aria-label="Mở lab ${esc(lab.title)}">
         <strong>${esc(lab.title)}</strong>
         <p class="sub">${esc(lab.desc)}</p>
+        ${lab.note ? `<p class="sub bench-lab-note">${esc(lab.note)}</p>` : ''}
         <span class="bench-lab-go">Mở lab → viết code</span>
       </div>`).join('') || '<p class="sub">Chưa có bài lab nào.</p>';
     labListEl.querySelectorAll('[data-lab]').forEach((card) => {
@@ -472,7 +600,16 @@ void main() {
     const b = bridge();
     if (!b || typeof b.getRunStatus !== 'function') return;
     const st = b.getRunStatus();
-    const sig = [st.state, st.pauseReason, st.pc, st.line, st.hexMode, lastLoadNoCrystal].join('|');
+    // Thạch anh hiện tại trên bàn (Hz, null nếu không có): để status đổi
+    // ngay khi thạch anh bị gỡ giữa chừng (U1) — runner vẫn ở trạng thái
+    // 'running' mà clockHz = 0 nên chương trình đứng yên, status phải
+    // báo thiếu thạch anh thay vì "Đang chạy…". lastLoadNoCrystal là cờ
+    // lúc nạp (giữ nguyên cơ chế đó); cờ hiện tại là "hoặc" của 2 cái:
+    // nạp đã thiếu thạch anh, hoặc thạch anh vừa bị gỡ sau khi nạp.
+    const crystalNow = (b && typeof b.getCrystalFreq === 'function') ? b.getCrystalFreq() : null;
+    const noCrystalNow = !(crystalNow && crystalNow > 0);
+    const noCrystal = lastLoadNoCrystal || noCrystalNow;
+    const sig = [st.state, st.pauseReason, st.pc, st.line, st.hexMode, noCrystal].join('|');
     if (!force && sig === codeStatusSig) return;
     codeStatusSig = sig;
     let curLine = null;
@@ -482,8 +619,9 @@ void main() {
       // Chương trình nạp rồi nhưng không có thạch anh: runner vẫn ở trạng
       // thái 'running' mà không chạy chu kỳ nào (clockHz = 0) — hiện
       // cảnh báo thiếu thạch anh thay cho 'Đang chạy…' để không tưởng
-      // là chương trình đang chạy.
-      setCodeStatus(lastLoadNoCrystal ? NO_CRYSTAL_MSG : (st.hexMode ? 'Đang chạy chương trình .hex…' : 'Đang chạy…'), lastLoadNoCrystal);
+      // là chương trình đang chạy. Áp dụng cả khi nạp đã thiếu (cờ
+      // lastLoadNoCrystal) lẫn khi thạch anh bị gỡ giữa chừng (U1).
+      setCodeStatus(noCrystal ? NO_CRYSTAL_MSG : (st.hexMode ? 'Đang chạy chương trình .hex…' : 'Đang chạy…'), noCrystal);
     } else if (st.state === 'paused' && st.pauseReason === 'breakpoint') {
       curLine = st.line;
       setCodeStatus(`Dừng ở breakpoint dòng ${st.line ?? '?'} (địa chỉ 0x${st.pc.toString(16).toUpperCase()}). Bấm Chạy tiếp để chạy tiếp.`);
@@ -770,9 +908,16 @@ void main() {
           <p class="sub">Tụ gốm hở mạch với DC — chỉ làm tụ nạp cho mạch dao động thạch anh, không ảnh hưởng dòng DC.</p>`;
       } else if (comp.type === 'crystal') {
         const freq = comp.props?.freq ?? 4000000;
+        // Trạng thái sống: thạch anh này có đang cấp xung cho chip không
+        // (Issue 17) — vòng poll cập nhật ô này (xem updateInspectorCrystal).
+        const wiredFreq = crystalFreqOf(state, comp.id);
         body = `<label class="bench-insp-label" for="inspXtalFreq">Tần số thạch anh</label>
           <select class="select" id="inspXtalFreq">${[4000000, 8000000, 20000000].map((f) => `<option value="${f}"${freq === f ? ' selected' : ''}>${f / 1e6} MHz</option>`).join('')}</select>
-          <p class="sub">Xung nhịp của chip lấy từ thạch anh này. Không có thạch anh thì chip không chạy.</p>`;
+          <label class="bench-insp-label">Trạng thái (live)</label>
+          <div class="bench-conns">
+            <div class="bench-conn"><span>Xung</span><span id="inspCrystalState">${wiredFreq ? 'Xung đang dùng: ' + (wiredFreq / 1e6) + ' MHz' : 'Chưa có thạch anh'}</span></div>
+          </div>
+          <p class="sub">Xung nhịp của chip lấy từ thạch anh này. Không có thạch anh thì chip không chạy. Thạch anh phải cắm đúng 2 strip OSC1/OSC2 của PIC thì mới cấp xung (đặt ở chỗ khác trên bàn thì không tính).</p>`;
       } else if (comp.type === 'sevenseg') {
         // Số đang hiện lấy từ bridge ngay lúc mở popup; vòng poll cập
         // nhật live 2 ô này (xem updateInspectorSeg), không vẽ lại popup.
@@ -796,13 +941,32 @@ void main() {
         // Bàn phím 4x4: phím đang nhấn (live, vòng poll cập nhật ô này),
         // cách quét + ghi chú nối dây. Phím nhấn giữ trên panel 3D (bấm
         // vào phím vuông) thì hàng của nó nối với cột của nó.
+        // Phím nhấn mà hàng/cột chưa nối tới chân PIC thì CPU không đọc
+        // được — Inspector hiện ghi chú "chưa nối dây" thay vì "Đang
+        // nhấn" (Issue 16). Vòng poll cập nhật ô này (xem
+        // updateInspectorKeypad): có phím trong CPU thì hiện phím, đang
+        // nhấn giữ mà CPU không thấy thì hiện ghi chú chưa nối dây.
         const b = bridge();
         const kps = b && typeof b.getKeypadState === 'function' ? b.getKeypadState() : null;
         const s = kps ? kps.find((x) => x.id === comp.id) : null;
+        const mapping = b && typeof b.getMapping === 'function' ? b.getMapping() : null;
+        const kpMap = mapping && mapping.keypads ? mapping.keypads.find((x) => x.id === comp.id) : null;
+        const unwiredRows = kpMap ? kpMap.rows.map((p, i) => (p ? null : 'R' + i)).filter(Boolean) : [];
+        const unwiredCols = kpMap ? kpMap.cols.map((p, i) => (p ? null : 'C' + i)).filter(Boolean) : [];
+        const unwiredNote = (unwiredRows.length || unwiredCols.length)
+          ? `Chưa nối dây: ${[...unwiredRows, ...unwiredCols].join(', ')} chưa tới chân PIC — phím dùng hàng/cột đó CPU không đọc được.`
+          : '';
+        const pressedHere = pressedKeypad && pressedKeypad.id === comp.id ? pressedKeypad : null;
+        const pressedText = s
+          ? 'Phím "' + esc(s.key) + '" (hàng ' + s.row + ', cột ' + s.col + ')'
+          : pressedHere
+            ? 'Đã nhấn phím "' + esc(KEYPAD_KEYS[pressedHere.row][pressedHere.col]) + '" nhưng chưa nối dây nên CPU không đọc được'
+            : 'Không nhấn phím nào';
         body = `<label class="bench-insp-label">Đang nhấn</label>
           <div class="bench-conns">
-            <div class="bench-conn"><span>Phím</span><span id="inspKeypadPressed">${s ? 'Phím "' + esc(s.key) + '" (hàng ' + s.row + ', cột ' + s.col + ')' : 'Không nhấn phím nào'}</span></div>
+            <div class="bench-conn"><span>Phím</span><span id="inspKeypadPressed">${pressedText}</span></div>
           </div>
+          ${unwiredNote ? `<p class="sub">${esc(unwiredNote)}</p>` : ''}
           <p class="sub">Bấm giữ 1 phím vuông trên panel 3D để nhấn phím đó (nhả chuột thì nhả phím). Phím đang nhấn nối hàng của nó với cột của nó — CPU quét bằng cách lái từng hàng R0–R3 xuống 0 rồi đọc cột C0–C3 (cột có pull-up nên đọc 0 khi phím nhấn, 1 khi không nhấn). Nối 4 hàng tới chân PORT làm đầu ra, 4 cột tới chân PORT làm đầu vào.</p>`;
       } else if (comp.type === 'motor') {
         // Động cơ DC: điện áp/dòng/tốc độ live (vòng poll cập nhật 3 ô
@@ -815,45 +979,85 @@ void main() {
           <div class="bench-conns">
             <div class="bench-conn"><span>Điện áp</span><span id="inspMotorVolts">${m ? formatVolts(m.volts) : '—'}</span></div>
             <div class="bench-conn"><span>Dòng</span><span id="inspMotorAmps">${m ? formatAmps(m.amps) : '—'}</span></div>
-            <div class="bench-conn"><span>Tốc độ</span><span id="inspMotorRpm">${m && m.rpm !== null && m.rpm !== undefined ? Math.round(m.rpm) + ' vòng/phút' : '—'}</span></div>
+            <div class="bench-conn"><span>Tốc độ (trung bình)</span><span id="inspMotorRpm">${m && m.rpm !== null && m.rpm !== undefined ? Math.round(m.rpm) + ' vòng/phút' : '—'}</span></div>
           </div>
           <label class="bench-insp-label" for="inspMotorVal">Điện trở cuộn dây (Ω)</label>
           <input class="input" id="inspMotorVal" type="number" min="1" max="10000" step="1" value="${comp.props?.value ?? 100}">
-          <p class="sub">Động cơ là tải trở: dòng = điện áp / điện trở cuộn dây (mặc định 100Ω, 5V → 50mA). Tốc độ tỷ lệ với điện áp (20V = 1000 vòng/phút). Đấu qua chân PIC thì tốc độ theo mức chân; PWM (CCP) thì tốc độ theo điện áp trung bình (duty cycle). Nối 2 chân +/− tới nguồn hoặc chân PIC; đảo cực thì quay ngược.</p>`;
+          <p class="sub">Động cơ là tải trở: dòng = điện áp / điện trở cuộn dây (mặc định 100Ω, 5V → 50mA). Tốc độ tỷ lệ với điện áp (20V = 1000 vòng/phút). Tốc độ hiện là trung bình trượt (EMA) theo điện áp tức thời — PWM thì hiện tốc độ trung bình theo duty cycle. Đấu qua chân PIC thì tốc độ theo mức chân; PWM (CCP) thì tốc độ theo điện áp trung bình (duty cycle). Nối 2 chân +/− tới nguồn hoặc chân PIC; đảo cực thì quay ngược.</p>`;
       } else if (comp.type === 'led') {
         // Ô chọn màu luôn hiện đúng màu thật của LED: nếu màu hiện tại
         // không nằm trong bảng màu (vd LED Lab 2 cũ màu #16A34A, hoặc
         // mạch đã lưu từ trước) thì thêm nó làm lựa chọn đang chọn, tránh
         // trình duyệt tự nhảy về lựa chọn đầu tiên (Đỏ) khi không có
         // option nào khớp.
+        // Trạng thái sống (Issue 17): vòng poll cập nhật ô này (xem
+        // updateInspectorLed) theo điện áp đã giải — sáng/tắt theo mạch
+        // thật, không theo mức logic.
         const curLedColor = comp.props?.color || '#DC2626';
         const ledOpts = LED_COLORS.some((c) => c.value === curLedColor)
           ? LED_COLORS.map((c) => `<option value="${c.value}"${curLedColor === c.value ? ' selected' : ''}>${c.name}</option>`).join('')
           : `<option value="${curLedColor}" selected>Màu hiện tại (${curLedColor})</option>` + LED_COLORS.map((c) => `<option value="${c.value}">${c.name}</option>`).join('');
+        const bLed = bridge();
+        const ledStates = bLed && typeof bLed.getLedStates === 'function' ? bLed.getLedStates() : null;
+        const ledSt = ledStates ? ledStates.find((x) => x.id === comp.id) : null;
         body = `<label class="bench-insp-label" for="inspLedColor">Màu LED</label>
           <select class="select" id="inspLedColor">${ledOpts}</select>
+          <label class="bench-insp-label">Trạng thái (live)</label>
+          <div class="bench-conns">
+            <div class="bench-conn"><span>LED</span><span id="inspLedState">${ledSt ? (ledSt.on ? 'Đang sáng' : 'Tắt') : '—'}</span></div>
+          </div>
           <p class="sub">LED sáng khi anode ở mức 1 và cathode về GND (hoặc mức 0).</p>`;
       } else if (comp.type === 'pot') {
         // Số volt wiper đọc từ SOLVER (điện áp thật của net chân VCC ×
         // pct), không tính (pct/100)*5: PSU 3V, núm 50% thì ~1,5V; chân
         // GND chưa nối thì wiper lơ lửng, hiện "—".
+        // Ô nhập số (U2) bên cạnh thanh trượt: gõ số thì slider đổi theo,
+        // kéo slider thì ô số đổi theo (đồng bộ 2 chiều, xem wiring bên
+        // dưới). Thanh trượt một mình không gõ được số chính xác (vd 50%).
         const pct = comp.props?.pct ?? 0;
         const b = bridge();
         const wv = b && typeof b.getPotVolts === 'function' ? b.getPotVolts(comp.id) : null;
         body = `<label class="bench-insp-label" for="inspPotRange">Chiết áp — <span id="inspPotVal">${wv === null || wv === undefined ? '—' : wv.toFixed(2) + ' V'}</span></label>
           <input type="range" class="pot-slider" id="inspPotRange" min="0" max="100" step="1" value="${pct}">
+          <label class="bench-insp-label" for="inspPotNum">Vị trí núm xoay (%)</label>
+          <input class="input" id="inspPotNum" type="number" min="0" max="100" step="1" value="${pct}">
           <p class="sub">Wiper nối kênh AN nào thì ADC đọc điện áp đó (0 đến điện áp nguồn). Chân GND chưa nối thì wiper lơ lửng, ADC đọc 0.</p>`;
       } else if (comp.type === 'button') {
-        body = `<p class="sub">Nhấn giữ linh kiện trên bàn: nối 2 chân T1–T2 với nhau như công tắc (vd nối tiếp nguồn–LED qua nút thì nhấn mới sáng). Nếu 1 chân nối chân PIC thì nhấn kéo chân đó về mức 0 (active-low, có pull-up).</p>`;
+        // Trạng thái sống (Issue 17): vòng poll cập nhật ô này (xem
+        // updateInspectorButton) theo nút đang nhấn giữ trên bàn.
+        body = `<label class="bench-insp-label">Trạng thái (live)</label>
+          <div class="bench-conns">
+            <div class="bench-conn"><span>Nút</span><span id="inspButtonState">${pressedBtn === comp.id ? 'Đang nhấn' : 'Thả'}</span></div>
+          </div>
+          <p class="sub">Nhấn giữ linh kiện trên bàn: nối 2 chân T1–T2 với nhau như công tắc (vd nối tiếp nguồn–LED qua nút thì nhấn mới sáng). Nếu 1 chân nối chân PIC thì nhấn kéo chân đó về mức 0 (active-low, có pull-up).</p>`;
       } else if (comp.type === 'lcd') {
         const b = bridge();
         const lcd = b && typeof b.getMapping === 'function' ? b.getMapping().lcd : null;
-        body = lcd && lcd.id
+        // 2 dòng chữ đang hiện, cập nhật live (Issue 17): vòng poll cập
+        // nhật 2 ô này (xem updateInspectorLcd) theo DDRAM của CPU.
+        const lcdText = b && typeof b.getLcd === 'function' ? b.getLcd() : null;
+        const line0 = lcdText && lcdText.lines ? lcdText.lines[0] : '';
+        const line1 = lcdText && lcdText.lines ? lcdText.lines[1] : '';
+        body = (lcd && lcd.id
           ? `<p class="sub">${lcd.complete ? 'LCD đã nối đủ dây, hiện chữ theo code.' : 'LCD chưa nối đủ dây — thiếu: ' + (lcd.missing.join(', ') || 'không rõ') + '.'}</p>`
-          : `<p class="sub">LCD hiển thị 2 dòng 16 ký tự theo code (data + RS/E).</p>`;
+          : `<p class="sub">LCD hiển thị 2 dòng 16 ký tự theo code (data + RS/E).</p>`)
+          + `<label class="bench-insp-label">Đang hiện (live)</label>
+          <div class="bench-conns">
+            <div class="bench-conn"><span>Dòng 1</span><span id="inspLcdLine0">${esc(line0 || '—')}</span></div>
+            <div class="bench-conn"><span>Dòng 2</span><span id="inspLcdLine1">${esc(line1 || '—')}</span></div>
+          </div>`;
       } else if (comp.type === 'buzzer') {
         const soundOn = comp.props?.sound !== false;
+        // Trạng thái sống (Issue 17): vòng poll cập nhật ô này (xem
+        // updateInspectorBuzzer) theo điện áp đã giải.
+        const bBuz = bridge();
+        const buzStates = bBuz && typeof bBuz.getBuzzerStates === 'function' ? bBuz.getBuzzerStates() : null;
+        const buzSt = buzStates ? buzStates.find((x) => x.id === comp.id) : null;
         body = `<label class="bench-insp-row"><input type="checkbox" id="inspBuzzerSound"${soundOn ? ' checked' : ''}> Phát tiếng khi còi kêu</label>
+          <label class="bench-insp-label">Trạng thái (live)</label>
+          <div class="bench-conns">
+            <div class="bench-conn"><span>Còi</span><span id="inspBuzzerState">${buzSt ? (buzSt.on ? 'Đang kêu' : 'Không kêu') : '—'}</span></div>
+          </div>
           <p class="sub">Còi kêu khi chân + ra mức 1 (chân PIC mức cao hoặc nối thẳng nguồn 0–10V) và chân − về GND.</p>`;
       } else if (comp.type === 'multimeter') {
         // Đồng hồ đo: chọn chế độ trong popup, đổi lúc nào cũng được.
@@ -903,26 +1107,47 @@ void main() {
           <p class="sub">Màn hình vẽ sóng CH1 (cyan) và CH2 (vàng) so với GND, thang −0,5..5,5V, cửa sổ 12 giây. Lấy mẫu 20 lần/giây nên tín hiệu nhanh hơn ~10Hz sẽ bị méo (giới hạn lấy mẫu, không phải lỗi mạch). Cọc nào chưa nối dây thì kênh đó hiện "—".</p>`;
       } else if (comp.type === 'serial') {
         // Màn hình Serial: gõ ký tự + Gửi (vào RCREG, đặt RCIF), log đã
-        // nhận (live, vòng poll cập nhật), nút Xóa. Dữ liệu chạy qua CPU
-        // (onTx/receiveChar) — dây TX/RX/GND chỉ để mạch trông đầy đủ,
-        // không cần nối dây vẫn nhận/gửi được.
+        // nhận (live, vòng poll cập nhật), nút Xóa. Dữ liệu CHỈ chạy khi
+        // đấu đúng dây (Issue 6): cọc TX nối PIC.RC6, cọc RX nối PIC.RC7,
+        // cọc GND nối GND (UART cần chung mass, như mạch thật). Chưa nối
+        // đủ thì CPU phát không hiện log, gõ Gửi cũng không vào CPU.
+        // Trạng thái nối dây hiện ở dưới (vòng poll cập nhật).
         const b = bridge();
         const text = b && typeof b.getSerialText === 'function' ? (b.getSerialText(comp.id) || '') : '';
+        const sw = b && typeof b.getSerialWiring === 'function' ? b.getSerialWiring(comp.id) : null;
+        const wiringText = !sw ? '—'
+          : `TX→RC6: ${sw.tx ? 'đã nối' : 'chưa nối'} · RX→RC7: ${sw.rx ? 'đã nối' : 'chưa nối'} · GND: ${sw.gnd ? 'đã nối' : 'chưa nối'}`;
         body = `<label class="bench-insp-label" for="inspSerialInput">Gửi tới PIC (nhập rồi bấm Gửi hoặc Enter)</label>
           <div class="bench-serial-send">
             <input class="input" id="inspSerialInput" type="text" autocomplete="off" spellcheck="false" placeholder="vd: A">
             <button type="button" class="btn btn-accent btn-small" data-act="serial-send">Gửi</button>
           </div>
+          <label class="bench-insp-label">Đấu nối (live)</label>
+          <div class="bench-conns">
+            <div class="bench-conn"><span>Dây</span><span id="inspSerialWiring">${esc(wiringText)}</span></div>
+          </div>
           <label class="bench-insp-label">Đã nhận từ PIC</label>
           <pre class="bench-serial-log" id="inspSerialLog">${esc(text)}</pre>
           <button type="button" class="btn btn-small" data-act="serial-clear">Xóa</button>
-          <p class="sub">CPU phát ký tự qua TXREG (TXEN=1, SPEN=1) thì hiện ở đây (tối đa 4000 ký tự, hiện 8 dòng cuối trên màn hình 3D). Gõ rồi bấm Gửi thì từng ký tự vào RCREG (đặt cờ RCIF, ngắt nếu bật). Dây/cọc TX→RC6, RX→RC7, GND→GND chỉ để mạch trông đầy đủ như đấu nối thật — không nối dây vẫn nhận/gửi được vì dữ liệu chạy qua CPU, không qua dây.</p>`;
+          <p class="sub">CPU phát ký tự qua TXREG (TXEN=1, SPEN=1) thì hiện ở đây (tối đa 4000 ký tự, hiện 8 dòng cuối trên màn hình 3D). Gõ rồi bấm Gửi thì từng ký tự vào RCREG (đặt cờ RCIF, ngắt nếu bật). Phải nối đủ TX→RC6, RX→RC7, GND→GND thì mới gửi/nhận được — chưa nối dây thì không gửi/nhận được (như mạch thật).</p>`;
       } else if (comp.type === 'pic') {
+        // Tên đầu nối kề: chân PIC thì chỉ lấy tên chân (RB0), cọc
+        // scope/Serial thì "cọc CH1 của OSC0" (Issue 13), chân linh kiện
+        // khác (điện trở/tụ/thạch anh/đồng hồ) thì giữ nguyên id
+        // (R0.L1, MM0.P...) để biết đang nối tới linh kiện nào.
+        const fmtMember = (m) => {
+          if (m.startsWith('PIC.')) return m.slice(4);
+          const sp = parseScopePost(m);
+          if (sp) return 'cọc ' + sp.term + ' của ' + sp.scopeId;
+          const sr = parseSerialPost(m);
+          if (sr) return 'cọc ' + sr.term + ' của ' + sr.serialId;
+          return m;
+        };
         const conns = legsFor(comp, state.size).map((l) => {
           const d = describeTerminal(state, l.term, pressedIds());
           const others = d.members.filter((m) => m !== l.term);
           if (!others.length && !d.vcc && !d.gnd) return null;
-          const txt = [...(d.vcc ? ['+5V'] : []), ...(d.gnd ? ['GND'] : []), ...others.map((m) => m.startsWith('PIC.') ? m.slice(4) : m)].join(', ');
+          const txt = [...(d.vcc ? ['+5V'] : []), ...(d.gnd ? ['GND'] : []), ...others.map(fmtMember)].join(', ');
           return `<div class="bench-conn"><span>${l.term.slice(4)}</span><span>${esc(txt)}</span></div>`;
         }).filter(Boolean);
         const pa = parseHole(comp.anchor, state.size);
@@ -1025,21 +1250,42 @@ void main() {
         setStatus('Đã đổi màu LED.');
       });
       const potRange = inspectorEl.querySelector('#inspPotRange');
+      const potNum = inspectorEl.querySelector('#inspPotNum');
+      // Đặt lại núm xoay (dùng chung cho slider + ô nhập số): đổi props,
+      // áp vào CPU qua bridge, hiện lại số volt theo solver.
+      const applyPotPct = (pctRaw) => {
+        let pct = Math.round(Number(pctRaw));
+        if (!Number.isFinite(pct)) pct = comp.props?.pct ?? 0;
+        pct = Math.max(0, Math.min(100, pct));
+        comp.props = { ...(comp.props || {}), pct };
+        const b = bridge();
+        if (b && typeof b.setPot === 'function') b.setPot(comp.id, pct);
+        if (potRange) potRange.value = String(pct);
+        if (potNum) potNum.value = String(pct);
+        const valEl = inspectorEl.querySelector('#inspPotVal');
+        if (valEl) {
+          const wv = b && typeof b.getPotVolts === 'function' ? b.getPotVolts(comp.id) : null;
+          valEl.textContent = (wv === null || wv === undefined) ? '—' : wv.toFixed(2) + ' V';
+        }
+        return pct;
+      };
       if (potRange) {
         potRange.addEventListener('input', () => {
-          const pct = Number(potRange.value);
-          comp.props = { ...(comp.props || {}), pct };
-          const b = bridge();
-          if (b && typeof b.setPot === 'function') b.setPot(comp.id, pct);
-          // Số volt hiện lại theo solver sau khi xoay núm (Vref theo
-          // nguồn thật, "—" khi wiper lơ lửng).
-          const valEl = inspectorEl.querySelector('#inspPotVal');
-          if (valEl) {
-            const wv = b && typeof b.getPotVolts === 'function' ? b.getPotVolts(comp.id) : null;
-            valEl.textContent = (wv === null || wv === undefined) ? '—' : wv.toFixed(2) + ' V';
-          }
+          applyPotPct(potRange.value);
         });
         potRange.addEventListener('change', () => save());
+      }
+      // Ô nhập số (U2): gõ số (vd 50) thì slider đổi theo; số ngoài
+      // 0–100 thì kẹp lại 0–100. Đổi xong mới lưu (change), như slider.
+      if (potNum) {
+        potNum.addEventListener('change', () => {
+          applyPotPct(potNum.value);
+          save();
+        });
+        potNum.addEventListener('keydown', (e) => {
+          if (e.key === 'Enter') { e.preventDefault(); applyPotPct(potNum.value); save(); }
+          e.stopPropagation();
+        });
       }
       const buzzerSound = inspectorEl.querySelector('#inspBuzzerSound');
       if (buzzerSound) buzzerSound.addEventListener('change', () => {
@@ -1098,7 +1344,14 @@ void main() {
           inp.value = '';
           setStatus('Đã gửi ' + sent + ' ký tự tới PIC.');
         } else {
-          setStatus('Không gửi được (chỉ gửi ký tự ASCII).');
+          // Gửi 0 ký tự: hoặc toàn ký tự không phải ASCII, hoặc màn hình
+          // chưa nối dây RX/GND (Issue 6) — báo rõ để nối dây lại.
+          const sw = b && typeof b.getSerialWiring === 'function' ? b.getSerialWiring(comp.id) : null;
+          if (sw && (!sw.rx || !sw.gnd)) {
+            setStatus('Chưa gửi được — màn hình chưa nối dây: nối cọc RX→RC7 và cọc GND→GND thì mới gửi vào PIC được.');
+          } else {
+            setStatus('Không gửi được (chỉ gửi ký tự ASCII).');
+          }
         }
       };
       inspectorEl.querySelector('[data-act="serial-send"]')?.addEventListener('click', serialSend);
@@ -2899,13 +3152,19 @@ void main() {
       if (!b) return;
       try {
         if (typeof b.getLedStates === 'function') {
-          for (const s of b.getLedStates()) {
-            const m = ledMats.get(s.id);
-            if (m) m.emissiveIntensity = s.on ? 1.8 : 0.12;
+          let ledStates = null;
+          try { ledStates = b.getLedStates(); } catch { ledStates = null; }
+          if (ledStates) {
+            for (const s of ledStates) {
+              const m = ledMats.get(s.id);
+              if (m) m.emissiveIntensity = s.on ? 1.8 : 0.12;
+            }
+            updateInspectorLed(ledStates);
           }
         }
         if (typeof b.getLcd === 'function') {
           const lcd = b.getLcd();
+          updateInspectorLcd(lcd);
           for (const [, t] of lcdTexs) {
             // Key gồm cả pattern CGRAM: 2 trạng thái có cùng chuỗi lines
             // nhưng pattern khác nhau (vd Đ vs ệ) vẫn phải vẽ lại.
@@ -2939,19 +3198,25 @@ void main() {
         }
         if (typeof b.getBuzzerStates === 'function') {
           let anyBuzz = false;
-          for (const s of b.getBuzzerStates()) {
-            const mat = buzzerMats.get(s.id);
-            if (mat) mat.emissiveIntensity = s.on ? 1.2 : 0;
-            if (s.on) {
-              const comp = state.components.find((c) => c.id === s.id);
-              if (!comp || comp.props?.sound !== false) anyBuzz = true;
+          let buzzerStates = null;
+          try { buzzerStates = b.getBuzzerStates(); } catch { buzzerStates = null; }
+          if (buzzerStates) {
+            for (const s of buzzerStates) {
+              const mat = buzzerMats.get(s.id);
+              if (mat) mat.emissiveIntensity = s.on ? 1.2 : 0;
+              if (s.on) {
+                const comp = state.components.find((c) => c.id === s.id);
+                if (!comp || comp.props?.sound !== false) anyBuzz = true;
+              }
             }
+            setBuzzerSound(anyBuzz);
+            updateInspectorBuzzer(buzzerStates);
           }
-          setBuzzerSound(anyBuzz);
         }
         if (typeof b.getMeterReadings === 'function') {
           let readings = null;
-          try { readings = b.getMeterReadings(); } catch { readings = null; }
+          let meterErr = false;
+          try { readings = b.getMeterReadings(); } catch { readings = null; meterErr = true; }
           if (readings) {
             const byId = new Map();
             for (const v of readings.voltmeters || []) byId.set(v.id, { text: formatVolts(v.volts), data: v });
@@ -2969,6 +3234,14 @@ void main() {
               drawMeterTexture(t, text);
             }
             updateInspectorMeter(byId);
+          } else if (meterErr) {
+            // Đọc số đo lỗi (exception): vẽ "—" thay vì giữ số cũ
+            // (Issue 20a) — số cũ là của mạch trước khi lỗi, giữ lại sẽ
+            // nhầm là số đo hiện tại.
+            for (const [, t] of meterTexs) {
+              if (t.last !== '—') { t.last = '—'; drawMeterTexture(t, '—'); }
+            }
+            updateInspectorMeter(new Map());
           }
         }
         if (typeof b.getScopeData === 'function') {
@@ -3049,6 +3322,11 @@ void main() {
           }
           updateInspectorSerial();
         }
+        // Thạch anh + nút nhấn: trạng thái sống chỉ đọc từ bench state
+        // (không cần bridge) — thạch anh nào đang cấp xung, nút nào
+        // đang nhấn giữ (Issue 17).
+        updateInspectorCrystal();
+        updateInspectorButton();
       } catch { /* bridge chưa sẵn: bỏ qua lần này */ }
     }, 150);
   }
@@ -3102,15 +3380,81 @@ void main() {
       digitEl.textContent = digit === null ? '—' : digit;
     }
   }
+  // Inspector đang mở trên 1 LED thì cập nhật trạng thái sáng/tắt live
+  // (Issue 17): chỉ đổi text ô "Đang sáng"/"Tắt" đã có, không render lại
+  // Inspector. Không có trạng thái thì hiện "—".
+  function updateInspectorLed(ledStates) {
+    if (!selected || selected.kind !== 'comp') return;
+    const comp = state.components.find((c) => c.id === selected.id);
+    if (!comp || comp.type !== 'led') return;
+    const s = (ledStates || []).find((x) => x.id === comp.id);
+    const el = inspectorEl.querySelector('#inspLedState');
+    if (el) el.textContent = s ? (s.on ? 'Đang sáng' : 'Tắt') : '—';
+  }
+  // Inspector đang mở trên 1 còi thì cập nhật trạng thái kêu/không kêu
+  // live (Issue 17).
+  function updateInspectorBuzzer(buzzerStates) {
+    if (!selected || selected.kind !== 'comp') return;
+    const comp = state.components.find((c) => c.id === selected.id);
+    if (!comp || comp.type !== 'buzzer') return;
+    const s = (buzzerStates || []).find((x) => x.id === comp.id);
+    const el = inspectorEl.querySelector('#inspBuzzerState');
+    if (el) el.textContent = s ? (s.on ? 'Đang kêu' : 'Không kêu') : '—';
+  }
+  // Inspector đang mở trên 1 thạch anh thì cập nhật xung đang dùng live
+  // (Issue 17): thạch anh này có đang cấp xung cho chip không (cắm đúng
+  // strip OSC1/OSC2). Không cấp xung thì "Chưa có thạch anh".
+  function updateInspectorCrystal() {
+    if (!selected || selected.kind !== 'comp') return;
+    const comp = state.components.find((c) => c.id === selected.id);
+    if (!comp || comp.type !== 'crystal') return;
+    const el = inspectorEl.querySelector('#inspCrystalState');
+    if (!el) return;
+    const freq = crystalFreqOf(state, comp.id);
+    el.textContent = freq ? 'Xung đang dùng: ' + (freq / 1e6) + ' MHz' : 'Chưa có thạch anh';
+  }
+  // Inspector đang mở trên 1 LCD thì cập nhật 2 dòng chữ đang hiện live
+  // (Issue 17): chỉ đổi text 2 ô đã có, không render lại Inspector.
+  // LCD tắt màn hình (displayOn=false) thì 2 dòng hiện "—" (DDRAM vẫn
+  // giữ chữ, bật lại thì chữ về).
+  function updateInspectorLcd(lcd) {
+    if (!selected || selected.kind !== 'comp') return;
+    const comp = state.components.find((c) => c.id === selected.id);
+    if (!comp || comp.type !== 'lcd') return;
+    const l0El = inspectorEl.querySelector('#inspLcdLine0');
+    const l1El = inspectorEl.querySelector('#inspLcdLine1');
+    if (!lcd || lcd.displayOn === false) {
+      if (l0El) l0El.textContent = '—';
+      if (l1El) l1El.textContent = '—';
+      return;
+    }
+    if (l0El) l0El.textContent = (lcd.lines && lcd.lines[0]) || '—';
+    if (l1El) l1El.textContent = (lcd.lines && lcd.lines[1]) || '—';
+  }
+  // Inspector đang mở trên 1 nút nhấn thì cập nhật trạng thái nhấn/thả
+  // live (Issue 17): nút đang nhấn giữ trên bàn (pressedBtn) hay đã thả.
+  function updateInspectorButton() {
+    if (!selected || selected.kind !== 'comp') return;
+    const comp = state.components.find((c) => c.id === selected.id);
+    if (!comp || comp.type !== 'button') return;
+    const el = inspectorEl.querySelector('#inspButtonState');
+    if (el) el.textContent = pressedBtn === comp.id ? 'Đang nhấn' : 'Thả';
+  }
   // Inspector đang mở trên 1 bàn phím 4x4 thì cập nhật phím đang nhấn live
   // (chỉ đổi text ô "Đang nhấn" đã có, không render lại Inspector).
+  // Phím đang nhấn giữ trên bàn (pressedKeypad) mà CPU không thấy (hàng/
+  // cột chưa nối tới chân PIC) thì hiện ghi chú "chưa nối dây" thay vì
+  // "Đang nhấn" (Issue 16).
   function updateInspectorKeypad(kpStates) {
     if (!selected || selected.kind !== 'comp') return;
     const comp = state.components.find((c) => c.id === selected.id);
     if (!comp || comp.type !== 'keypad') return;
     const s = (kpStates || []).find((x) => x.id === comp.id);
     const el = inspectorEl.querySelector('#inspKeypadPressed');
-    if (el) el.textContent = s ? ('Phím "' + s.key + '" (hàng ' + s.row + ', cột ' + s.col + ')') : 'Không nhấn phím nào';
+    if (!el) return;
+    if (s) el.textContent = 'Phím "' + s.key + '" (hàng ' + s.row + ', cột ' + s.col + ')';
+    else if (pressedKeypad && pressedKeypad.id === comp.id) el.textContent = 'Đã nhấn phím "' + KEYPAD_KEYS[pressedKeypad.row][pressedKeypad.col] + '" nhưng chưa nối dây nên CPU không đọc được';
+    else el.textContent = 'Không nhấn phím nào';
   }
   // Inspector đang mở trên 1 động cơ DC thì cập nhật V/A/RPM live (chỉ đổi
   // text 3 ô đã có, không render lại Inspector). RPM hiện theo EMA (đã làm
@@ -3131,6 +3475,7 @@ void main() {
   // Inspector đang mở trên 1 màn hình Serial thì cập nhật log đã nhận live
   // (chỉ đổi text ô log đã có, không render lại Inspector). Cuộn xuống
   // cuối log sau mỗi lần đổi (nếu người dùng chưa cuộn lên xem lại).
+  // Đồng thời cập nhật dòng trạng thái đấu nối TX/RX/GND (Issue 6).
   function updateInspectorSerial() {
     if (!selected || selected.kind !== 'comp') return;
     const comp = state.components.find((c) => c.id === selected.id);
@@ -3138,12 +3483,20 @@ void main() {
     const b = bridge();
     if (!b || typeof b.getSerialText !== 'function') return;
     const logEl = inspectorEl.querySelector('#inspSerialLog');
-    if (!logEl) return;
-    let text = '';
-    try { text = b.getSerialText(comp.id) || ''; } catch { text = ''; }
-    if (logEl.textContent !== text) {
-      logEl.textContent = text;
-      logEl.scrollTop = logEl.scrollHeight;
+    if (logEl) {
+      let text = '';
+      try { text = b.getSerialText(comp.id) || ''; } catch { text = ''; }
+      if (logEl.textContent !== text) {
+        logEl.textContent = text;
+        logEl.scrollTop = logEl.scrollHeight;
+      }
+    }
+    const wEl = inspectorEl.querySelector('#inspSerialWiring');
+    if (wEl && typeof b.getSerialWiring === 'function') {
+      let sw = null;
+      try { sw = b.getSerialWiring(comp.id); } catch { sw = null; }
+      wEl.textContent = !sw ? '—'
+        : `TX→RC6: ${sw.tx ? 'đã nối' : 'chưa nối'} · RX→RC7: ${sw.rx ? 'đã nối' : 'chưa nối'} · GND: ${sw.gnd ? 'đã nối' : 'chưa nối'}`;
     }
   }
 
