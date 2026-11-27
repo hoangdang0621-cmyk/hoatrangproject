@@ -20,7 +20,7 @@ import {
 } from './bench-model.js?v=20261125bn';
 import { checkWiring, SIGNAL_COLORS, SEVEN_SEG_TERMS, KEYPAD_KEYS } from './wiring.js?v=20261125bn';
 import { formatVolts, formatAmps, formatCurrentDirection, sevenSegDigit } from './circuit-solver.js?v=20261125bn';
-import { LABS, getLab, buildLabState } from './labs.js?v=20261125bn';
+import { LABS, getLab, buildLabState } from './labs.js?v=20261125bo';
 
 const $ = (id) => document.getElementById(id);
 const benchView = $('benchView');
@@ -3229,6 +3229,14 @@ void main() {
       inspectorEl.addEventListener(ev, disarmInspAutoClose);
     }
   }
+
+  // Deep-link ?lab=<id>: mở thẳng lab đó (trang Lý thuyết link tới lab
+  // cụ thể, vd /thuc-hanh/pic16f877a/?lab=chay-tung-lenh). Id lạ thì bỏ
+  // qua, mở bàn như thường.
+  try {
+    const deepLab = new URLSearchParams(location.search).get('lab');
+    if (deepLab && getLab(deepLab)) openLab(deepLab);
+  } catch { /* URL lạ: bỏ qua */ }
 }
 
 function esc(s) {
