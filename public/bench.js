@@ -743,7 +743,10 @@ void main() {
     codeInput.addEventListener('input', () => {
       renderGutter();
       saveCodeSoon();
-      if (codeLoaded) setCodeStatus('Code đã sửa — bấm Nạp & chạy để nạp lại.');
+      if (codeLoaded) {
+        codeLoaded = false;
+        setCodeStatus('Code đã sửa — bấm Nạp & chạy để nạp lại.');
+      }
     });
     codeInput.addEventListener('scroll', () => { if (codeGutter) codeGutter.scrollTop = codeInput.scrollTop; });
     codeInput.addEventListener('keydown', (e) => {
@@ -796,6 +799,21 @@ void main() {
     $('btnCodeStep')?.addEventListener('click', () => {
       const b = bridge();
       if (!b) return;
+      // Chưa nạp chương trình thì nạp từ editor trước (biên dịch + nạp,
+      // KHÔNG chạy) rồi mới bước — để bấm "Chạy từng lệnh" ngay từ đầu
+      // cũng bước được từ dòng đầu tiên, không bắt phải bấm "Nạp & chạy".
+      if (!codeLoaded) {
+        const lr = b.loadC(codeInput.value);
+        if (!lr.ok) { setCodeStatus(codeErrorText(lr.errors), true); return; }
+        codeLineToAddr = lr.lineToAddr || new Map();
+        pruneBreakpoints();
+        pushBreakpointsToCpu();
+        codeLoaded = true;
+        lastCodeXtalFreq = typeof lr.xtalFreq === 'number' ? lr.xtalFreq : null;
+        lastLoadNoCrystal = !!lr.noCrystal;
+        renderChecks();
+        if (lr.noCrystal) { setCodeStatus(NO_CRYSTAL_MSG, true); return; }
+      }
       const r = b.stepProgram();
       if (!r.ok) { setCodeStatus(r.error, true); return; }
       refreshCodeStatus(true);
