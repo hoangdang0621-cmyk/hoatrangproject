@@ -2288,11 +2288,12 @@ const SLEEP_PROG = `    ORG 0
     === JSON.stringify([{ term: 'L1', hole: 'c10' }, { term: 'L2', hole: 'c14' }])
     && JSON.stringify(legsFor({ type: 'pot', anchor: 'c10', rot: 0 }, 830))
     === JSON.stringify([{ term: 'VCC', hole: 'c10' }, { term: 'W', hole: 'c11' }, { term: 'GND', hole: 'c12' }]), '');
-  check('(p-a) LCD ở c10: 10 chân RS/E/D0-D7 -> c10..c19',
+  check('(p-a) LCD ở c10: 12 chân VSS/VDD/RS/E/D0-D7 -> c8..c19 (VSS/VDD ở dc -2/-1 theo thứ tự chân HD44780 thật)',
     (() => {
       const legs = legsFor({ type: 'lcd', anchor: 'c10', rot: 0 }, 830);
-      return legs.length === 10 && legs[0].term === 'RS' && legs[0].hole === 'c10'
-        && legs[1].term === 'E' && legs[1].hole === 'c11' && legs[9].term === 'D7' && legs[9].hole === 'c19';
+      return legs.length === 12 && legs[0].term === 'VSS' && legs[0].hole === 'c8'
+        && legs[1].term === 'VDD' && legs[1].hole === 'c9' && legs[2].term === 'RS' && legs[2].hole === 'c10'
+        && legs[3].term === 'E' && legs[3].hole === 'c11' && legs[11].term === 'D7' && legs[11].hole === 'c19';
     })(), '');
   check('(p-b) PIC trên board 42x15: đủ 40 chân, chân 1 MCLR->e12, chân 21 RD2->k31, chân 40 RB7->k12',
     (() => {
@@ -3170,8 +3171,8 @@ WAIT_EE
     && lab.components[4].id === 'C0' && lab.components[4].type === 'capacitor' && lab.components[4].anchor === 'n30' && lab.components[4].props.value === 22
     && lab.components[5].id === 'C1' && lab.components[5].type === 'capacitor' && lab.components[5].anchor === 'n36' && lab.components[5].props.value === 22,
     JSON.stringify(lab.components));
-  check('(y-a) Lab 2 có đúng 17 dây: 3 dây LED + 10 dây LCD (RS/E/D0–D7) + 4 dây dao động (2 tụ về OSC1/OSC2 + 2 tụ về GND)',
-    lab.wires.length === 17
+  check('(y-a) Lab 2 có đúng 19 dây: 3 dây LED + 10 dây LCD (RS/E/D0–D7) + 2 dây nguồn LCD (VDD/VSS) + 4 dây dao động (2 tụ về OSC1/OSC2 + 2 tụ về GND)',
+    lab.wires.length === 19
     && lab.wires[0].a === 'n47' && lab.wires[0].b === 't45'
     && lab.wires[1].a === 't49' && lab.wires[1].b === 't52'
     && lab.wires[2].a === 't53' && lab.wires[2].b === 'B-53'
@@ -3180,15 +3181,17 @@ WAIT_EE
     && lab.wires[13].a === 'o34' && lab.wires[13].b === 'h53'
     && lab.wires[14].a === 'o30' && lab.wires[14].b === 'B-30'
     && lab.wires[15].a === 'o40' && lab.wires[15].b === 'h54'
-    && lab.wires[16].a === 'o36' && lab.wires[16].b === 'B-36',
+    && lab.wires[16].a === 'o36' && lab.wires[16].b === 'B-36'
+    && lab.wires[17].a === 'b76' && lab.wires[17].b === 'B+76'
+    && lab.wires[18].a === 'b75' && lab.wires[18].b === 'B-75',
     JSON.stringify(lab.wires.map((w) => w.a + '->' + w.b)));
 }
 // (y-b) buildLabState cho ra state hợp lệ + không đầu dây nào trùng lỗ chân linh kiện
 {
   const r = buildLabState(LABS[1]);
-  check('(y-b) buildLabState Lab 2 ok: PIC1 + PSU1 + R1 + LED1 + LCD1 + X0 + C0 + C1, dây W1-W7 + 17 dây lab',
+  check('(y-b) buildLabState Lab 2 ok: PIC1 + PSU1 + R1 + LED1 + LCD1 + X0 + C0 + C1, dây W1-W7 + 19 dây lab',
     r.ok && r.state.components.map((c) => c.id).join(',') === 'PIC1,PSU1,R1,LED1,LCD1,X0,C0,C1'
-    && r.state.wires.map((w) => w.id).join(',') === 'W1,W2,W3,W4,W5,W6,W7,LAB2-W1,LAB2-W2,LAB2-W3,LAB2-W4,LAB2-W5,LAB2-W6,LAB2-W7,LAB2-W8,LAB2-W9,LAB2-W10,LAB2-W11,LAB2-W12,LAB2-W13,LAB2-W14,LAB2-W15,LAB2-W16,LAB2-W17',
+    && r.state.wires.map((w) => w.id).join(',') === 'W1,W2,W3,W4,W5,W6,W7,LAB2-W1,LAB2-W2,LAB2-W3,LAB2-W4,LAB2-W5,LAB2-W6,LAB2-W7,LAB2-W8,LAB2-W9,LAB2-W10,LAB2-W11,LAB2-W12,LAB2-W13,LAB2-W14,LAB2-W15,LAB2-W16,LAB2-W17,LAB2-W18,LAB2-W19',
     r.ok ? JSON.stringify({ comps: r.state.components.map((c) => c.id), wires: r.state.wires.map((w) => w.id) }) : r.reason);
   check('(y-b) không đầu dây lab nào cắm trùng lỗ chân linh kiện (chip/R1/LED1/LCD1)',
     r.ok && (() => {
@@ -3519,22 +3522,24 @@ D1: DECFSZ CNT,F
     && lab.components[2].id === 'C0' && lab.components[2].type === 'capacitor' && lab.components[2].anchor === 'n30' && lab.components[2].props.value === 22
     && lab.components[3].id === 'C1' && lab.components[3].type === 'capacitor' && lab.components[3].anchor === 'n36' && lab.components[3].props.value === 22,
     JSON.stringify(lab.components));
-  check('(bc-a) Lab 4 có đúng 14 dây: 10 dây LCD (RS/E/D0–D7) + 4 dây dao động',
-    lab.wires.length === 14
+  check('(bc-a) Lab 4 có đúng 16 dây: 10 dây LCD (RS/E/D0–D7) + 2 dây nguồn LCD (VDD/VSS) + 4 dây dao động',
+    lab.wires.length === 16
     && lab.wires[0].a === 'b77' && lab.wires[0].b === 'f48'   // LCD.RS -> RE0
     && lab.wires[9].a === 'b86' && lab.wires[9].b === 'k51'   // LCD.D7 -> RD7
     && lab.wires[10].a === 'o34' && lab.wires[10].b === 'h53' // C0 -> OSC1
     && lab.wires[11].a === 'o30' && lab.wires[11].b === 'B-30' // C0 -> GND
     && lab.wires[12].a === 'o40' && lab.wires[12].b === 'h54' // C1 -> OSC2
-    && lab.wires[13].a === 'o36' && lab.wires[13].b === 'B-36', // C1 -> GND
+    && lab.wires[13].a === 'o36' && lab.wires[13].b === 'B-36' // C1 -> GND
+    && lab.wires[14].a === 'b76' && lab.wires[14].b === 'B+76' // LCD.VDD -> +5V
+    && lab.wires[15].a === 'b75' && lab.wires[15].b === 'B-75', // LCD.VSS -> GND
     JSON.stringify(lab.wires.map((w) => w.a + '->' + w.b)));
 }
 // (bc-b) buildLabState cho ra state hợp lệ + mỗi đầu dây cùng strip với chân nó nối
 {
   const r = buildLabState(LABS[3]);
-  check('(bc-b) buildLabState Lab 4 ok: PIC1 + PSU1 + LCD1 + X0 + C0 + C1, dây W1-W7 + 14 dây lab',
+  check('(bc-b) buildLabState Lab 4 ok: PIC1 + PSU1 + LCD1 + X0 + C0 + C1, dây W1-W7 + 16 dây lab',
     r.ok && r.state.components.map((c) => c.id).join(',') === 'PIC1,PSU1,LCD1,X0,C0,C1'
-    && r.state.wires.map((w) => w.id).join(',') === 'W1,W2,W3,W4,W5,W6,W7,LAB4-W1,LAB4-W2,LAB4-W3,LAB4-W4,LAB4-W5,LAB4-W6,LAB4-W7,LAB4-W8,LAB4-W9,LAB4-W10,LAB4-W11,LAB4-W12,LAB4-W13,LAB4-W14',
+    && r.state.wires.map((w) => w.id).join(',') === 'W1,W2,W3,W4,W5,W6,W7,LAB4-W1,LAB4-W2,LAB4-W3,LAB4-W4,LAB4-W5,LAB4-W6,LAB4-W7,LAB4-W8,LAB4-W9,LAB4-W10,LAB4-W11,LAB4-W12,LAB4-W13,LAB4-W14,LAB4-W15,LAB4-W16',
     r.ok ? JSON.stringify({ comps: r.state.components.map((c) => c.id), wires: r.state.wires.map((w) => w.id) }) : r.reason);
   check('(bc-b) không đầu dây lab nào cắm trùng lỗ chân linh kiện (chip/LCD1/X0/C0/C1)',
     r.ok && (() => {
@@ -3618,20 +3623,22 @@ D1: DECFSZ CNT,F
     && lab.components[2].id === 'C0' && lab.components[2].type === 'capacitor' && lab.components[2].anchor === 'n30' && lab.components[2].props.value === 22
     && lab.components[3].id === 'C1' && lab.components[3].type === 'capacitor' && lab.components[3].anchor === 'n36' && lab.components[3].props.value === 22,
     JSON.stringify(lab.components));
-  check('(bd-a) Lab 5 có đúng 14 dây: 10 dây LCD (RS/E/D0–D7) + 4 dây dao động',
-    lab.wires.length === 14
+  check('(bd-a) Lab 5 có đúng 16 dây: 10 dây LCD (RS/E/D0–D7) + 2 dây nguồn LCD (VDD/VSS) + 4 dây dao động',
+    lab.wires.length === 16
     && lab.wires[0].a === 'b77' && lab.wires[0].b === 'f48'
     && lab.wires[9].a === 'b86' && lab.wires[9].b === 'k51'
     && lab.wires[10].a === 'o34' && lab.wires[10].b === 'h53'
-    && lab.wires[13].a === 'o36' && lab.wires[13].b === 'B-36',
+    && lab.wires[13].a === 'o36' && lab.wires[13].b === 'B-36'
+    && lab.wires[14].a === 'b76' && lab.wires[14].b === 'B+76'
+    && lab.wires[15].a === 'b75' && lab.wires[15].b === 'B-75',
     JSON.stringify(lab.wires.map((w) => w.a + '->' + w.b)));
 }
 // (bd-b) buildLabState cho ra state hợp lệ + mỗi đầu dây cùng strip với chân nó nối
 {
   const r = buildLabState(LABS[4]);
-  check('(bd-b) buildLabState Lab 5 ok: PIC1 + PSU1 + LCD1 + X0 + C0 + C1, dây W1-W7 + 14 dây lab',
+  check('(bd-b) buildLabState Lab 5 ok: PIC1 + PSU1 + LCD1 + X0 + C0 + C1, dây W1-W7 + 16 dây lab',
     r.ok && r.state.components.map((c) => c.id).join(',') === 'PIC1,PSU1,LCD1,X0,C0,C1'
-    && r.state.wires.map((w) => w.id).join(',') === 'W1,W2,W3,W4,W5,W6,W7,LAB5-W1,LAB5-W2,LAB5-W3,LAB5-W4,LAB5-W5,LAB5-W6,LAB5-W7,LAB5-W8,LAB5-W9,LAB5-W10,LAB5-W11,LAB5-W12,LAB5-W13,LAB5-W14',
+    && r.state.wires.map((w) => w.id).join(',') === 'W1,W2,W3,W4,W5,W6,W7,LAB5-W1,LAB5-W2,LAB5-W3,LAB5-W4,LAB5-W5,LAB5-W6,LAB5-W7,LAB5-W8,LAB5-W9,LAB5-W10,LAB5-W11,LAB5-W12,LAB5-W13,LAB5-W14,LAB5-W15,LAB5-W16',
     r.ok ? JSON.stringify({ comps: r.state.components.map((c) => c.id), wires: r.state.wires.map((w) => w.id) }) : r.reason);
   check('(bd-b) không đầu dây lab nào cắm trùng lỗ chân linh kiện (chip/LCD1/X0/C0/C1)',
     r.ok && (() => {
@@ -3708,8 +3715,8 @@ D1: DECFSZ CNT,F
     && lab.components[5].id === 'C1' && lab.components[5].type === 'capacitor' && lab.components[5].anchor === 'n36' && lab.components[5].props.value === 22
     && lab.components[6].id === 'BTN0' && lab.components[6].type === 'button' && lab.components[6].anchor === 'p60',
     JSON.stringify(lab.components));
-  check('(be-a) Lab 6 có đúng 19 dây: 3 dây LED + 10 dây LCD + 2 dây nút + 4 dây dao động',
-    lab.wires.length === 19
+  check('(be-a) Lab 6 có đúng 21 dây: 3 dây LED + 10 dây LCD + 2 dây nút + 2 dây nguồn LCD (VDD/VSS) + 4 dây dao động',
+    lab.wires.length === 21
     && lab.wires[0].a === 'n47' && lab.wires[0].b === 't45'   // RB1 -> R1
     && lab.wires[2].a === 't53' && lab.wires[2].b === 'B-53'  // LED cathode -> GND
     && lab.wires[3].a === 'b77' && lab.wires[3].b === 'f48'   // LCD.RS -> RE0
@@ -3717,15 +3724,17 @@ D1: DECFSZ CNT,F
     && lab.wires[13].a === 'q60' && lab.wires[13].b === 'k48' // nút T1 -> RB0
     && lab.wires[14].a === 'q61' && lab.wires[14].b === 'B-61' // nút T2 -> GND
     && lab.wires[15].a === 'o34' && lab.wires[15].b === 'h53' // C0 -> OSC1
-    && lab.wires[18].a === 'o36' && lab.wires[18].b === 'B-36', // C1 -> GND
+    && lab.wires[18].a === 'o36' && lab.wires[18].b === 'B-36' // C1 -> GND
+    && lab.wires[19].a === 'b76' && lab.wires[19].b === 'B+76' // LCD.VDD -> +5V
+    && lab.wires[20].a === 'b75' && lab.wires[20].b === 'B-75', // LCD.VSS -> GND
     JSON.stringify(lab.wires.map((w) => w.a + '->' + w.b)));
 }
 // (be-b) buildLabState cho ra state hợp lệ + mỗi đầu dây cùng strip với chân nó nối
 {
   const r = buildLabState(LABS[5]);
-  check('(be-b) buildLabState Lab 6 ok: PIC1 + PSU1 + R1 + LED1 + LCD1 + X0 + C0 + C1 + BTN0, dây W1-W7 + 19 dây lab',
+  check('(be-b) buildLabState Lab 6 ok: PIC1 + PSU1 + R1 + LED1 + LCD1 + X0 + C0 + C1 + BTN0, dây W1-W7 + 21 dây lab',
     r.ok && r.state.components.map((c) => c.id).join(',') === 'PIC1,PSU1,R1,LED1,LCD1,X0,C0,C1,BTN0'
-    && r.state.wires.map((w) => w.id).join(',') === 'W1,W2,W3,W4,W5,W6,W7,LAB6-W1,LAB6-W2,LAB6-W3,LAB6-W4,LAB6-W5,LAB6-W6,LAB6-W7,LAB6-W8,LAB6-W9,LAB6-W10,LAB6-W11,LAB6-W12,LAB6-W13,LAB6-W14,LAB6-W15,LAB6-W16,LAB6-W17,LAB6-W18,LAB6-W19',
+    && r.state.wires.map((w) => w.id).join(',') === 'W1,W2,W3,W4,W5,W6,W7,LAB6-W1,LAB6-W2,LAB6-W3,LAB6-W4,LAB6-W5,LAB6-W6,LAB6-W7,LAB6-W8,LAB6-W9,LAB6-W10,LAB6-W11,LAB6-W12,LAB6-W13,LAB6-W14,LAB6-W15,LAB6-W16,LAB6-W17,LAB6-W18,LAB6-W19,LAB6-W20,LAB6-W21',
     r.ok ? JSON.stringify({ comps: r.state.components.map((c) => c.id), wires: r.state.wires.map((w) => w.id) }) : r.reason);
   check('(be-b) không đầu dây lab nào cắm trùng lỗ chân linh kiện (chip/R1/LED1/LCD1/BTN0)',
     r.ok && (() => {
@@ -3821,8 +3830,8 @@ D1: DECFSZ CNT,F
     && lab.components[2].id === 'C0' && lab.components[2].type === 'capacitor' && lab.components[2].anchor === 'n30' && lab.components[2].props.value === 22
     && lab.components[3].id === 'C1' && lab.components[3].type === 'capacitor' && lab.components[3].anchor === 'n36' && lab.components[3].props.value === 22,
     JSON.stringify(lab.components));
-  check('(bf-a) Lab 7 có đúng 10 dây: 6 dây LCD (RS/E/D4–D7, KHÔNG có D0–D3) + 4 dây dao động',
-    lab.wires.length === 10
+  check('(bf-a) Lab 7 có đúng 12 dây: 6 dây LCD (RS/E/D4–D7, KHÔNG có D0–D3) + 2 dây nguồn LCD (VDD/VSS) + 4 dây dao động',
+    lab.wires.length === 12
     && lab.wires[0].a === 'b77' && lab.wires[0].b === 'f48'   // LCD.RS -> RE0
     && lab.wires[1].a === 'b78' && lab.wires[1].b === 'f49'   // LCD.E -> RE1
     && lab.wires[2].a === 'b83' && lab.wires[2].b === 'k54'   // LCD.D4 -> RD4
@@ -3830,15 +3839,17 @@ D1: DECFSZ CNT,F
     && lab.wires[4].a === 'b85' && lab.wires[4].b === 'k52'   // LCD.D6 -> RD6
     && lab.wires[5].a === 'b86' && lab.wires[5].b === 'k51'   // LCD.D7 -> RD7
     && lab.wires[6].a === 'o34' && lab.wires[6].b === 'h53'   // C0 -> OSC1
-    && lab.wires[9].a === 'o36' && lab.wires[9].b === 'B-36', // C1 -> GND
+    && lab.wires[9].a === 'o36' && lab.wires[9].b === 'B-36' // C1 -> GND
+    && lab.wires[10].a === 'b76' && lab.wires[10].b === 'B+76' // LCD.VDD -> +5V
+    && lab.wires[11].a === 'b75' && lab.wires[11].b === 'B-75', // LCD.VSS -> GND
     JSON.stringify(lab.wires.map((w) => w.a + '->' + w.b)));
 }
 // (bf-b) buildLabState cho ra state hợp lệ + mỗi đầu dây cùng strip với chân nó nối
 {
   const r = buildLabState(LABS[6]);
-  check('(bf-b) buildLabState Lab 7 ok: PIC1 + PSU1 + LCD1 + X0 + C0 + C1, dây W1-W7 + 10 dây lab',
+  check('(bf-b) buildLabState Lab 7 ok: PIC1 + PSU1 + LCD1 + X0 + C0 + C1, dây W1-W7 + 12 dây lab',
     r.ok && r.state.components.map((c) => c.id).join(',') === 'PIC1,PSU1,LCD1,X0,C0,C1'
-    && r.state.wires.map((w) => w.id).join(',') === 'W1,W2,W3,W4,W5,W6,W7,LAB7-W1,LAB7-W2,LAB7-W3,LAB7-W4,LAB7-W5,LAB7-W6,LAB7-W7,LAB7-W8,LAB7-W9,LAB7-W10',
+    && r.state.wires.map((w) => w.id).join(',') === 'W1,W2,W3,W4,W5,W6,W7,LAB7-W1,LAB7-W2,LAB7-W3,LAB7-W4,LAB7-W5,LAB7-W6,LAB7-W7,LAB7-W8,LAB7-W9,LAB7-W10,LAB7-W11,LAB7-W12',
     r.ok ? JSON.stringify({ comps: r.state.components.map((c) => c.id), wires: r.state.wires.map((w) => w.id) }) : r.reason);
   check('(bf-b) không đầu dây lab nào cắm trùng lỗ chân linh kiện (chip/LCD1/X0/C0/C1)',
     r.ok && (() => {
@@ -7199,6 +7210,8 @@ SEND_BYTE
     st.components.push({ id: 'LCD1', type: 'lcd', anchor: 'a77', rot: 0, props: {} });
     st.wires.push({ id: 'L-RS', a: 'a77', b: wireRS, color: '#DC2626' });
     st.wires.push({ id: 'L-E', a: 'a78', b: 'g49', color: '#2563EB' });
+    st.wires.push({ id: 'L-VDD', a: 'a76', b: 'B+76', color: '#DC2626' }); // VDD -> +5V
+    st.wires.push({ id: 'L-VSS', a: 'a75', b: 'B-75', color: '#0F172A' }); // VSS -> GND
     const dPins = ['g59', 'g60', 'm60', 'm59', 'm54', 'm53', 'm52', 'm51'];
     const dHoles = ['a79', 'a80', 'a81', 'a82', 'a83', 'a84', 'a85', 'a86'];
     dHoles.forEach((h, i) => {
@@ -7325,12 +7338,12 @@ SEND_BYTE
   check('(p2-18) bench.js: renderChecks hiện xung đột qua bridge getSourceConflicts, app.js có bridge đó',
     benchSrc.includes('getSourceConflicts') && benchSrc.includes('Xung đột nguồn')
     && appSrc.includes('getSourceConflicts'), '');
-  // (p2-19) Ghi chú lab: Lab 2 (nguồn LCD chưa mô phỏng) + Lab 3 (7-seg
-  // không điện trở hạn dòng) có note; desc vẫn tuân thủ quy tắc.
-  check('(p2-19) Lab 2 và Lab 3 có note đúng nội dung (LCD chưa nối nguồn / 7-seg cần điện trở hạn dòng)',
+  // (p2-19) Ghi chú lab: Lab 2 đã GỠ note (LCD giờ cần nguồn thật, không còn
+  // disclaimer) — chỉ Lab 3 (7-seg không điện trở hạn dòng) còn note; desc vẫn tuân thủ quy tắc.
+  check('(p2-19) Lab 2 đã gỡ note LCD (mô phỏng đã đúng như thật); Lab 3 còn note 7-seg cần điện trở hạn dòng',
     (() => {
       const l2 = getLab('led-lcd'), l3 = getLab('count-2x7seg');
-      return !!l2 && !!l2.note && l2.note.includes('VDD/VSS') && l2.note.includes('mạch thật phải nối VDD')
+      return !!l2 && !l2.note
         && !!l3 && !!l3.note && l3.note.includes('chỉ đúng trong mô phỏng') && l3.note.includes('điện trở hạn dòng');
     })(), '');
   check('(p2-19) desc mọi lab vẫn tuân thủ quy tắc (không chứa "100 cột"/"Board lớn"/"Trên bàn"); note không nằm trong desc',
@@ -7536,6 +7549,117 @@ SUB
     benchHtml.includes('id="benchCpuPanel"') && benchHtml.includes('class="cpu-panel"')
     && stylesSrc.includes('.cpu-panel') && stylesSrc.includes('.cpu-flag')
     && stylesSrc.includes('.cpu-flag.on') && stylesSrc.includes('.cpu-num'), '');
+}
+
+// (lp) LCD cần nguồn VDD/VSS như thật (Điệp 27/11: gỡ ghi chú P2 issue 19,
+// sửa thật — LCD chỉ hiện khi VDD ≥ 2V và VSS ~0V, chân VDD/VSS ở dc -1/-2
+// theo đúng thứ tự chân HD44780 thật).
+// Helper: trạng thái Lab 2, bỏ dây nguồn theo ý muốn (để giả lập chưa nối nguồn).
+function lab2StateWithoutPower(removeVdd, removeVss) {
+  const { state } = buildLabState(getLab('led-lcd'));
+  state.wires = state.wires.filter((w) => {
+    if (removeVdd && w.b === 'B+76') return false;
+    if (removeVss && w.b === 'B-75') return false;
+    return true;
+  });
+  return state;
+}
+// Helper: nạp code C Lab 2 vào CPU đã đấu dây + solver, chạy đủ chu kỳ để init + ghi HELLO.
+function runLab2Code(state, targetCycles = 200000) {
+  const cpu = createCPU();
+  const mapping = applySolvedToCpu(cpu, state);
+  const c = compileC(getLab('led-lcd').code);
+  cpu.loadProgram(c.program);
+  runUntil(cpu, targetCycles);
+  return { cpu, mapping, c };
+}
+{
+  // (lp-a) Solver: LCD chưa nối nguồn -> lcdPowered=false; nối đủ -> true.
+  const sNo = solveCircuit(lab2StateWithoutPower(true, true), createCPU());
+  check('(lp-a) solver: LCD không nối VDD/VSS -> lcdPowered=false',
+    sNo.lcdPowered && sNo.lcdPowered.get('LCD1') === false,
+    `lcdPowered=${sNo.lcdPowered && sNo.lcdPowered.get('LCD1')}`);
+  const sYes = solveCircuit(buildLabState(getLab('led-lcd')).state, createCPU());
+  check('(lp-a) solver: LCD nối VDD->+5V, VSS->GND -> lcdPowered=true',
+    sYes.lcdPowered && sYes.lcdPowered.get('LCD1') === true,
+    `lcdPowered=${sYes.lcdPowered && sYes.lcdPowered.get('LCD1')}`);
+  const sVdd = solveCircuit(lab2StateWithoutPower(false, true), createCPU());
+  check('(lp-a) solver: chỉ nối VDD (thiếu VSS) -> lcdPowered=false',
+    sVdd.lcdPowered && sVdd.lcdPowered.get('LCD1') === false,
+    `lcdPowered=${sVdd.lcdPowered && sVdd.lcdPowered.get('LCD1')}`);
+  const sVss = solveCircuit(lab2StateWithoutPower(true, false), createCPU());
+  check('(lp-a) solver: chỉ nối VSS (thiếu VDD) -> lcdPowered=false',
+    sVss.lcdPowered && sVss.lcdPowered.get('LCD1') === false,
+    `lcdPowered=${sVss.lcdPowered && sVss.lcdPowered.get('LCD1')}`);
+  // (lp-b) CPU: LCD không nguồn + chạy code Lab 2 -> không latch, DDRAM trống.
+  const rNo = runLab2Code(lab2StateWithoutPower(true, true));
+  check('(lp-b) LCD không nguồn: cpu.lcdPowered=false, chạy code Lab 2 không hiện chữ (DDRAM trống)',
+    rNo.c.ok && rNo.cpu.lcdPowered === false && rNo.cpu.lcd.getLines()[0].trim() === '' && rNo.cpu.lcd.getLines()[1].trim() === '',
+    `lcdPowered=${rNo.cpu.lcdPowered} line0=${JSON.stringify(rNo.cpu.lcd.getLines()[0])}`);
+  // (lp-c) CPU: LCD đủ nguồn + chạy code Lab 2 -> HELLO hiện đúng.
+  const rYes = runLab2Code(buildLabState(getLab('led-lcd')).state);
+  check('(lp-c) LCD đủ nguồn: cpu.lcdPowered=true, chạy code Lab 2 hiện HELLO',
+    rYes.c.ok && rYes.cpu.lcdPowered === true && rYes.cpu.lcd.getLines()[0].startsWith('HELLO'),
+    `lcdPowered=${rYes.cpu.lcdPowered} line0=${JSON.stringify(rYes.cpu.lcd.getLines()[0])}`);
+  // (lp-d) Gỡ VDD giữa chừng -> LCD tắt (lcdPowered=false); gắn lại ->
+  // có nguồn lại, chữ cũ (HELLO) hiện lại ngay không cần nạp lại code.
+  const stMid = buildLabState(getLab('led-lcd')).state;
+  const cpuMid = createCPU();
+  applySolvedToCpu(cpuMid, stMid);
+  const cMid = compileC(getLab('led-lcd').code);
+  cpuMid.loadProgram(cMid.program);
+  runUntil(cpuMid, 200000);
+  check('(lp-d) trước khi gỡ VDD: HELLO đang hiện, lcdPowered=true',
+    cpuMid.lcdPowered === true && cpuMid.lcd.getLines()[0].startsWith('HELLO'),
+    `lcdPowered=${cpuMid.lcdPowered} line0=${JSON.stringify(cpuMid.lcd.getLines()[0])}`);
+  stMid.wires = stMid.wires.filter((w) => w.b !== 'B+76'); // gỡ dây VDD
+  applySolvedToCpu(cpuMid, stMid);
+  check('(lp-d) gỡ VDD giữa chừng: lcdPowered=false (LCD tắt)',
+    cpuMid.lcdPowered === false, `lcdPowered=${cpuMid.lcdPowered}`);
+  stMid.wires.push({ id: 'LAB2-W18', a: 'b76', b: 'B+76', color: '#DC2626' }); // gắn lại VDD
+  applySolvedToCpu(cpuMid, stMid);
+  check('(lp-d) gắn lại VDD: lcdPowered=true, HELLO hiện lại (DDRAM giữ, không cần nạp lại code)',
+    cpuMid.lcdPowered === true && cpuMid.lcd.getLines()[0].startsWith('HELLO'),
+    `lcdPowered=${cpuMid.lcdPowered} line0=${JSON.stringify(cpuMid.lcd.getLines()[0])}`);
+  // (lp-e) Lab 2 mở ra đã có đủ dây nguồn VDD/VSS; note cũ đã gỡ; note Lab 3 còn.
+  const lab2 = getLab('led-lcd');
+  const { state: st2 } = buildLabState(lab2);
+  check('(lp-e) Lab 2: có sẵn dây VDD->B+76 và VSS->B-75',
+    st2.wires.some((w) => w.b === 'B+76') && st2.wires.some((w) => w.b === 'B-75'),
+    `wires=${JSON.stringify(st2.wires.filter((w) => w.b === 'B+76' || w.b === 'B-75').map((w) => w.id))}`);
+  check('(lp-e) Lab 2: note cũ (LCD không cần nguồn) đã gỡ; Lab 3 note điện trở vẫn còn',
+    !lab2.note && getLab('count-2x7seg').note && getLab('count-2x7seg').note.includes('điện trở'),
+    `lab2.note=${JSON.stringify(lab2.note)} lab3.note=${JSON.stringify(getLab('count-2x7seg').note)}`);
+  check('(lp-e) Lab 2 desc có đấu nối nguồn VDD/VSS',
+    lab2.desc.includes('VDD→+5V') && lab2.desc.includes('VSS→GND'), '');
+  // (lp-f) Checks: LCD thiếu nguồn -> cảnh báo lcd-power- nêu rõ chân thiếu.
+  const wNo = checkWiring(benchToNetlist(lab2StateWithoutPower(true, true)));
+  check('(lp-f) Checks: LCD chưa nối nguồn -> cảnh báo lcd-power- (warn) nêu VDD, VSS',
+    wNo.some((w) => w.id === 'lcd-power-LCD1' && w.kind === 'warn' && w.message.includes('VDD') && w.message.includes('VSS')),
+    JSON.stringify(wNo.map((w) => w.id)));
+  const wVdd = checkWiring(benchToNetlist(lab2StateWithoutPower(false, true)));
+  check('(lp-f) Checks: chỉ thiếu VSS -> cảnh báo lcd-power- chỉ nêu VSS',
+    wVdd.some((w) => w.id === 'lcd-power-LCD1' && w.message.includes('VSS') && !w.message.includes('thiếu: VDD')),
+    JSON.stringify(wVdd.filter((w) => w.id.startsWith('lcd-power')).map((w) => w.message)));
+  const wYes = checkWiring(benchToNetlist(buildLabState(getLab('led-lcd')).state));
+  check('(lp-f) Checks: Lab 2 đủ nguồn -> không còn cảnh báo lcd-power-',
+    !wYes.some((w) => w.id === 'lcd-power-LCD1'),
+    JSON.stringify(wYes.filter((w) => w.id.startsWith('lcd-power')).map((w) => w.id)));
+  // (lp-g) Các lab LCD khác (4, 5, 6, 7) cũng có đủ dây nguồn (cùng LCD a77).
+  for (const id of ['alu-tinh-toan', 'chay-tung-lenh', 'nhap-xu-ly-xuat', 'lcd-4bit']) {
+    const { state: stx } = buildLabState(getLab(id));
+    check(`(lp-g) Lab ${id}: có sẵn dây VDD->B+76 và VSS->B-75`,
+      stx.wires.some((w) => w.b === 'B+76') && stx.wires.some((w) => w.b === 'B-75'), '');
+  }
+  // (lp-h) UI + bridge: app.js getLcd có powered; bench.js vẽ trống khi
+  // mất nguồn + Inspector có dòng Nguồn (inspLcdPower).
+  const appSrc2 = readFileSync(new URL('./public/app.js', import.meta.url), 'utf8');
+  const benchSrc2 = readFileSync(new URL('./public/bench.js', import.meta.url), 'utf8');
+  check('(lp-h) app.js: getLcd trả powered (cpu.lcdPowered !== false)',
+    appSrc2.includes('powered: cpu.lcdPowered !== false'), '');
+  check('(lp-h) bench.js: vẽ LCD trống khi powered===false (key + điều kiện vẽ có powered)',
+    benchSrc2.includes("lcd.powered === false") && benchSrc2.includes('inspLcdPower')
+    && benchSrc2.includes('Chưa nối nguồn'), '');
 }
 
 console.log(`\nKết quả: ${pass} pass, ${fail} fail`);

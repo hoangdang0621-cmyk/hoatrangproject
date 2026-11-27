@@ -318,7 +318,13 @@ export const LEG_LAYOUTS = {
   resistor: [{ term: 'L1', dc: 0, dr: 0 }, { term: 'L2', dc: 4, dr: 0 }],
   button: [{ term: 'T1', dc: 0, dr: 0 }, { term: 'T2', dc: 1, dr: 0 }],
   pot: [{ term: 'VCC', dc: 0, dr: 0 }, { term: 'W', dc: 1, dr: 0 }, { term: 'GND', dc: 2, dr: 0 }],
+  // LCD 16x2 HD44780: 12 chân. Thứ tự khớp chân thật của module:
+  // VSS(1), VDD(2), RS(4), E(6), D0–D7(7–14) — VO(3) chỉnh độ tương
+  // phản và RW(5) không mô phỏng (RW nối GND trong, VO bỏ qua).
+  // VDD/VSS nằm BÊN TRÁI RS (dc -2/-1) như module thật; các chân cũ
+  // RS, E, D0–D7 GIỮ NGUYÊN vị trí (dc 0–9) để không vỡ lab đã đấu.
   lcd: [
+    { term: 'VSS', dc: -2, dr: 0 }, { term: 'VDD', dc: -1, dr: 0 },
     { term: 'RS', dc: 0, dr: 0 }, { term: 'E', dc: 1, dr: 0 },
     { term: 'D0', dc: 2, dr: 0 }, { term: 'D1', dc: 3, dr: 0 },
     { term: 'D2', dc: 4, dr: 0 }, { term: 'D3', dc: 5, dr: 0 },

@@ -3,13 +3,13 @@
 // chưa nạp chương trình nào; code mẫu nằm sẵn trong tab "Nạp viết code",
 // người dùng bấm "Nạp & chạy" thì chip mới chạy. ProgramRunner điều khiển
 // chạy/tạm dừng/chạy từng lệnh/breakpoint.
-import { createCPU, ProgramRunner, cyclesForElapsedMs, applySolvedVoltages, parsePicPinId, cpuStateSnapshot } from './pic16.js?v=20261125br';
+import { createCPU, ProgramRunner, cyclesForElapsedMs, applySolvedVoltages, parsePicPinId, cpuStateSnapshot } from './pic16.js?v=20261125bt';
 import {
   resolvePeripherals, ledStates, buzzerStates, sevenSegStates,
   applyButtonToCpu, applyPotToCpu, applyKeypadToCpu,
-} from './wiring.js?v=20261125bp';
-import { defaultBenchState, benchToNetlist, crystalFreq } from './bench-model.js?v=20261125bp';
-import { meterReadings, motorReadings, scopeVoltages, pushScopeSample, SCOPE_MAX_SAMPLES, solveCircuit, serialWiringMap } from './circuit-solver.js?v=20261125bp';
+} from './wiring.js?v=20261125bt';
+import { defaultBenchState, benchToNetlist, crystalFreq } from './bench-model.js?v=20261125bt';
+import { meterReadings, motorReadings, scopeVoltages, pushScopeSample, SCOPE_MAX_SAMPLES, solveCircuit, serialWiringMap } from './circuit-solver.js?v=20261125bt';
 import { compileC } from './c-compiler.js?v=20261125br';
 
 const cpu = createCPU();
@@ -372,7 +372,7 @@ window.HoaTrangBenchBridge = {
     return sent;
   },
   clearSerial: (id) => { serialBuffers.set(id, ''); },
-  getLcd: () => ({ lines: cpu.lcd.getLines(), cells: cpu.lcd.getDisplayCells(), complete: !mapping.lcd.id || mapping.lcd.complete, displayOn: cpu.lcd.displayOn }),
+  getLcd: () => ({ lines: cpu.lcd.getLines(), cells: cpu.lcd.getDisplayCells(), complete: !mapping.lcd.id || mapping.lcd.complete, displayOn: cpu.lcd.displayOn, powered: cpu.lcdPowered !== false }),
   getPin: (port, bit) => ({ dir: cpu.pinDirection(port, bit), level: cpu.pinLevel(port, bit) }),
   getTris: () => cpu.tris,
   getMapping: () => mapping,

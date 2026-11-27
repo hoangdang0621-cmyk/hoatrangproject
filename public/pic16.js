@@ -850,6 +850,16 @@ export class PIC16F877A {
     this.powered = true;
     this.supplyVolts = 5;
     this.mclrLow = false;
+    // Nguồn của LCD (VDD/VSS): đặt bởi applySolvedVoltages (từ kết
+    // quả solveCircuit, qua app.js) — undefined = solver chưa chạy
+    // (test lõi không có bench): lcdTick chạy như cũ (coi như có
+    // nguồn). false = LCD chưa nối nguồn (VDD < 2V hoặc VSS không về
+    // 0): lcdTick bỏ qua, màn hình trống. Thuộc về bàn, không thuộc
+    // về chương trình — reset()/loadProgram KHÔNG đổi trường này.
+    // DDRAM/CGRAM được GIỮ khi mất nguồn (đơn giản hoá so với HD44780
+    // thật — để khi có nguồn trở lại thì chữ cũ hiện lại ngay mà không
+    // cần nạp lại code; code lab chỉ init LCD 1 lần lúc khởi động).
+    this.lcdPowered = undefined;
     // EEPROM dữ liệu (256 byte): KHÔNG xoá khi reset (như phần cứng thật,
     // dữ liệu ghi rồi vẫn còn sau khi nạp lại code). Xoá tay bằng loadEeprom([]).
     this.eeprom = new Uint8Array(256);
@@ -1165,6 +1175,17 @@ export class PIC16F877A {
   // được LCD.command bỏ qua nên không ảnh hưởng DDRAM.
   lcdTick() {
     const w = this.wiring && this.wiring.lcd;
+    // LCD mất nguồn (solver đã xác định VDD/VSS chưa đủ — xem
+    // applySolvedVoltages): không chốt lệnh/dữ liệu, như HD44780 thật
+    // không có nguồn. Đồng bộ prevE + bỏ nibble đang chờ để khỏi bắt
+    // cạnh giả khi có nguồn trở lại. lcdPowered === undefined nghĩa là
+    // solver chưa chạy (test lõi không có bench) — chạy như cũ.
+    if (w && this.lcdPowered === false) {
+      const bit0 = (pin) => (pin ? this.pinLevel(pin.port, pin.bit) : 0);
+      this.prevE = bit0(w.e);
+      this._lcdNibble = null;
+      return;
+    }
     let rs, e, data;
     if (w && w.complete) {
       const bit = (pin) => (pin ? this.pinLevel(pin.port, pin.bit) : 0);
@@ -1927,6 +1948,15 @@ export function applySolvedVoltages(cpu, mapping, solved, opts = {}) {
       if (netHasOutput(members)) cpu.setNetVoltage(port, bit, null);
       else cpu.setNetVoltage(port, bit, netVolts(id, members));
     }
+  }
+  // Nguồn LCD (như thật): từ solver (lcdPowered Map — VDD ≥ 2V và
+  // VSS ~0V). Chỉ đặt khi solver đã tính cho đúng LCD này; không thì
+  // giữ nguyên (undefined = legacy, lcdTick chạy như cũ). lcdTick
+  // chặn khi false; DDRAM được giữ để có nguồn lại thì chữ cũ hiện
+  // ngay (không cần nạp lại code).
+  const lcdId = mapping && mapping.lcd ? mapping.lcd.id : null;
+  if (lcdId && solved && solved.lcdPowered && solved.lcdPowered.has(lcdId)) {
+    cpu.lcdPowered = !!solved.lcdPowered.get(lcdId);
   }
   return true;
 }

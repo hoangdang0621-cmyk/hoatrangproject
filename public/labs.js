@@ -4,7 +4,7 @@
 // Thêm lab mới chỉ cần thêm 1 phần tử vào mảng LABS.
 // Lỗ chân RB0 (h29), vị trí điện trở/LED và dây nối đã tính bằng legsFor /
 // canPlace trên board mặc định 830 và kiểm chứng bằng netlist (test q).
-import { defaultBenchState, defaultProps, canPlace, parseHole, parsePsuPost } from './bench-model.js?v=20261125bp';
+import { defaultBenchState, defaultProps, canPlace, parseHole, parsePsuPost } from './bench-model.js?v=20261125bt';
 
 export const LABS = [
   {
@@ -53,13 +53,7 @@ void main() {
   {
     id: 'led-lcd',
     title: 'Điều khiển LED + LCD',
-    desc: 'LCD 16x2 chế độ 8-bit đấu sẵn: RS→RE0 (chân 8), E→RE1 (chân 9), D0→RD0 (chân 19), D1→RD1 (chân 20), D2→RD2 (chân 21), D3→RD3 (chân 22), D4→RD4 (chân 27), D5→RD5 (chân 28), D6→RD6 (chân 29), D7→RD7 (chân 30). LED xanh lá → RB1 (chân 34) qua điện trở 220Ω, cathode về GND. Thạch anh 4MHz nối OSC1 (chân 13) – OSC2 (chân 14), mỗi chân thạch anh có 1 tụ gốm 22pF về GND.',
-    // Lưu ý ngoài desc (desc chỉ liệt kê linh kiện + đấu nối): LCD trong
-    // mô phỏng chạy không cần nối nguồn vì chân VDD/VSS chưa có trong mô
-    // phỏng (LEG_LAYOUTS.lcd không có 2 chân này; làm đúng cần đổi
-    // bench-model.js — việc này ĐỂ SAU, chỉ ghi chú trước, Issue 19b).
-    // Mạch thật phải nối VDD→+5V và VSS→GND thì LCD mới hiện chữ.
-    note: 'Lưu ý: LCD trong mô phỏng chạy không cần nối nguồn (chân VDD/VSS chưa có trong mô phỏng); mạch thật phải nối VDD→+5V và VSS→GND.',
+    desc: 'LCD 16x2 chế độ 8-bit đấu sẵn: RS→RE0 (chân 8), E→RE1 (chân 9), D0→RD0 (chân 19), D1→RD1 (chân 20), D2→RD2 (chân 21), D3→RD3 (chân 22), D4→RD4 (chân 27), D5→RD5 (chân 28), D6→RD6 (chân 29), D7→RD7 (chân 30); VDD→+5V, VSS→GND. LED xanh lá → RB1 (chân 34) qua điện trở 220Ω, cathode về GND. Thạch anh 4MHz nối OSC1 (chân 13) – OSC2 (chân 14), mỗi chân thạch anh có 1 tụ gốm 22pF về GND.',
     code: `#include <xc.h>
 #define _XTAL_FREQ 4000000
 
@@ -144,6 +138,8 @@ void main() {
       { id: 'LAB2-W15', a: 'o30', b: 'B-30', color: '#0F172A' }, // tụ C0 (strip n30) -> GND (rail -)
       { id: 'LAB2-W16', a: 'o40', b: 'h54', color: '#059669' }, // tụ C1 (strip n40) -> OSC2 (strip f54/g54, lỗ h54 dưới thân chip)
       { id: 'LAB2-W17', a: 'o36', b: 'B-36', color: '#0F172A' }, // tụ C1 (strip n36) -> GND (rail -)
+      { id: 'LAB2-W18', a: 'b76', b: 'B+76', color: '#DC2626' }, // LCD.VDD (strip a76) -> rail + (+5V)
+      { id: 'LAB2-W19', a: 'b75', b: 'B-75', color: '#0F172A' }, // LCD.VSS (strip a75) -> rail - (GND)
     ],
   },
   {
@@ -235,7 +231,7 @@ void main() {
   {
     id: 'alu-tinh-toan',
     title: 'ALU tính toán',
-    desc: 'LCD 16x2 chế độ 8-bit đấu sẵn: RS→RE0 (chân 8), E→RE1 (chân 9), D0→RD0 (chân 19), D1→RD1 (chân 20), D2→RD2 (chân 21), D3→RD3 (chân 22), D4→RD4 (chân 27), D5→RD5 (chân 28), D6→RD6 (chân 29), D7→RD7 (chân 30). Thạch anh 4MHz nối OSC1 (chân 13) – OSC2 (chân 14), mỗi chân thạch anh có 1 tụ gốm 22pF về GND.',
+    desc: 'LCD 16x2 chế độ 8-bit đấu sẵn: RS→RE0 (chân 8), E→RE1 (chân 9), D0→RD0 (chân 19), D1→RD1 (chân 20), D2→RD2 (chân 21), D3→RD3 (chân 22), D4→RD4 (chân 27), D5→RD5 (chân 28), D6→RD6 (chân 29), D7→RD7 (chân 30); VDD→+5V, VSS→GND. Thạch anh 4MHz nối OSC1 (chân 13) – OSC2 (chân 14), mỗi chân thạch anh có 1 tụ gốm 22pF về GND.',
     code: `#include <xc.h>
 #define _XTAL_FREQ 4000000
 
@@ -361,12 +357,14 @@ void main() {
       { id: 'LAB4-W12', a: 'o30', b: 'B-30', color: '#0F172A' }, // tụ C0 (strip n30) -> GND (rail -)
       { id: 'LAB4-W13', a: 'o40', b: 'h54', color: '#059669' }, // tụ C1 (strip n40) -> OSC2 (strip f54/g54, lỗ h54 dưới thân chip)
       { id: 'LAB4-W14', a: 'o36', b: 'B-36', color: '#0F172A' }, // tụ C1 (strip n36) -> GND (rail -)
+      { id: 'LAB4-W15', a: 'b76', b: 'B+76', color: '#DC2626' }, // LCD.VDD (strip a76) -> rail + (+5V)
+      { id: 'LAB4-W16', a: 'b75', b: 'B-75', color: '#0F172A' }, // LCD.VSS (strip a75) -> rail - (GND)
     ],
   },
   {
     id: 'chay-tung-lenh',
     title: 'Chạy từng lệnh',
-    desc: 'LCD 16x2 chế độ 8-bit đấu sẵn: RS→RE0 (chân 8), E→RE1 (chân 9), D0→RD0 (chân 19), D1→RD1 (chân 20), D2→RD2 (chân 21), D3→RD3 (chân 22), D4→RD4 (chân 27), D5→RD5 (chân 28), D6→RD6 (chân 29), D7→RD7 (chân 30). Thạch anh 4MHz nối OSC1 (chân 13) – OSC2 (chân 14), mỗi chân thạch anh có 1 tụ gốm 22pF về GND.',
+    desc: 'LCD 16x2 chế độ 8-bit đấu sẵn: RS→RE0 (chân 8), E→RE1 (chân 9), D0→RD0 (chân 19), D1→RD1 (chân 20), D2→RD2 (chân 21), D3→RD3 (chân 22), D4→RD4 (chân 27), D5→RD5 (chân 28), D6→RD6 (chân 29), D7→RD7 (chân 30); VDD→+5V, VSS→GND. Thạch anh 4MHz nối OSC1 (chân 13) – OSC2 (chân 14), mỗi chân thạch anh có 1 tụ gốm 22pF về GND.',
     code: `#include <xc.h>
 #define _XTAL_FREQ 4000000
 
@@ -449,12 +447,14 @@ void main() {
       { id: 'LAB5-W12', a: 'o30', b: 'B-30', color: '#0F172A' }, // tụ C0 (strip n30) -> GND (rail -)
       { id: 'LAB5-W13', a: 'o40', b: 'h54', color: '#059669' }, // tụ C1 (strip n40) -> OSC2 (strip f54/g54, lỗ h54 dưới thân chip)
       { id: 'LAB5-W14', a: 'o36', b: 'B-36', color: '#0F172A' }, // tụ C1 (strip n36) -> GND (rail -)
+      { id: 'LAB5-W15', a: 'b76', b: 'B+76', color: '#DC2626' }, // LCD.VDD (strip a76) -> rail + (+5V)
+      { id: 'LAB5-W16', a: 'b75', b: 'B-75', color: '#0F172A' }, // LCD.VSS (strip a75) -> rail - (GND)
     ],
   },
   {
     id: 'nhap-xu-ly-xuat',
     title: 'Nhập – Xử lý – Xuất',
-    desc: 'Nút nhấn nối RB0 (chân 33), đầu còn lại về GND (nhấn = mức 0). LED xanh lá → RB1 (chân 34) qua điện trở 220Ω, cathode về GND. LCD 16x2 chế độ 8-bit đấu sẵn: RS→RE0 (chân 8), E→RE1 (chân 9), D0→RD0 (chân 19), D1→RD1 (chân 20), D2→RD2 (chân 21), D3→RD3 (chân 22), D4→RD4 (chân 27), D5→RD5 (chân 28), D6→RD6 (chân 29), D7→RD7 (chân 30). Thạch anh 4MHz nối OSC1 (chân 13) – OSC2 (chân 14), mỗi chân thạch anh có 1 tụ gốm 22pF về GND.',
+    desc: 'Nút nhấn nối RB0 (chân 33), đầu còn lại về GND (nhấn = mức 0). LED xanh lá → RB1 (chân 34) qua điện trở 220Ω, cathode về GND. LCD 16x2 chế độ 8-bit đấu sẵn: RS→RE0 (chân 8), E→RE1 (chân 9), D0→RD0 (chân 19), D1→RD1 (chân 20), D2→RD2 (chân 21), D3→RD3 (chân 22), D4→RD4 (chân 27), D5→RD5 (chân 28), D6→RD6 (chân 29), D7→RD7 (chân 30); VDD→+5V, VSS→GND. Thạch anh 4MHz nối OSC1 (chân 13) – OSC2 (chân 14), mỗi chân thạch anh có 1 tụ gốm 22pF về GND.',
     code: `#include <xc.h>
 #define _XTAL_FREQ 4000000
 
@@ -567,12 +567,14 @@ void main() {
       { id: 'LAB6-W17', a: 'o30', b: 'B-30', color: '#0F172A' }, // tụ C0 (strip n30) -> GND (rail -)
       { id: 'LAB6-W18', a: 'o40', b: 'h54', color: '#059669' }, // tụ C1 (strip n40) -> OSC2 (strip f54/g54, lỗ h54 dưới thân chip)
       { id: 'LAB6-W19', a: 'o36', b: 'B-36', color: '#0F172A' }, // tụ C1 (strip n36) -> GND (rail -)
+      { id: 'LAB6-W20', a: 'b76', b: 'B+76', color: '#DC2626' }, // LCD.VDD (strip a76) -> rail + (+5V)
+      { id: 'LAB6-W21', a: 'b75', b: 'B-75', color: '#0F172A' }, // LCD.VSS (strip a75) -> rail - (GND)
     ],
   },
   {
     id: 'lcd-4bit',
     title: 'LCD 4-bit',
-    desc: 'LCD 16x2 chế độ 4-bit đấu sẵn: RS→RE0 (chân 8), E→RE1 (chân 9), D4→RD4 (chân 27), D5→RD5 (chân 28), D6→RD6 (chân 29), D7→RD7 (chân 30); D0–D3 không đấu. Thạch anh 4MHz nối OSC1 (chân 13) – OSC2 (chân 14), mỗi chân thạch anh có 1 tụ gốm 22pF về GND.',
+    desc: 'LCD 16x2 chế độ 4-bit đấu sẵn: RS→RE0 (chân 8), E→RE1 (chân 9), D4→RD4 (chân 27), D5→RD5 (chân 28), D6→RD6 (chân 29), D7→RD7 (chân 30); VDD→+5V, VSS→GND; D0–D3 không đấu. Thạch anh 4MHz nối OSC1 (chân 13) – OSC2 (chân 14), mỗi chân thạch anh có 1 tụ gốm 22pF về GND.',
     code: `#include <xc.h>
 #define _XTAL_FREQ 4000000
 
@@ -641,6 +643,8 @@ void main() {
       { id: 'LAB7-W8', a: 'o30', b: 'B-30', color: '#0F172A' }, // tụ C0 (strip n30) -> GND (rail -)
       { id: 'LAB7-W9', a: 'o40', b: 'h54', color: '#059669' }, // tụ C1 (strip n40) -> OSC2 (strip f54/g54, lỗ h54 dưới thân chip)
       { id: 'LAB7-W10', a: 'o36', b: 'B-36', color: '#0F172A' }, // tụ C1 (strip n36) -> GND (rail -)
+      { id: 'LAB7-W11', a: 'b76', b: 'B+76', color: '#DC2626' }, // LCD.VDD (strip a76) -> rail + (+5V)
+      { id: 'LAB7-W12', a: 'b75', b: 'B-75', color: '#0F172A' }, // LCD.VSS (strip a75) -> rail - (GND)
     ],
   },
 ];

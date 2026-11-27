@@ -22,8 +22,8 @@
 import {
   DEFAULT_SIZE, legsFor, stripKey, parseHole, parsePsuPost, parseScopePost, parseSerialPost, psuVolts,
   normalizeWireEnd, meterMode,
-} from './bench-model.js?v=20261125bp';
-import { netLevel, sevenSegStates, SEVEN_SEG_TERMS, PIC_PINS } from './wiring.js?v=20261125bp';
+} from './bench-model.js?v=20261125bt';
+import { netLevel, sevenSegStates, SEVEN_SEG_TERMS, PIC_PINS } from './wiring.js?v=20261125bt';
 
 export const LED_FORWARD_VOLTS = 2.0;  // sụt áp thuận LED khi sáng
 export const LED_SERIES_OHMS = 10;     // điện trở nối tiếp trong mô hình LED
@@ -41,6 +41,13 @@ export const PIC_OUTPUT_VOLTS = 5;     // chân PIC output mức cao
 // như LED — dưới 2V còi piezo thực tế không đủ áp để kêu).
 export const BUZZER_OHMS = 220;
 export const BUZZER_ON_VOLTS = 2.0;
+// LCD HD44780: có nguồn khi VDD ≥ LCD_MIN_VOLTS (cùng ngưỡng 2V như
+// LED/còi — dưới 2V chip điều khiển LCD không chạy) và VSS ~0V (nối
+// GND). Không giới hạn trên 10V như LED/còi (LCD chịu được tới 5.5V
+// theo datasheet, nguồn bàn tối đa 24V vẫn cho số đo; chỉ cần VDD đủ
+// lớn là có nguồn).
+export const LCD_MIN_VOLTS = 2.0;
+export const LCD_VSS_MAX_VOLTS = 0.5;
 
 // ---------------------------------------------------------------------------
 // Net cho solver: union-find trên strip — CHỈ dây và nút nhấn (đang nhấn)
@@ -543,6 +550,7 @@ export function solveCircuit(state, cpu, pressedIds = [], pressedKeypad = null) 
   const ledOn = new Map();    // id LED -> boolean (đang sáng?)
   const segOn = new Map();    // 'SEG0.a' -> boolean (đoạn đang sáng?)
   const buzzerOn = new Map(); // id còi -> boolean (đang kêu?)
+  const lcdPowered = new Map(); // id LCD -> boolean (có nguồn VDD/VSS?)
   // Điện áp thuận (V) trên 1 diode giữa 2 đầu nối, từ 1 kết quả giải
   // (dùng netLevel để thống nhất với mô hình logic): null nếu 1 trong
   // 2 đầu floating / chưa nối dây.
@@ -579,6 +587,22 @@ export function solveCircuit(state, cpu, pressedIds = [], pressedKeypad = null) 
       if (comp.type !== 'buzzer') continue;
       const v = fwdVolts(nodeVoltage, comp.id + '.P', comp.id + '.N');
       buzzerOn.set(comp.id, v !== null && v >= BUZZER_ON_VOLTS && v <= LED_MAX_VOLTS);
+    }
+  };
+  // Quyết định LCD có nguồn không, từ điện áp đã giải (như thật:
+  // LCD HD44780 cần VDD/VSS mới chạy). VDD ≥ LCD_MIN_VOLTS (2V,
+  // cùng ngưỡng LED/còi) VÀ VSS ~0V (nối GND). Chân nào floating
+  // (null) hoặc VDD thấp / VSS không về 0 thì không nguồn. LCD
+  // không phải diode nên không có nhánh trong solver — chỉ đọc điện
+  // áp, không ảnh hưởng mạch.
+  const decideLcdPower = (nodeVoltage) => {
+    for (const comp of state.components) {
+      if (comp.type !== 'lcd') continue;
+      const vdd = netLevel(nodeVoltage, nets, comp.id + '.VDD');
+      const vss = netLevel(nodeVoltage, nets, comp.id + '.VSS');
+      lcdPowered.set(comp.id,
+        vdd !== null && vdd >= LCD_MIN_VOLTS
+        && vss !== null && Math.abs(vss) <= LCD_VSS_MAX_VOLTS);
     }
   };
   // Bỏ diode đang bật nào có dòng nhánh âm (ngược) trong kết quả vừa
@@ -642,10 +666,12 @@ export function solveCircuit(state, cpu, pressedIds = [], pressedKeypad = null) 
   // Lần 1: hở mạch toàn bộ diode -> điện áp hở mạch -> tập bật ban đầu.
   const open = runMna(new Set(), new Set(), potVolts);
   if (!open.ok) {
-    return { ok: false, nodeVoltage: open.nodeVoltage, branchCurrent: open.branchCurrent, nets, ledOn, segOn, buzzerOn, sourceConflicts: open.sourceConflicts || [], ...powerInfo };
+    decideLcdPower(open.nodeVoltage);
+    return { ok: false, nodeVoltage: open.nodeVoltage, branchCurrent: open.branchCurrent, nets, ledOn, segOn, buzzerOn, lcdPowered, sourceConflicts: open.sourceConflicts || [], ...powerInfo };
   }
   decideDiodes(open.nodeVoltage);
   decideBuzzers(open.nodeVoltage);
+  decideLcdPower(open.nodeVoltage);
   // Các lần sau: giải với tập đang bật, bỏ diode ngược dòng, giải lại.
   let result = open;
   let stale = false; // tập on/off đã đổi sau lần giải cuối -> cần giải lại 1 lần
@@ -663,7 +689,10 @@ export function solveCircuit(state, cpu, pressedIds = [], pressedKeypad = null) 
     const solved = runMna(ledSet(), segSet(), potVolts);
     if (solved.ok) { result = solved; decideBuzzers(solved.nodeVoltage); }
   }
-  return { ok: result.ok, nodeVoltage: result.nodeVoltage, branchCurrent: result.branchCurrent, nets, ledOn, segOn, buzzerOn, sourceConflicts: result.sourceConflicts || [], ...powerInfo };
+  // LCD không có nhánh trong solver nên nguồn của nó không đổi theo
+  // vòng diode — tính 1 lần từ điện áp cuối cùng (đủ cho cả 2 đường về).
+  decideLcdPower(result.nodeVoltage);
+  return { ok: result.ok, nodeVoltage: result.nodeVoltage, branchCurrent: result.branchCurrent, nets, ledOn, segOn, buzzerOn, lcdPowered, sourceConflicts: result.sourceConflicts || [], ...powerInfo };
 }
 
 // ---------------------------------------------------------------------------

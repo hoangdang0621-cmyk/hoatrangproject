@@ -66,7 +66,7 @@ export const COMPONENT_DEFS = {
   led: { name: 'LED', terms: ['A', 'K'], termLabels: { A: 'Anode (+)', K: 'Cathode (−)' } },
   button: { name: 'Nút nhấn', terms: ['T1', 'T2'], termLabels: { T1: 'Chân 1', T2: 'Chân 2' } },
   pot: { name: 'Chiết áp', terms: ['VCC', 'W', 'GND'], termLabels: { VCC: '+5V', W: 'Wiper', GND: 'GND' } },
-  lcd: { name: 'LCD 16x2', terms: ['RS', 'E', 'D0', 'D1', 'D2', 'D3', 'D4', 'D5', 'D6', 'D7'], termLabels: { RS: 'RS', E: 'E', D0: 'D0', D1: 'D1', D2: 'D2', D3: 'D3', D4: 'D4', D5: 'D5', D6: 'D6', D7: 'D7' } },
+  lcd: { name: 'LCD 16x2', terms: ['VSS', 'VDD', 'RS', 'E', 'D0', 'D1', 'D2', 'D3', 'D4', 'D5', 'D6', 'D7'], termLabels: { VSS: 'VSS (GND)', VDD: 'VDD (+5V)', RS: 'RS', E: 'E', D0: 'D0', D1: 'D1', D2: 'D2', D3: 'D3', D4: 'D4', D5: 'D5', D6: 'D6', D7: 'D7' } },
   buzzer: { name: 'Còi buzzer', terms: ['P', 'N'], termLabels: { P: 'Chân +', N: 'Chân −' } },
   // LED 7 thanh: 8 đoạn (a–g + dp) + 1 chân chung COM. Thứ tự khớp
   // LEG_LAYOUTS trong bench-model.js (hàng trên a/b/c/d/dp, hàng dưới
@@ -138,11 +138,14 @@ export function defaultNetlist() {
   wire('POT1.VCC', 'VCC');
   wire('POT1.W', 'PIC.RA0');
   wire('POT1.GND', 'GND');
-  // LCD 16x2: RS=RE0, E=RE1, D0–D7 = RD0–RD7
+  // LCD 16x2: RS=RE0, E=RE1, D0–D7 = RD0–RD7; nguồn VDD→+5V, VSS→GND
+  // (như thật — LCD không nguồn thì không hiện chữ).
   components.push({ id: 'LCD1', kind: 'lcd', label: 'LCD 16x2', x: 330, y: 690, fixed: true });
   wire('LCD1.RS', 'PIC.RE0');
   wire('LCD1.E', 'PIC.RE1');
   for (let i = 0; i < 8; i++) wire('LCD1.D' + i, 'PIC.RD' + i);
+  wire('LCD1.VDD', 'VCC');
+  wire('LCD1.VSS', 'GND');
   return { components, wires };
 }
 
@@ -285,12 +288,17 @@ export function resolvePeripherals(netlist, pressedKeypad = null) {
   // cách chốt dữ liệu (lcdTick: 4-bit chốt từng nibble trên D4–D7).
   // Chưa đủ dây nào: missing liệt kê theo hướng gần đủ hơn (thiếu ít
   // đầu hơn) để thông báo "thiếu: ..." chỉ đúng chỗ cần nối thêm.
-  let lcd = { id: null, rs: null, e: null, d: [null, null, null, null, null, null, null, null], complete: false, missing: [], mode: null, fixed: {} };
+  let lcd = { id: null, rs: null, e: null, d: [null, null, null, null, null, null, null, null], complete: false, missing: [], mode: null, fixed: {}, vddWired: false, vssWired: false };
   if (lcdComp) {
     const rs = picPinInNet(lcdComp.id + '.RS');
     const e = picPinInNet(lcdComp.id + '.E');
     const d = [];
     for (let i = 0; i < 8; i++) d.push(picPinInNet(lcdComp.id + '.D' + i));
+    // Nguồn LCD (như thật): VDD/VSS đã nối dây chưa — net có hơn 1
+    // thành viên nghĩa là chân đã nối tới đâu đó (dây, rail, chân khác
+    // chung strip). Dùng cho checkWiring cảnh báo thiếu nguồn.
+    const vddWired = membersOf(lcdComp.id + '.VDD').length > 1;
+    const vssWired = membersOf(lcdComp.id + '.VSS').length > 1;
     // Đầu nối LCD nối tới rail cố định (VCC/GND) mà không phải chân PIC:
     // RS/E/Dx có mức cố định, không điều khiển được bằng code — ghi lại
     // để checkWiring báo "đã nối tới +5V (mức cố định)" thay vì "thiếu
@@ -309,11 +317,11 @@ export function resolvePeripherals(netlist, pressedKeypad = null) {
     if (!e) missing4.push('E');
     d.slice(4).forEach((p, i) => { if (!p) missing4.push('D' + (i + 4)); });
     if (missing8.length === 0) {
-      lcd = { id: lcdComp.id, rs, e, d, complete: true, missing: [], mode: '8bit', fixed };
+      lcd = { id: lcdComp.id, rs, e, d, complete: true, missing: [], mode: '8bit', fixed, vddWired, vssWired };
     } else if (missing4.length === 0) {
-      lcd = { id: lcdComp.id, rs, e, d, complete: true, missing: [], mode: '4bit', fixed };
+      lcd = { id: lcdComp.id, rs, e, d, complete: true, missing: [], mode: '4bit', fixed, vddWired, vssWired };
     } else {
-      lcd = { id: lcdComp.id, rs, e, d, complete: false, missing: missing4.length < missing8.length ? missing4 : missing8, mode: null, fixed };
+      lcd = { id: lcdComp.id, rs, e, d, complete: false, missing: missing4.length < missing8.length ? missing4 : missing8, mode: null, fixed, vddWired, vssWired };
     }
   }
   const buzzers = netlist.components.filter((c) => c.kind === 'buzzer').map((c) => ({
@@ -746,6 +754,20 @@ export function checkWiring(netlist, tris = null) {
           terminalIds: Object.keys(fixed).filter((t) => lcdMap.lcd.missing.includes(t)).map((t) => lcdComp.id + '.' + t),
         });
       }
+    }
+    // 4b. LCD chưa nối nguồn (như thật: LCD cần VDD/VSS mới hiện chữ).
+    // Cảnh báo riêng với thiếu dây dữ liệu ở trên — kể cả khi RS/E/D đã
+    // đủ, thiếu nguồn thì màn hình vẫn tối. Nêu rõ chân nào thiếu.
+    const missingPower = [];
+    if (!lcdMap.lcd.vddWired) missingPower.push('VDD');
+    if (!lcdMap.lcd.vssWired) missingPower.push('VSS');
+    if (missingPower.length > 0) {
+      warnings.push({
+        id: 'lcd-power-' + lcdComp.id, kind: 'warn',
+        message: `LCD ${lcdComp.label} chưa nối nguồn — thiếu: ${missingPower.join(', ')}. Nối VDD→+5V và VSS→GND thì LCD mới hiện chữ.`,
+        wireIds: [], compIds: [lcdComp.id],
+        terminalIds: missingPower.map((t) => lcdComp.id + '.' + t),
+      });
     }
   }
 

@@ -18,10 +18,10 @@ import {
   parseSerialPost, serialPostPos, SERIAL_POST_DX, SERIAL_POST_Y, SERIAL_POST_DZ, SERIAL_DEFAULT_TX, SERIAL_DEFAULT_TZ,
   clampCamTarget, zoomTowardPoint, panTarget, meterMode, crystalFreq, crystalFreqOf,
   stripKey, buildBenchNets,
-} from './bench-model.js?v=20261125bp';
-import { checkWiring, SIGNAL_COLORS, SEVEN_SEG_TERMS, KEYPAD_KEYS } from './wiring.js?v=20261125bp';
-import { formatVolts, formatAmps, formatCurrentDirection, sevenSegDigit } from './circuit-solver.js?v=20261125bp';
-import { LABS, getLab, buildLabState } from './labs.js?v=20261125bp';
+} from './bench-model.js?v=20261125bt';
+import { checkWiring, SIGNAL_COLORS, SEVEN_SEG_TERMS, KEYPAD_KEYS } from './wiring.js?v=20261125bt';
+import { formatVolts, formatAmps, formatCurrentDirection, sevenSegDigit } from './circuit-solver.js?v=20261125bt';
+import { LABS, getLab, buildLabState } from './labs.js?v=20261125bt';
 
 const $ = (id) => document.getElementById(id);
 const benchView = $('benchView');
@@ -1139,6 +1139,7 @@ void main() {
           : `<p class="sub">LCD hiển thị 2 dòng 16 ký tự theo code (data + RS/E).</p>`)
           + `<label class="bench-insp-label">Đang hiện (live)</label>
           <div class="bench-conns">
+            <div class="bench-conn"><span>Nguồn</span><span id="inspLcdPower">${lcdText && lcdText.powered === false ? 'Chưa nối nguồn' : 'Có nguồn'}</span></div>
             <div class="bench-conn"><span>Dòng 1</span><span id="inspLcdLine0">${esc(line0 || '—')}</span></div>
             <div class="bench-conn"><span>Dòng 2</span><span id="inspLcdLine1">${esc(line1 || '—')}</span></div>
           </div>`;
@@ -3269,8 +3270,10 @@ void main() {
               : lcd.lines[0] + '|' + lcd.lines[1];
             // Key gồm cả displayOn: lệnh tắt màn hình (0x08) phải vẽ
             // lại ngay (màn hình tối) dù DDRAM không đổi; 0x0C bật lại
-            // thì chữ về (DDRAM giữ nguyên khi tắt).
-            const key = (lcd.complete ? '1' : '0') + '|' + (lcd.displayOn === false ? '0' : '1') + '|' + cellsKey;
+            // thì chữ về (DDRAM giữ nguyên khi tắt). Key gồm cả powered:
+            // mất nguồn (VDD/VSS chưa nối) thì màn hình tối (trống) dù
+            // DDRAM không đổi; có nguồn lại thì chữ về.
+            const key = (lcd.complete ? '1' : '0') + '|' + (lcd.displayOn === false ? '0' : '1') + '|' + (lcd.powered === false ? '0' : '1') + '|' + cellsKey;
             if (key === t.last) continue;
             t.last = key;
             const ctx = t.ctx;
@@ -3279,12 +3282,13 @@ void main() {
             ctx.fillStyle = '#7CFFB2';
             ctx.font = '28px "Fira Code", monospace';
             ctx.textBaseline = 'middle';
-            if (lcd.complete && lcd.cells && lcd.displayOn !== false) {
+            if (lcd.complete && lcd.cells && lcd.displayOn !== false && lcd.powered !== false) {
               drawLcdLine(ctx, lcd.cells[0], 18);
               drawLcdLine(ctx, lcd.cells[1], 48);
-            } else if (lcd.complete && lcd.displayOn === false) {
-              // Display off (lệnh 0x08): màn hình tối, không vẽ chữ —
-              // DDRAM giữ nguyên nên 0x0C bật lại thì chữ về.
+            } else if (lcd.complete && (lcd.displayOn === false || lcd.powered === false)) {
+              // Display off (lệnh 0x08) hoặc mất nguồn (VDD/VSS chưa
+              // nối): màn hình tối, không vẽ chữ — DDRAM giữ nguyên
+              // nên 0x0C bật lại / có nguồn lại thì chữ về.
             } else {
               ctx.fillText(lcd.complete ? lcd.lines[0] : 'CHUA NOI DU DAY', 8, 18);
               ctx.fillText(lcd.complete ? lcd.lines[1] : '', 8, 48);
@@ -3519,7 +3523,9 @@ void main() {
     if (!comp || comp.type !== 'lcd') return;
     const l0El = inspectorEl.querySelector('#inspLcdLine0');
     const l1El = inspectorEl.querySelector('#inspLcdLine1');
-    if (!lcd || lcd.displayOn === false) {
+    const pEl = inspectorEl.querySelector('#inspLcdPower');
+    if (pEl) pEl.textContent = lcd && lcd.powered === false ? 'Chưa nối nguồn' : 'Có nguồn';
+    if (!lcd || lcd.displayOn === false || lcd.powered === false) {
       if (l0El) l0El.textContent = '—';
       if (l1El) l1El.textContent = '—';
       return;
