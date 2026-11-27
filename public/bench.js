@@ -1593,7 +1593,10 @@ void main() {
     } else if (comp.type === 'capacitor') {
       // Tụ gốm: đĩa tròn đứng trên cạnh giữa 2 chân (như bánh xe nhỏ),
       // màu nâu vàng gốm. Chân đã vẽ ở vòng legOffsets phía trên.
-      const disc = new THREE.Mesh(new THREE.CylinderGeometry(3, 3, 1.5, 24), stdMat(0xD9A066));
+      // Đĩa phải đủ lớn để chạm cả 2 chân: 2 chân cách nhau 4 cột =
+      // 10,16mm nên bán kính 5,5mm (đường kính 11mm) để chân cắm vào
+      // mép đĩa; bán kính 3mm cũ để đĩa lơ lửng giữa 2 chân, không chạm.
+      const disc = new THREE.Mesh(new THREE.CylinderGeometry(5.5, 5.5, 1.5, 24), stdMat(0xD9A066));
       disc.rotation.x = Math.PI / 2;
       disc.position.set(5.08, 8, 0);
       disc.castShadow = true;
