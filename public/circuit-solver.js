@@ -298,6 +298,18 @@ export function solveCircuit(state, cpu, pressedIds = [], pressedKeypad = null) 
       if (!nP || !nN) continue;
       if (nP === nN) { shorted.add(comp.id); continue; }
       addVSource(nP, nN, 0, comp.id, 'ammeter');
+    } else if (comp.type === 'pot') {
+      // Chiết áp: wiper là nguồn áp (điện áp theo núm xoay, 0–5V) giữa
+      // chân W và chân GND. Nhờ vậy đồng hồ đo chế độ V (và mọi mạch
+      // khác) đọc được điện áp ra của chiết áp. Trước đây chiết áp chỉ
+      // cấp cho ADC (qua setPot), không có trong solver nên net W lơ
+      // lửng và đồng hồ hiện trống dù đã nối W + GND đúng. Nguồn PSU và
+      // chân PIC output đăng ký trước nên thắng nếu xung đột cùng cặp node.
+      const nW = nets.nodeOfTerm(comp.id, 'W');
+      const nG = nets.nodeOfTerm(comp.id, 'GND') || nets.railMinus;
+      const pct = Math.max(0, Math.min(100, Number(comp.props?.pct ?? 0) || 0));
+      if (!nW || !nG || nW === nG) continue;
+      addVSource(nW, nG, (pct / 100) * 5, comp.id, 'pot');
     }
   }
 

@@ -9,7 +9,7 @@ import {
   applyButtonToCpu, applyPotToCpu, applyKeypadToCpu,
 } from './wiring.js?v=20261125be';
 import { defaultBenchState, benchToNetlist, crystalFreq } from './bench-model.js?v=20261125be';
-import { meterReadings, motorReadings, scopeVoltages, pushScopeSample, SCOPE_MAX_SAMPLES } from './circuit-solver.js?v=20261125be';
+import { meterReadings, motorReadings, scopeVoltages, pushScopeSample, SCOPE_MAX_SAMPLES } from './circuit-solver.js?v=20261125bf';
 import { compileC } from './c-compiler.js?v=20261125be';
 
 const cpu = createCPU();

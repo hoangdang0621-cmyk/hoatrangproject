@@ -19,7 +19,7 @@ import {
   clampCamTarget, zoomTowardPoint, panTarget, meterMode, crystalFreq,
 } from './bench-model.js?v=20261125be';
 import { checkWiring, SIGNAL_COLORS, SEVEN_SEG_TERMS, KEYPAD_KEYS } from './wiring.js?v=20261125be';
-import { formatVolts, formatAmps, formatCurrentDirection, sevenSegDigit } from './circuit-solver.js?v=20261125be';
+import { formatVolts, formatAmps, formatCurrentDirection, sevenSegDigit } from './circuit-solver.js?v=20261125bf';
 import { LABS, getLab, buildLabState } from './labs.js?v=20261125be';
 
 const $ = (id) => document.getElementById(id);
@@ -306,6 +306,13 @@ void main() {
   function setCodeWide(on) { benchView.classList.toggle('code-wide', on); }
   function setSideTab(tab) {
     sideTab = tab;
+    // Sang tab khác (không phải tab viết code) thì tự dừng chương trình
+    // đang chạy — mạch đang sửa/đổi thì code cũ không được chạy tiếp.
+    // (Mở lab cũng dừng, xem openLab — sang tab code thì không dừng.)
+    if (tab !== 'code') {
+      const b = bridge();
+      if (b && typeof b.pauseProgram === 'function') b.pauseProgram();
+    }
     document.querySelectorAll('.bench-mini-tab').forEach((b) => {
       const on = b.dataset.sideTab === tab;
       b.classList.toggle('active', on);
@@ -388,6 +395,12 @@ void main() {
     save();
     if (sizeChanged) { rebuildBoard(); updateSizeUI(); }
     rebuildAll(); syncToCpu();
+    // Mở lab mới thì dừng chương trình đang chạy (nếu có) — code mẫu của
+    // lab chỉ lên editor, chưa nạp/chạy; user tự bấm "Nạp & chạy" khi sẵn
+    // sàng. Trước đây chương trình cũ vẫn chạy tiếp trên mạch lab mới nên
+    // trông như lab tự chạy ngay khi vừa mở.
+    const bPause = bridge();
+    if (bPause && typeof bPause.pauseProgram === 'function') bPause.pauseProgram();
     // Nạp luôn code C mẫu của lab vào editor (ghi đè code hiện tại).
     // codeInput vẫn tồn tại trong DOM dù tab code đang hidden; nếu tab
     // code chưa init thì initCodeTab sau này phải giữ code này (xem bẫy
