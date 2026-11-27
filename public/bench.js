@@ -18,8 +18,8 @@ import {
   parseSerialPost, serialPostPos, SERIAL_POST_DX, SERIAL_POST_Y, SERIAL_POST_DZ, SERIAL_DEFAULT_TX, SERIAL_DEFAULT_TZ,
   clampCamTarget, zoomTowardPoint, panTarget, meterMode, crystalFreq,
 } from './bench-model.js?v=20261125be';
-import { checkWiring, SIGNAL_COLORS, SEVEN_SEG_TERMS, KEYPAD_KEYS } from './wiring.js?v=20261125be';
-import { formatVolts, formatAmps, formatCurrentDirection, sevenSegDigit } from './circuit-solver.js?v=20261125bf';
+import { checkWiring, SIGNAL_COLORS, SEVEN_SEG_TERMS, KEYPAD_KEYS } from './wiring.js?v=20261125bm';
+import { formatVolts, formatAmps, formatCurrentDirection, sevenSegDigit } from './circuit-solver.js?v=20261125bm';
 import { LABS, getLab, buildLabState } from './labs.js?v=20261125be';
 
 const $ = (id) => document.getElementById(id);
@@ -807,7 +807,7 @@ void main() {
       } else if (comp.type === 'motor') {
         // Động cơ DC: điện áp/dòng/tốc độ live (vòng poll cập nhật 3 ô
         // này) + điện trở cuộn dây (đổi được). Tốc độ tỷ lệ với điện áp:
-        // 5V = 6000 vòng/phút, 0V = 0, điện áp âm = quay ngược.
+        // 20V = 1000 vòng/phút, 0V = 0, điện áp âm = quay ngược.
         const b = bridge();
         const motors = b && typeof b.getMotorState === 'function' ? b.getMotorState() : null;
         const m = motors ? motors.find((x) => x.id === comp.id) : null;
@@ -819,7 +819,7 @@ void main() {
           </div>
           <label class="bench-insp-label" for="inspMotorVal">Điện trở cuộn dây (Ω)</label>
           <input class="input" id="inspMotorVal" type="number" min="1" max="10000" step="1" value="${comp.props?.value ?? 100}">
-          <p class="sub">Động cơ là tải trở: dòng = điện áp / điện trở cuộn dây (mặc định 100Ω, 5V → 50mA). Tốc độ tỷ lệ với điện áp (5V = 6000 vòng/phút). Đấu qua chân PIC thì tốc độ theo mức chân; PWM (CCP) thì tốc độ theo điện áp trung bình (duty cycle). Nối 2 chân +/− tới nguồn hoặc chân PIC; đảo cực thì quay ngược.</p>`;
+          <p class="sub">Động cơ là tải trở: dòng = điện áp / điện trở cuộn dây (mặc định 100Ω, 5V → 50mA). Tốc độ tỷ lệ với điện áp (20V = 1000 vòng/phút). Đấu qua chân PIC thì tốc độ theo mức chân; PWM (CCP) thì tốc độ theo điện áp trung bình (duty cycle). Nối 2 chân +/− tới nguồn hoặc chân PIC; đảo cực thì quay ngược.</p>`;
       } else if (comp.type === 'led') {
         // Ô chọn màu luôn hiện đúng màu thật của LED: nếu màu hiện tại
         // không nằm trong bảng màu (vd LED Lab 2 cũ màu #16A34A, hoặc

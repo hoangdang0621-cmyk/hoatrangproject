@@ -9,18 +9,38 @@
 // - Đồng hồ đo chế độ A (đo dòng): nguồn áp 0V giữa 2 chân P/N, dòng
 //   qua nó = biến dòng của nguồn (chiều P -> N).
 // - LED đang sáng: nguồn áp 2V nối tiếp 10Ω (nút phụ giữa điện trở và
-//   nguồn); LED tắt: hở mạch. Trạng thái sáng/tắt lấy từ ledStates có sẵn.
+//   nguồn); LED tắt: hở mạch. Trạng thái sáng/tắt KHÔNG lấy từ mức logic
+//   (VCC/GND/chân PIC) nữa mà quyết định từ ĐIỆN ÁP ĐÃ GIẢI (xem
+//   solveCircuit): giải 1 lần hở mạch lấy điện áp 2 đầu diode, diode nào
+//   có điện áp thuận trong [2V, 10V] thì bật rồi giải lại; diode nào có
+//   dòng nhánh âm thì tắt đi, giải lại. Nhờ vậy LED/đoạn 7 thanh sau
+//   chiết áp, cầu phân áp hay nguồn bất kỳ đều sáng đúng như thật.
+// - Còi buzzer: tải dẫn 220Ω giữa 2 chân P/N, luôn có mặt khi đã nối
+//   dây (như điện trở); tiếng kêu theo điện áp P−N đã giải (≥ 2V).
 // - Net không nối tới nguồn áp nào và không có đường về GND thì floating
 //   (điện áp null, không gán 0V bừa); nhánh trong mạch floating thì dòng 0.
 import {
   DEFAULT_SIZE, legsFor, stripKey, parseHole, parsePsuPost, parseScopePost, parseSerialPost, psuVolts,
-  benchToNetlist, normalizeWireEnd, meterMode,
+  normalizeWireEnd, meterMode,
 } from './bench-model.js?v=20261125be';
-import { resolvePeripherals, ledStates, sevenSegStates, SEVEN_SEG_TERMS, PIC_PINS } from './wiring.js?v=20261125be';
+import { netLevel, sevenSegStates, SEVEN_SEG_TERMS, PIC_PINS } from './wiring.js?v=20261125bm';
 
 export const LED_FORWARD_VOLTS = 2.0;  // sụt áp thuận LED khi sáng
 export const LED_SERIES_OHMS = 10;     // điện trở nối tiếp trong mô hình LED
+// Điện áp thuận tối đa mà LED / đoạn 7 thanh / còi còn bật: trên 10V thì
+// TẮT (không cháy, hạ áp xuống ≤10V thì bật lại). Đây là quy tắc cũ của
+// ledStates/buzzerStates/sevenSegStates (chỉ tính "có nguồn" khi
+// 0 < psu.volts ≤ 10, xem wiring.js: psuLedOn), giữ nguyên để hành vi ở
+// áp cao không đổi — test (h-b) LED 12V tắt, (l-d) còi 12V tắt.
+export const LED_MAX_VOLTS = 10;
 export const PIC_OUTPUT_VOLTS = 5;     // chân PIC output mức cao
+// Còi buzzer: mô hình tải dẫn BUZZER_OHMS giữa 2 chân P/N (5V -> ~22,7mA,
+// như còi piezo 5V thật). Nhánh dẫn LUÔN có mặt khi đã nối dây (như điện
+// trở) nên dòng/áp qua còi tính đúng; tiếng kêu (buzzerOn) tính riêng từ
+// điện áp đã giải: kêu khi V(P)−V(N) ≥ BUZZER_ON_VOLTS (cùng ngưỡng 2V
+// như LED — dưới 2V còi piezo thực tế không đủ áp để kêu).
+export const BUZZER_OHMS = 220;
+export const BUZZER_ON_VOLTS = 2.0;
 
 // ---------------------------------------------------------------------------
 // Net cho solver: union-find trên strip — CHỈ dây và nút nhấn (đang nhấn)
@@ -179,224 +199,348 @@ export function solveLinear(A, b) {
 //                            // chập nguồn (dòng không xác định, vd đồng hồ
 //                            // đo chế độ A đấu tắt trực tiếp qua PSU)
 //   nets,                     // kết quả buildSolverNets (để tra node của chân)
+//   ledOn: Map,               // id LED -> boolean (đang sáng? quyết định từ
+//                            // điện áp thuận đã giải, xem dưới)
+//   segOn: Map,               // 'SEG0.a' -> boolean (đoạn 7 thanh đang sáng?)
+//   buzzerOn: Map,            // id còi -> boolean (đang kêu? V(P)−V(N) ≥ 2V)
 // }
-// Dòng qua điện trở = (V_A − V_B)/R; dòng qua LED/đồng hồ đo chế độ A =
+// Dòng qua điện trở / còi = (V_A − V_B)/R; dòng qua LED/đồng hồ đo chế độ A =
 // biến dòng của nguồn áp tương ứng trong MNA (chiều từ chân +/P sang
 // chân −/N).
+// Diode (LED, đoạn 7 thanh) bật/tắt theo ĐIỆN ÁP ĐÃ GIẢI chứ không theo
+// mức logic: lần 1 giải hở mạch toàn bộ diode, diode nào có điện áp thuận
+// trong [LED_FORWARD_VOLTS, LED_MAX_VOLTS] thì bật; các lần sau bỏ diode
+// nào có dòng nhánh âm rồi giải lại (tối đa 3 vòng + 1 lần giải cuối).
 // ---------------------------------------------------------------------------
 export function solveCircuit(state, cpu, pressedIds = [], pressedKeypad = null) {
   const size = state.size ?? DEFAULT_SIZE;
   const nets = buildSolverNets(state, pressedIds, pressedKeypad);
   const ref = nets.railMinus;
-  // LED nào đang sáng (theo ledStates có sẵn): chỉ LED sáng mới là nhánh
-  // (2V + 10Ω); LED tắt là hở mạch.
-  const mapping = resolvePeripherals(benchToNetlist(state, pressedIds, pressedKeypad));
-  const ledOn = new Map(ledStates(cpu, mapping).map((s) => [s.id, s.on]));
-  // Đoạn nào của LED 7 thanh đang sáng (theo sevenSegStates): mỗi đoạn
-  // sáng là 1 nhánh LED (2V + 10Ω) giữa node của đoạn và node chân chung.
-  const segOn = new Map();
-  for (const s of sevenSegStates(cpu, mapping)) {
-    for (const [t, lit] of Object.entries(s.on)) {
-      if (lit) segOn.set(s.id + '.' + t, true);
-    }
-  }
-  const psu = state.components.find((c) => c.type === 'psu');
-  const psuV = psuVolts(psu);
 
-  const conductances = []; // {nodeA, nodeB, g, key}
-  const vSources = [];     // {nodeP, nodeN, volts, key, kind}
-  const shorted = new Set(); // id linh kiện bị chập (dòng = Infinity)
-  // Nguồn áp trùng nhau trên cùng 1 cặp node thì chỉ giữ cái đầu tiên
-  // (ưu tiên PSU, rồi chân PIC, đồng hồ đo chế độ A, LED). Cái bị loại
-  // có dòng không xác định (2 nguồn áp lý tưởng song song) -> Infinity.
-  const sourceByPair = new Map();
-  const addVSource = (nodeP, nodeN, volts, key, kind) => {
-    if (!nodeP || !nodeN || nodeP === nodeN) {
-      if (kind === 'ammeter' || kind === 'led') shorted.add(key);
-      return false;
-    }
-    const pair = [nodeP, nodeN].sort().join('|');
-    // Điện áp theo chiều chuẩn (node nhỏ -> node lớn theo thứ tự chuỗi).
-    const canon = nodeP < nodeN ? volts : -volts;
-    const prev = sourceByPair.get(pair);
-    if (prev !== undefined) {
-      if (Math.abs(canon - prev) > 1e-9) { /* xung đột: nguồn đầu thắng */ }
-      if (kind === 'ammeter' || kind === 'led') shorted.add(key);
-      return false;
-    }
-    sourceByPair.set(pair, canon);
-    vSources.push({ nodeP, nodeN, volts, key, kind });
-    return true;
-  };
+  // --- 1 lần giải MNA với 1 tập diode (LED / đoạn 7 thanh) đang bật ---
+  // ledSet: Set id LED đang bật; segSet: Set 'SEG0.a' đoạn đang bật.
+  // Trả { ok, nodeVoltage, branchCurrent } (chưa có nets và các tập
+  // on/off — hàm ngoài bọc thêm). Toàn bộ phần lắp mạch MNA của bản cũ
+  // nằm trong này, không đổi logic, chỉ khác: tập diode bật là đối số
+  // (thay vì lấy từ ledStates/sevenSegStates theo mức logic), và thêm
+  // nhánh dẫn của còi buzzer (xem dưới).
+  const runMna = (ledSet, segSet) => {
+    const psu = state.components.find((c) => c.type === 'psu');
+    const psuV = psuVolts(psu);
 
-  // Nguồn PSU TRƯỚC (ưu tiên khi trùng cặp node), rồi chân PIC output,
-  // sau đó mới tới các nhánh linh kiện. Thứ tự này quan trọng: đồng hồ
-  // đo chế độ A là nguồn 0V, nếu đăng ký trước PSU thì nó chiếm cặp node
-  // (RAIL+/RAIL-) và làm PSU bị loại (mạch mất nguồn, đồng hồ chế độ V
-  // đọc 0V, đồng hồ chế độ A đọc 0 thay vì OL). PSU đăng ký trước thì
-  // đồng hồ chế độ A đấu tắt qua PSU bị đánh dấu chập (dòng Infinity ->
-  // hiển thị OL), PSU vẫn giữ 5V.
-  if (psu) addVSource(nets.railPlus, nets.railMinus, psuV, psu.id, 'psu');
-  for (const pin of PIC_PINS) {
-    if (pin.port === null) continue;
-    if (cpu.pinDirection(pin.port, pin.bit) !== 'out') continue; // input: trở kháng cao
-    const node = nets.nodeOfPicPin(pin.id);
-    if (!node) continue;
-    const level = cpu.pinLevel(pin.port, pin.bit);
-    addVSource(node, nets.railMinus, level ? PIC_OUTPUT_VOLTS : 0, 'PIC.' + pin.id, 'picpin');
-  }
-
-  for (const comp of state.components) {
-    if (comp.type === 'resistor') {
-      const n1 = nets.nodeOfTerm(comp.id, 'L1');
-      const n2 = nets.nodeOfTerm(comp.id, 'L2');
-      const R = Number(comp.props?.value);
-      if (!n1 || !n2 || n1 === n2 || !(R > 0) || !Number.isFinite(R)) continue;
-      conductances.push({ nodeA: n1, nodeB: n2, g: 1 / R, key: comp.id, kind: 'resistor' });
-    } else if (comp.type === 'led') {
-      if (!ledOn.get(comp.id)) continue; // tắt: hở mạch
-      const nA = nets.nodeOfTerm(comp.id, 'A');
-      const nK = nets.nodeOfTerm(comp.id, 'K');
-      if (!nA || !nK || nA === nK) continue; // chập 2 đầu: không có dòng qua LED
-      const aux = 'AUX:LED:' + comp.id;
-      conductances.push({ nodeA: nA, nodeB: aux, g: 1 / LED_SERIES_OHMS, key: comp.id, kind: 'led' });
-      addVSource(aux, nK, LED_FORWARD_VOLTS, comp.id, 'led');
-    } else if (comp.type === 'sevenseg') {
-      // 8 đoạn, mỗi đoạn sáng là 1 nhánh LED (2V + 10Ω) giữa node của
-      // đoạn và node chân chung. Chung cathode: dòng chạy từ đoạn
-      // (anode) về COM (cathode); chung anode: từ COM (anode) về đoạn
-      // (cathode). Đoạn tắt là hở mạch (không có nhánh).
-      const common = comp.props?.common === 'anode' ? 'anode' : 'cathode';
-      const nCom = nets.nodeOfTerm(comp.id, 'COM');
-      if (!nCom) continue; // chân chung chưa nối: không đoạn nào sáng được
-      for (const t of SEVEN_SEG_TERMS) {
-        if (!segOn.get(comp.id + '.' + t)) continue;
-        const nSeg = nets.nodeOfTerm(comp.id, t);
-        if (!nSeg || nSeg === nCom) continue;
-        const aux = 'AUX:SEG:' + comp.id + '.' + t;
-        const nodeP = common === 'cathode' ? nSeg : nCom;
-        const nodeN = common === 'cathode' ? nCom : nSeg;
-        conductances.push({ nodeA: nodeP, nodeB: aux, g: 1 / LED_SERIES_OHMS, key: comp.id + '.' + t, kind: 'led' });
-        addVSource(aux, nodeN, LED_FORWARD_VOLTS, comp.id + '.' + t, 'led');
+    const conductances = []; // {nodeA, nodeB, g, key}
+    const vSources = [];     // {nodeP, nodeN, volts, key, kind}
+    const shorted = new Set(); // id linh kiện bị chập (dòng = Infinity)
+    // Nguồn áp trùng nhau trên cùng 1 cặp node thì chỉ giữ cái đầu tiên
+    // (ưu tiên PSU, rồi chân PIC, đồng hồ đo chế độ A, LED). Cái bị loại
+    // có dòng không xác định (2 nguồn áp lý tưởng song song) -> Infinity.
+    const sourceByPair = new Map();
+    const addVSource = (nodeP, nodeN, volts, key, kind) => {
+      if (!nodeP || !nodeN || nodeP === nodeN) {
+        if (kind === 'ammeter' || kind === 'led') shorted.add(key);
+        return false;
       }
-    } else if (comp.type === 'motor') {
-      // Động cơ DC: tải trở (điện trở cuộn dây, mặc định 100Ω) giữa 2
-      // chân +/−. Dòng qua động cơ = (V+ − V−)/R; tốc độ quay tỷ lệ với
-      // điện áp (xem motorReadings). Không phải nguồn áp, chỉ là 1 nhánh
-      // dẫn như điện trở (không nối 2 strip như dây).
-      const nP = nets.nodeOfTerm(comp.id, '+');
-      const nN = nets.nodeOfTerm(comp.id, '-');
-      const R = Number(comp.props?.value);
-      if (!nP || !nN || nP === nN || !(R > 0) || !Number.isFinite(R)) continue;
-      conductances.push({ nodeA: nP, nodeB: nN, g: 1 / R, key: comp.id, kind: 'motor' });
-    } else if (comp.type === 'multimeter' && meterMode(comp) === 'A') {
-      // Chế độ A: nguồn áp 0V giữa 2 chân P/N (dòng đo P -> N). Chế độ V
-      // không có nhánh (trở kháng vô cùng). kind 'ammeter' giữ nguyên để
-      // logic MNA (shorted/branchCurrent) không đổi.
-      const nP = nets.nodeOfTerm(comp.id, 'P');
-      const nN = nets.nodeOfTerm(comp.id, 'N');
-      if (!nP || !nN) continue;
-      if (nP === nN) { shorted.add(comp.id); continue; }
-      addVSource(nP, nN, 0, comp.id, 'ammeter');
-    } else if (comp.type === 'pot') {
-      // Chiết áp: wiper là nguồn áp (điện áp theo núm xoay, 0–5V) giữa
-      // chân W và chân GND. Nhờ vậy đồng hồ đo chế độ V (và mọi mạch
-      // khác) đọc được điện áp ra của chiết áp. Trước đây chiết áp chỉ
-      // cấp cho ADC (qua setPot), không có trong solver nên net W lơ
-      // lửng và đồng hồ hiện trống dù đã nối W + GND đúng. Nguồn PSU và
-      // chân PIC output đăng ký trước nên thắng nếu xung đột cùng cặp node.
-      const nW = nets.nodeOfTerm(comp.id, 'W');
-      const nG = nets.nodeOfTerm(comp.id, 'GND') || nets.railMinus;
-      const pct = Math.max(0, Math.min(100, Number(comp.props?.pct ?? 0) || 0));
-      if (!nW || !nG || nW === nG) continue;
-      addVSource(nW, nG, (pct / 100) * 5, comp.id, 'pot');
-    }
-  }
+      const pair = [nodeP, nodeN].sort().join('|');
+      // Điện áp theo chiều chuẩn (node nhỏ -> node lớn theo thứ tự chuỗi).
+      const canon = nodeP < nodeN ? volts : -volts;
+      const prev = sourceByPair.get(pair);
+      if (prev !== undefined) {
+        if (Math.abs(canon - prev) > 1e-9) { /* xung đột: nguồn đầu thắng */ }
+        if (kind === 'ammeter' || kind === 'led') shorted.add(key);
+        return false;
+      }
+      sourceByPair.set(pair, canon);
+      vSources.push({ nodeP, nodeN, volts, key, kind });
+      return true;
+    };
 
-  // Node nào có đường về GND (qua nhánh dẫn hoặc nguồn áp) thì điện áp
-  // xác định; còn lại là floating. BFS từ node GND qua mọi nhánh.
-  const adj = new Map(); // node -> Set(node kề)
-  const link = (a, b) => {
-    if (!adj.has(a)) adj.set(a, new Set());
-    if (!adj.has(b)) adj.set(b, new Set());
-    adj.get(a).add(b); adj.get(b).add(a);
+    // Nguồn PSU TRƯỚC (ưu tiên khi trùng cặp node), rồi chân PIC output,
+    // sau đó mới tới các nhánh linh kiện. Thứ tự này quan trọng: đồng hồ
+    // đo chế độ A là nguồn 0V, nếu đăng ký trước PSU thì nó chiếm cặp node
+    // (RAIL+/RAIL-) và làm PSU bị loại (mạch mất nguồn, đồng hồ chế độ V
+    // đọc 0V, đồng hồ chế độ A đọc 0 thay vì OL). PSU đăng ký trước thì
+    // đồng hồ chế độ A đấu tắt qua PSU bị đánh dấu chập (dòng Infinity ->
+    // hiển thị OL), PSU vẫn giữ 5V.
+    if (psu) addVSource(nets.railPlus, nets.railMinus, psuV, psu.id, 'psu');
+    for (const pin of PIC_PINS) {
+      if (pin.port === null) continue;
+      if (cpu.pinDirection(pin.port, pin.bit) !== 'out') continue; // input: trở kháng cao
+      const node = nets.nodeOfPicPin(pin.id);
+      if (!node) continue;
+      const level = cpu.pinLevel(pin.port, pin.bit);
+      addVSource(node, nets.railMinus, level ? PIC_OUTPUT_VOLTS : 0, 'PIC.' + pin.id, 'picpin');
+    }
+
+    for (const comp of state.components) {
+      if (comp.type === 'resistor') {
+        const n1 = nets.nodeOfTerm(comp.id, 'L1');
+        const n2 = nets.nodeOfTerm(comp.id, 'L2');
+        const R = Number(comp.props?.value);
+        if (!n1 || !n2 || n1 === n2 || !(R > 0) || !Number.isFinite(R)) continue;
+        conductances.push({ nodeA: n1, nodeB: n2, g: 1 / R, key: comp.id, kind: 'resistor' });
+      } else if (comp.type === 'led') {
+        if (!ledSet.has(comp.id)) continue; // tắt: hở mạch
+        const nA = nets.nodeOfTerm(comp.id, 'A');
+        const nK = nets.nodeOfTerm(comp.id, 'K');
+        if (!nA || !nK || nA === nK) continue; // chập 2 đầu: không có dòng qua LED
+        const aux = 'AUX:LED:' + comp.id;
+        conductances.push({ nodeA: nA, nodeB: aux, g: 1 / LED_SERIES_OHMS, key: comp.id, kind: 'led' });
+        addVSource(aux, nK, LED_FORWARD_VOLTS, comp.id, 'led');
+      } else if (comp.type === 'sevenseg') {
+        // 8 đoạn, mỗi đoạn sáng là 1 nhánh LED (2V + 10Ω) giữa node của
+        // đoạn và node chân chung. Chung cathode: dòng chạy từ đoạn
+        // (anode) về COM (cathode); chung anode: từ COM (anode) về đoạn
+        // (cathode). Đoạn tắt là hở mạch (không có nhánh).
+        const common = comp.props?.common === 'anode' ? 'anode' : 'cathode';
+        const nCom = nets.nodeOfTerm(comp.id, 'COM');
+        if (!nCom) continue; // chân chung chưa nối: không đoạn nào sáng được
+        for (const t of SEVEN_SEG_TERMS) {
+          if (!segSet.has(comp.id + '.' + t)) continue;
+          const nSeg = nets.nodeOfTerm(comp.id, t);
+          if (!nSeg || nSeg === nCom) continue;
+          const aux = 'AUX:SEG:' + comp.id + '.' + t;
+          const nodeP = common === 'cathode' ? nSeg : nCom;
+          const nodeN = common === 'cathode' ? nCom : nSeg;
+          conductances.push({ nodeA: nodeP, nodeB: aux, g: 1 / LED_SERIES_OHMS, key: comp.id + '.' + t, kind: 'led' });
+          addVSource(aux, nodeN, LED_FORWARD_VOLTS, comp.id + '.' + t, 'led');
+        }
+      } else if (comp.type === 'motor') {
+        // Động cơ DC: tải trở (điện trở cuộn dây, mặc định 100Ω) giữa 2
+        // chân +/−. Dòng qua động cơ = (V+ − V−)/R; tốc độ quay tỷ lệ với
+        // điện áp (xem motorReadings). Không phải nguồn áp, chỉ là 1 nhánh
+        // dẫn như điện trở (không nối 2 strip như dây).
+        const nP = nets.nodeOfTerm(comp.id, '+');
+        const nN = nets.nodeOfTerm(comp.id, '-');
+        const R = Number(comp.props?.value);
+        if (!nP || !nN || nP === nN || !(R > 0) || !Number.isFinite(R)) continue;
+        conductances.push({ nodeA: nP, nodeB: nN, g: 1 / R, key: comp.id, kind: 'motor' });
+      } else if (comp.type === 'buzzer') {
+        // Còi buzzer: tải dẫn giữa 2 chân P/N (điện trở BUZZER_OHMS),
+        // LUÔN có mặt khi đã nối dây (như điện trở) — trước đây còi hoàn
+        // toàn vắng mặt trong solver nên dòng qua còi = 0, sụt áp = 0,
+        // đồng hồ đo nối tiếp đọc 0.0mA dù còi đang kêu. Tiếng kêu
+        // (buzzerOn) tính riêng từ điện áp đã giải, xem cuối hàm.
+        const nP = nets.nodeOfTerm(comp.id, 'P');
+        const nN = nets.nodeOfTerm(comp.id, 'N');
+        if (!nP || !nN || nP === nN) continue;
+        conductances.push({ nodeA: nP, nodeB: nN, g: 1 / BUZZER_OHMS, key: comp.id, kind: 'buzzer' });
+      } else if (comp.type === 'multimeter' && meterMode(comp) === 'A') {
+        // Chế độ A: nguồn áp 0V giữa 2 chân P/N (dòng đo P -> N). Chế độ V
+        // không có nhánh (trở kháng vô cùng). kind 'ammeter' giữ nguyên để
+        // logic MNA (shorted/branchCurrent) không đổi.
+        const nP = nets.nodeOfTerm(comp.id, 'P');
+        const nN = nets.nodeOfTerm(comp.id, 'N');
+        if (!nP || !nN) continue;
+        if (nP === nN) { shorted.add(comp.id); continue; }
+        addVSource(nP, nN, 0, comp.id, 'ammeter');
+      } else if (comp.type === 'pot') {
+        // Chiết áp: wiper là nguồn áp (điện áp theo núm xoay, 0–5V) giữa
+        // chân W và chân GND. Nhờ vậy đồng hồ đo chế độ V (và mọi mạch
+        // khác) đọc được điện áp ra của chiết áp. Trước đây chiết áp chỉ
+        // cấp cho ADC (qua setPot), không có trong solver nên net W lơ
+        // lửng và đồng hồ hiện trống dù đã nối W + GND đúng. Nguồn PSU và
+        // chân PIC output đăng ký trước nên thắng nếu xung đột cùng cặp node.
+        const nW = nets.nodeOfTerm(comp.id, 'W');
+        const nG = nets.nodeOfTerm(comp.id, 'GND') || nets.railMinus;
+        const pct = Math.max(0, Math.min(100, Number(comp.props?.pct ?? 0) || 0));
+        if (!nW || !nG || nW === nG) continue;
+        addVSource(nW, nG, (pct / 100) * 5, comp.id, 'pot');
+      }
+    }
+
+    // Node nào có đường về GND (qua nhánh dẫn hoặc nguồn áp) thì điện áp
+    // xác định; còn lại là floating. BFS từ node GND qua mọi nhánh.
+    const adj = new Map(); // node -> Set(node kề)
+    const link = (a, b) => {
+      if (!adj.has(a)) adj.set(a, new Set());
+      if (!adj.has(b)) adj.set(b, new Set());
+      adj.get(a).add(b); adj.get(b).add(a);
+    };
+    for (const c of conductances) link(c.nodeA, c.nodeB);
+    for (const s of vSources) link(s.nodeP, s.nodeN);
+    const grounded = new Set([ref]);
+    const queue = [ref];
+    while (queue.length) {
+      const cur = queue.pop();
+      for (const nb of adj.get(cur) || []) {
+        if (!grounded.has(nb)) { grounded.add(nb); queue.push(nb); }
+      }
+    }
+    const isGrounded = (node) => node === ref || grounded.has(node);
+
+    // Chỉ số MNA cho node grounded (trừ node GND làm mốc).
+    const nodeIndex = new Map();
+    for (const node of grounded) {
+      if (node !== ref) nodeIndex.set(node, nodeIndex.size);
+    }
+    const n = nodeIndex.size;
+    // Chỉ giữ nguồn áp mà cả 2 đầu đều grounded (nguồn trong mạch floating
+    // thì không có dòng); nhánh dẫn mà 1 đầu floating thì dòng 0.
+    const liveSources = vSources.filter((s) => isGrounded(s.nodeP) && isGrounded(s.nodeN));
+    const m = liveSources.length;
+    const A = Array.from({ length: n + m }, () => new Array(n + m).fill(0));
+    const z = new Array(n + m).fill(0);
+    const idx = (node) => nodeIndex.get(node); // undefined nếu là node GND
+    for (const c of conductances) {
+      if (!isGrounded(c.nodeA) || !isGrounded(c.nodeB)) continue;
+      const i = idx(c.nodeA), j = idx(c.nodeB);
+      if (i !== undefined) {
+        A[i][i] += c.g;
+        if (j !== undefined) A[i][j] -= c.g;
+      }
+      if (j !== undefined) {
+        A[j][j] += c.g;
+        if (i !== undefined) A[j][i] -= c.g;
+      }
+    }
+    liveSources.forEach((s, k) => {
+      const p = idx(s.nodeP), q = idx(s.nodeN);
+      if (p !== undefined) A[p][n + k] += 1;
+      if (q !== undefined) A[q][n + k] -= 1;
+      if (p !== undefined) A[n + k][p] += 1;
+      if (q !== undefined) A[n + k][q] -= 1;
+      z[n + k] = s.volts;
+    });
+    const x = solveLinear(A, z);
+
+    const nodeVoltage = new Map();
+    for (const node of adj.keys()) nodeVoltage.set(node, null);
+    nodeVoltage.set(ref, 0);
+    const branchCurrent = new Map();
+    for (const c of conductances) branchCurrent.set(c.key, 0);
+    for (const s of vSources) {
+      if (s.kind === 'ammeter' || s.kind === 'led') branchCurrent.set(s.key, 0);
+    }
+    for (const id of shorted) branchCurrent.set(id, Infinity);
+    if (x === null) return { ok: false, nodeVoltage, branchCurrent };
+    for (const [node, i] of nodeIndex) nodeVoltage.set(node, x[i]);
+    // Dòng qua điện trở / động cơ DC / còi = (V_A − V_B) × g (0 nếu 1 đầu
+    // floating). Dòng qua LED lấy từ biến dòng của nguồn áp 2V ở dưới
+    // (không tính bằng điện trở 10Ω vì nút phụ không phải node strip).
+    for (const c of conductances) {
+      if (c.kind !== 'resistor' && c.kind !== 'motor' && c.kind !== 'buzzer') continue;
+      const vA = nodeVoltage.get(c.nodeA);
+      const vB = nodeVoltage.get(c.nodeB);
+      if (vA === null || vA === undefined || vB === null || vB === undefined) {
+        branchCurrent.set(c.key, 0);
+      } else {
+        branchCurrent.set(c.key, (vA - vB) * c.g);
+      }
+    }
+    // Dòng qua nguồn áp = biến dòng MNA (chiều từ nodeP sang nodeN).
+    liveSources.forEach((s, k) => {
+      if (s.kind === 'ammeter' || s.kind === 'led') branchCurrent.set(s.key, x[n + k]);
+    });
+    return { ok: true, nodeVoltage, branchCurrent };
   };
-  for (const c of conductances) link(c.nodeA, c.nodeB);
-  for (const s of vSources) link(s.nodeP, s.nodeN);
-  const grounded = new Set([ref]);
-  const queue = [ref];
-  while (queue.length) {
-    const cur = queue.pop();
-    for (const nb of adj.get(cur) || []) {
-      if (!grounded.has(nb)) { grounded.add(nb); queue.push(nb); }
-    }
-  }
-  const isGrounded = (node) => node === ref || grounded.has(node);
 
-  // Chỉ số MNA cho node grounded (trừ node GND làm mốc).
-  const nodeIndex = new Map();
-  for (const node of grounded) {
-    if (node !== ref) nodeIndex.set(node, nodeIndex.size);
-  }
-  const n = nodeIndex.size;
-  // Chỉ giữ nguồn áp mà cả 2 đầu đều grounded (nguồn trong mạch floating
-  // thì không có dòng); nhánh dẫn mà 1 đầu floating thì dòng 0.
-  const liveSources = vSources.filter((s) => isGrounded(s.nodeP) && isGrounded(s.nodeN));
-  const m = liveSources.length;
-  const A = Array.from({ length: n + m }, () => new Array(n + m).fill(0));
-  const z = new Array(n + m).fill(0);
-  const idx = (node) => nodeIndex.get(node); // undefined nếu là node GND
-  for (const c of conductances) {
-    if (!isGrounded(c.nodeA) || !isGrounded(c.nodeB)) continue;
-    const i = idx(c.nodeA), j = idx(c.nodeB);
-    if (i !== undefined) {
-      A[i][i] += c.g;
-      if (j !== undefined) A[i][j] -= c.g;
+  // --- Quyết định LED / đoạn 7 thanh / còi bật hay tắt từ ĐIỆN ÁP ĐÃ GIẢI ---
+  // Trước đây trạng thái lấy từ ledStates/sevenSegStates/buzzerStates
+  // (mức logic VCC/GND/chân PIC) nên LED sau chiết áp, cầu phân áp hay
+  // nguồn khác không phải VCC/PIC thì không bao giờ sáng — và solver
+  // cũng bỏ luôn nhánh LED đó (hở mạch) nên đồng hồ đo nối tiếp đọc sai.
+  // Giờ quyết định từ điện áp thuận trên diode:
+  //   - Lần 1: giải với mọi diode TẮT (hở mạch) để lấy điện áp hở mạch
+  //     ở 2 đầu mỗi diode; diode nào có điện áp thuận trong
+  //     [LED_FORWARD_VOLTS, LED_MAX_VOLTS] thì bật (dưới 2V chưa đủ mở
+  //     diode; trên 10V thì tắt theo quy tắc cũ 0 < volts ≤ 10 — test
+  //     (h-b) LED 12V tắt, (l-d) còi 12V tắt).
+  //   - Các lần sau: giải với tập diode đang bật; diode nào có dòng
+  //     nhánh ÂM (ngược chiều — mạch không duy trì được 2V thuận) thì
+  //     tắt đi, giải lại. Tối đa 3 vòng + 1 lần giải cuối để điện áp
+  //     trả về khớp đúng tập on/off cuối cùng.
+  // Còi không phải diode: nhánh dẫn của nó luôn có mặt trong solver
+  // (như điện trở); tiếng kêu chỉ tính từ điện áp P−N đã giải, cập nhật
+  // lại sau mỗi lần giải.
+  // Hạn chế đã biết: 2 diode nối tiếp nhau mà nút giữa thả nổi khi hở
+  // mạch (vd 2 LED nối tiếp VCC -> LED -> LED -> GND) thì lần 1 không
+  // thấy điện áp thuận nên cả 2 vẫn tắt — mạch này không có trong lab nào.
+  const ledOn = new Map();    // id LED -> boolean (đang sáng?)
+  const segOn = new Map();    // 'SEG0.a' -> boolean (đoạn đang sáng?)
+  const buzzerOn = new Map(); // id còi -> boolean (đang kêu?)
+  // Điện áp thuận (V) trên 1 diode giữa 2 đầu nối, từ 1 kết quả giải
+  // (dùng netLevel để thống nhất với mô hình logic): null nếu 1 trong
+  // 2 đầu floating / chưa nối dây.
+  const fwdVolts = (nodeVoltage, termP, termN) => {
+    const vp = netLevel(nodeVoltage, nets, termP);
+    const vn = netLevel(nodeVoltage, nets, termN);
+    if (vp === null || vn === null) return null;
+    return vp - vn;
+  };
+  const diodeOn = (v) => v !== null && v >= LED_FORWARD_VOLTS && v <= LED_MAX_VOLTS;
+  // Quyết định LED + đoạn 7 thanh từ điện áp đã giải.
+  const decideDiodes = (nodeVoltage) => {
+    for (const comp of state.components) {
+      if (comp.type === 'led') {
+        ledOn.set(comp.id, diodeOn(fwdVolts(nodeVoltage, comp.id + '.A', comp.id + '.K')));
+      } else if (comp.type === 'sevenseg') {
+        const common = comp.props?.common === 'anode' ? 'anode' : 'cathode';
+        for (const t of SEVEN_SEG_TERMS) {
+          // Chung cathode: thuận = V(đoạn) − V(COM); chung anode:
+          // thuận = V(COM) − V(đoạn).
+          const v = common === 'cathode'
+            ? fwdVolts(nodeVoltage, comp.id + '.' + t, comp.id + '.COM')
+            : fwdVolts(nodeVoltage, comp.id + '.COM', comp.id + '.' + t);
+          segOn.set(comp.id + '.' + t, diodeOn(v));
+        }
+      }
     }
-    if (j !== undefined) {
-      A[j][j] += c.g;
-      if (i !== undefined) A[j][i] -= c.g;
+  };
+  // Quyết định tiếng kêu của còi từ điện áp đã giải: kêu khi
+  // V(P)−V(N) ≥ BUZZER_ON_VOLTS (cùng ngưỡng 2V như LED), và ≤
+  // LED_MAX_VOLTS (cùng quy tắc >10V tắt như LED — test (l-d)).
+  const decideBuzzers = (nodeVoltage) => {
+    for (const comp of state.components) {
+      if (comp.type !== 'buzzer') continue;
+      const v = fwdVolts(nodeVoltage, comp.id + '.P', comp.id + '.N');
+      buzzerOn.set(comp.id, v !== null && v >= BUZZER_ON_VOLTS && v <= LED_MAX_VOLTS);
     }
-  }
-  liveSources.forEach((s, k) => {
-    const p = idx(s.nodeP), q = idx(s.nodeN);
-    if (p !== undefined) A[p][n + k] += 1;
-    if (q !== undefined) A[q][n + k] -= 1;
-    if (p !== undefined) A[n + k][p] += 1;
-    if (q !== undefined) A[n + k][q] -= 1;
-    z[n + k] = s.volts;
-  });
-  const x = solveLinear(A, z);
+  };
+  // Bỏ diode đang bật nào có dòng nhánh âm (ngược) trong kết quả vừa
+  // giải — mạch thật không duy trì được điện áp thuận 2V trên nó.
+  // Trả true nếu có diode nào bị tắt (cần giải lại).
+  const dropReversed = (branchCurrent) => {
+    let dropped = false;
+    for (const [id, on] of ledOn) {
+      if (!on) continue;
+      const i = branchCurrent.get(id);
+      if (i !== undefined && Number.isFinite(i) && i < -1e-9) { ledOn.set(id, false); dropped = true; }
+    }
+    for (const [key, on] of segOn) {
+      if (!on) continue;
+      const i = branchCurrent.get(key);
+      if (i !== undefined && Number.isFinite(i) && i < -1e-9) { segOn.set(key, false); dropped = true; }
+    }
+    return dropped;
+  };
+  const ledSet = () => new Set([...ledOn].filter(([, on]) => on).map(([id]) => id));
+  const segSet = () => new Set([...segOn].filter(([, on]) => on).map(([k]) => k));
 
-  const nodeVoltage = new Map();
-  for (const node of adj.keys()) nodeVoltage.set(node, null);
-  nodeVoltage.set(ref, 0);
-  const branchCurrent = new Map();
-  for (const c of conductances) branchCurrent.set(c.key, 0);
-  for (const s of vSources) {
-    if (s.kind === 'ammeter' || s.kind === 'led') branchCurrent.set(s.key, 0);
+  // Lần 1: hở mạch toàn bộ diode -> điện áp hở mạch -> tập bật ban đầu.
+  const open = runMna(new Set(), new Set());
+  if (!open.ok) {
+    return { ok: false, nodeVoltage: open.nodeVoltage, branchCurrent: open.branchCurrent, nets, ledOn, segOn, buzzerOn };
   }
-  for (const id of shorted) branchCurrent.set(id, Infinity);
-  if (x === null) return { ok: false, nodeVoltage, branchCurrent, nets };
-  for (const [node, i] of nodeIndex) nodeVoltage.set(node, x[i]);
-  // Dòng qua điện trở / động cơ DC = (V_A − V_B) × g (0 nếu 1 đầu
-  // floating). Dòng qua LED lấy từ biến dòng của nguồn áp 2V ở dưới
-  // (không tính bằng điện trở 10Ω vì nút phụ không phải node strip).
-  for (const c of conductances) {
-    if (c.kind !== 'resistor' && c.kind !== 'motor') continue;
-    const vA = nodeVoltage.get(c.nodeA);
-    const vB = nodeVoltage.get(c.nodeB);
-    if (vA === null || vA === undefined || vB === null || vB === undefined) {
-      branchCurrent.set(c.key, 0);
-    } else {
-      branchCurrent.set(c.key, (vA - vB) * c.g);
-    }
+  decideDiodes(open.nodeVoltage);
+  decideBuzzers(open.nodeVoltage);
+  // Các lần sau: giải với tập đang bật, bỏ diode ngược dòng, giải lại.
+  let result = open;
+  let stale = false; // tập on/off đã đổi sau lần giải cuối -> cần giải lại 1 lần
+  for (let round = 0; round < 3; round++) {
+    const solved = runMna(ledSet(), segSet());
+    if (!solved.ok) { result = solved; stale = false; break; }
+    result = solved;
+    decideBuzzers(solved.nodeVoltage); // còi: cập nhật theo điện áp mới nhất
+    stale = dropReversed(solved.branchCurrent);
+    if (!stale) break;
   }
-  // Dòng qua nguồn áp = biến dòng MNA (chiều từ nodeP sang nodeN).
-  liveSources.forEach((s, k) => {
-    if (s.kind === 'ammeter' || s.kind === 'led') branchCurrent.set(s.key, x[n + k]);
-  });
-  return { ok: true, nodeVoltage, branchCurrent, nets };
+  if (stale) {
+    // Vòng cuối vẫn còn diode bị tắt: giải thêm 1 lần cuối để điện áp
+    // trả về khớp đúng tập on/off cuối cùng.
+    const solved = runMna(ledSet(), segSet());
+    if (solved.ok) { result = solved; decideBuzzers(solved.nodeVoltage); }
+  }
+  return { ok: result.ok, nodeVoltage: result.nodeVoltage, branchCurrent: result.branchCurrent, nets, ledOn, segOn, buzzerOn };
 }
 
 // ---------------------------------------------------------------------------
@@ -522,15 +666,14 @@ export function scopeVoltages(state, cpu, pressedIds = [], pressedKeypad = null)
 //   net -> 0V (kể cả net đó floating, vì 2 đầu là cùng 1 điểm).
 // - amps: dòng qua động cơ = volts/R (R = điện trở cuộn dây, mặc định
 //   100Ω); 0 nếu floating.
-// - rpm: tốc độ quay, tỷ lệ với điện áp: 5V = tốc độ tối đa
-//   MOTOR_MAX_RPM (6000 vòng/phút, động cơ DC đồ chơi 5V), 0V = 0,
-//   điện áp âm = quay ngược (rpm âm). PWM: tốc độ theo điện áp trung
-//   bình theo chu kỳ (duty cycle) — vì solver đọc điện áp tức thời nên
-//   bench.js làm mượt rpm bằng trung bình trượt (EMA) trong live poll;
-//   test Node thì lấy trung bình nhiều mẫu.
+// - rpm: tốc độ quay, tỷ lệ với điện áp: 20V = 1000 vòng/phút
+//   (MOTOR_MAX_RPM), 0V = 0, điện áp âm = quay ngược (rpm âm). PWM:
+//   tốc độ theo điện áp trung bình theo chu kỳ (duty cycle) — vì solver
+//   đọc điện áp tức thời nên bench.js làm mượt rpm bằng trung bình trượt
+//   (EMA) trong live poll; test Node thì lấy trung bình nhiều mẫu.
 // pressedIds: id các nút đang nhấn giữ; pressedKeypad: phím đang nhấn.
 // ---------------------------------------------------------------------------
-export const MOTOR_MAX_RPM = 6000; // tốc độ tối đa ở 5V (động cơ DC đồ chơi)
+export const MOTOR_MAX_RPM = 1000; // tốc độ ở 20V (1000 vòng/phút)
 export function motorReadings(state, cpu, pressedIds = [], pressedKeypad = null) {
   const { nodeVoltage, branchCurrent, nets } = solveCircuit(state, cpu, pressedIds, pressedKeypad);
   const out = [];
@@ -549,7 +692,7 @@ export function motorReadings(state, cpu, pressedIds = [], pressedKeypad = null)
       volts = (p === null || p === undefined || n === null || n === undefined) ? null : p - n;
       amps = volts === null ? null : (branchCurrent.get(comp.id) ?? 0);
     }
-    const rpm = volts === null ? null : (volts / 5) * MOTOR_MAX_RPM;
+    const rpm = volts === null ? null : (volts / 20) * MOTOR_MAX_RPM;
     out.push({ id: comp.id, volts, amps, rpm });
   }
   return out;
@@ -559,12 +702,12 @@ export function motorReadings(state, cpu, pressedIds = [], pressedKeypad = null)
 // Trạng thái đoạn của mọi LED 7 thanh trên bàn: [{id, common, on: {a, b,
 // c, d, e, f, g, dp}}] (xem sevenSegStates trong wiring.js). Dùng cho
 // màn hình 3D (đoạn nào sáng thì phát sáng) và Inspector (hiện "Đang
-// sáng: a, b, c" / số đang hiện). Không cần solver MNA: trạng thái đoạn
-// tính từ mức logic của net (chân PIC output / VCC / GND), như ledStates.
-// ---------------------------------------------------------------------------
+// sáng: a, b, c" / số đang hiện). Đi qua solver MNA như mọi số đo khác:
+// giải mạch 1 lần rồi đọc segOn từ kết quả (đoạn nối chiết áp hay nguồn
+// bất kỳ cũng sáng đúng, không chỉ chân PIC/VCC).
 export function sevenSegReadings(state, cpu, pressedIds = [], pressedKeypad = null) {
-  const mapping = resolvePeripherals(benchToNetlist(state, pressedIds, pressedKeypad));
-  return sevenSegStates(cpu, mapping);
+  const result = solveCircuit(state, cpu, pressedIds, pressedKeypad);
+  return sevenSegStates(result, state);
 }
 
 // Chuyển trạng thái đoạn đang sáng thành chữ số đang hiện (nếu khớp mẫu

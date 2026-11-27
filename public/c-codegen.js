@@ -100,7 +100,7 @@
 //     thống (thanh ghi, lệnh, __C_*).
 // ---------------------------------------------------------------------------
 
-import { REGISTERS } from './pic16.js?v=20261125be';
+import { REGISTERS } from './pic16.js?v=20261125bm';
 
 // Số bit của tên bit (sao chép từ BIT_NAMES trong pic16.js — bảng đó không
 // export nên codegen giữ 1 bản riêng; chỉ dùng để tra số bit, không ảnh

@@ -3,14 +3,14 @@
 // chưa nạp chương trình nào; code mẫu nằm sẵn trong tab "Nạp viết code",
 // người dùng bấm "Nạp & chạy" thì chip mới chạy. ProgramRunner điều khiển
 // chạy/tạm dừng/chạy từng lệnh/breakpoint.
-import { createCPU, ProgramRunner, cyclesForElapsedMs } from './pic16.js?v=20261125be';
+import { createCPU, ProgramRunner, cyclesForElapsedMs, applySolvedVoltages, parsePicPinId } from './pic16.js?v=20261125bm';
 import {
   resolvePeripherals, ledStates, buzzerStates, sevenSegStates,
   applyButtonToCpu, applyPotToCpu, applyKeypadToCpu,
-} from './wiring.js?v=20261125be';
+} from './wiring.js?v=20261125bm';
 import { defaultBenchState, benchToNetlist, crystalFreq } from './bench-model.js?v=20261125be';
-import { meterReadings, motorReadings, scopeVoltages, pushScopeSample, SCOPE_MAX_SAMPLES } from './circuit-solver.js?v=20261125bf';
-import { compileC } from './c-compiler.js?v=20261125be';
+import { meterReadings, motorReadings, scopeVoltages, pushScopeSample, SCOPE_MAX_SAMPLES, solveCircuit } from './circuit-solver.js?v=20261125bm';
+import { compileC } from './c-compiler.js?v=20261125bm';
 
 const cpu = createCPU();
 cpu.clockHz = 4000000;
@@ -38,9 +38,49 @@ let mapping = resolvePeripherals(benchToNetlist(defaultBenchState()));
 cpu.setWiring(mapping);
 let potVoltsById = {};         // id chiết áp -> volt (0..5)
 
+// Thành viên của net chứa 1 terminal ('PIC.RA0', 'POT0.W', ...) theo
+// mapping hiện tại; [] nếu terminal không thuộc net nào.
+function netMembersOf(term) {
+  const root = mapping.netOf ? mapping.netOf.get(term) : undefined;
+  if (root === undefined || !mapping.nets) return [];
+  const net = mapping.nets.find((n) => n.id === root);
+  return net ? net.members : [];
+}
+
+// Net wiper của chiết áp có nguồn khác lái không (VCC/GND/chân PIC
+// output)? Có thì solver là chuẩn: wiper bị chập/chiếm bởi nguồn đó,
+// điện áp net không còn theo núm xoay nữa.
+function wiperHasOtherDriver(pot) {
+  const members = netMembersOf(pot.id + '.W');
+  if (members.includes('VCC') || members.includes('GND')) return true;
+  for (const m of members) {
+    if (!m.startsWith('PIC.')) continue;
+    const pin = parsePicPinId(m.slice(4));
+    if (pin && cpu.pinDirection(pin.port, pin.bit) === 'out') return true;
+  }
+  return false;
+}
+
+// Áp nhanh 1 chiết áp (đường slider / nạp code): chỉ khi wiper là nguồn
+// duy nhất trên net. Có nguồn khác lái thì bỏ qua (solver đã đặt đúng
+// giá trị trong applyBenchNetlist, không đè bằng volt núm xoay).
+// Đồng thời cập nhật netVoltage cho mọi chân input cùng net wiper để
+// pinLevel đọc đúng ngay khi kéo slider (không cần sync lại bench).
+function applyOnePot(pot, volts) {
+  if (!pot || !pot.wiper || pot.wiper.analog === null || pot.wiper.analog === undefined) return false;
+  if (wiperHasOtherDriver(pot)) return false;
+  applyPotToCpu(cpu, mapping, pot.id, volts);
+  for (const m of netMembersOf(pot.id + '.W')) {
+    if (!m.startsWith('PIC.')) continue;
+    const pin = parsePicPinId(m.slice(4));
+    if (pin && cpu.pinDirection(pin.port, pin.bit) === 'in') cpu.setNetVoltage(pin.port, pin.bit, volts);
+  }
+  return true;
+}
+
 // Áp điện áp của mọi chiết áp vào đúng kênh AN đã nối dây
 function applyAllPots() {
-  for (const p of mapping.pots) applyPotToCpu(cpu, mapping, p.id, potVoltsById[p.id] ?? 0);
+  for (const p of mapping.pots) applyOnePot(p, potVoltsById[p.id] ?? 0);
 }
 applyAllPots();
 
@@ -122,10 +162,28 @@ window.HoaTrangBenchBridge = {
   applyBenchNetlist(nl, st, pressed, pressedKeypad) {
     mapping = resolvePeripherals(nl);
     cpu.setWiring(mapping);
-    applyAllPots();
     if (st) {
       benchStateForMeters = st; pressedIdsForMeters = pressed || [];
       pressedKeypadForMeters = pressedKeypad || null;
+    }
+    // ADC + mức chân input từ mạch đã giải (solver là chuẩn, chạy trên
+    // bench state đầy đủ): mỗi kênh AN đều được đặt lại — net không còn
+    // nguồn lái thì về 0 chứ không giữ giá trị chiết áp cũ. Sau đó mới
+    // áp nhanh chiết áp (đã chặn khi wiper có nguồn khác lái, xem
+    // applyOnePot) — thứ tự này quan trọng vì bench.js gọi setPot cho
+    // mọi chiết áp ngay sau applyBenchNetlist trong syncToCpu, và setPot
+    // không được đè giá trị solver vừa đặt.
+    let solved = null;
+    if (benchStateForMeters) {
+      try { solved = solveCircuit(benchStateForMeters, cpu, pressedIdsForMeters, pressedKeypadForMeters); } catch { solved = null; }
+    }
+    const psuV = Number(nl && nl.psu && nl.psu.volts);
+    applySolvedVoltages(cpu, mapping, solved, {
+      potVolts: potVoltsById,
+      vccVolts: Number.isFinite(psuV) ? psuV : 5,
+    });
+    applyAllPots();
+    if (st) {
       // Đồng bộ phím bàn phím đang nhấn vào CPU (để pinLevel tính mức
       // cột khi quét). bench.js cũng gọi pressKeypad riêng khi bấm phím;
       // gọi lại ở đây cho chắc (vd khi nạp state đã lưu).
@@ -149,12 +207,28 @@ window.HoaTrangBenchBridge = {
       benchCrystalFreq = crystalFreq(st);
     }
   },
-  getLedStates: () => ledStates(cpu, mapping),
-  getBuzzerStates: () => buzzerStates(cpu, mapping),
+  // Trạng thái LED/còi/7 thanh: lấy từ KẾT QUẢ SOLVER (solveCircuit) —
+  // cùng 1 nguồn sự thật với đồng hồ đo và scope, đúng với mọi nguồn
+  // (chiết áp, cầu phân áp, VCC, chân PIC). Không dùng dạng legacy
+  // (cpu, mapping) ở đây — dạng đó chỉ cho test wiring cũ.
+  getLedStates: () => {
+    if (!benchStateForMeters) return [];
+    try { return ledStates(solveCircuit(benchStateForMeters, cpu, pressedIdsForMeters, pressedKeypadForMeters), benchStateForMeters); }
+    catch { return []; }
+  },
+  getBuzzerStates: () => {
+    if (!benchStateForMeters) return [];
+    try { return buzzerStates(solveCircuit(benchStateForMeters, cpu, pressedIdsForMeters, pressedKeypadForMeters), benchStateForMeters); }
+    catch { return []; }
+  },
   // LED 7 thanh: đoạn nào đang sáng (để bench.js vẽ màn hình 3D và
   // Inspector hiện "Đang sáng: a, b, c"). Tần số thạch anh hiện tại
   // (Hz, null nếu chưa có thạch anh) — để bench.js hiện cảnh báo.
-  getSevenSegStates: () => sevenSegStates(cpu, mapping),
+  getSevenSegStates: () => {
+    if (!benchStateForMeters) return [];
+    try { return sevenSegStates(solveCircuit(benchStateForMeters, cpu, pressedIdsForMeters, pressedKeypadForMeters), benchStateForMeters); }
+    catch { return []; }
+  },
   getCrystalFreq: () => benchCrystalFreq,
   getMeterReadings: () => {
     if (!benchStateForMeters) return { voltmeters: [], ammeters: [] };
@@ -211,7 +285,7 @@ window.HoaTrangBenchBridge = {
   getTris: () => cpu.tris,
   getMapping: () => mapping,
   pressButton: (id, pressed) => applyButtonToCpu(cpu, mapping, id, pressed),
-  setPot: (id, volts) => { potVoltsById[id] = volts; applyPotToCpu(cpu, mapping, id, volts); },
+  setPot: (id, volts) => { potVoltsById[id] = volts; const p = mapping.pots.find((x) => x.id === id); if (p) applyOnePot(p, volts); },
   // --- Tab "Nạp viết code": soạn code C (XC8) / nạp file .hex ---
   defaultProgram: () => DEFAULT_C_PROGRAM,
   // Dịch code C trong editor rồi nạp vào CPU. compileC trả lineToAddr

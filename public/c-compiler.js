@@ -23,8 +23,8 @@
 // được map ngược về dòng C gần nhất qua g.asmLineToCLine.
 
 import { parseC } from './c-frontend.js?v=20261125ar';
-import { generateC } from './c-codegen.js?v=20261125be';
-import { assemble } from './pic16.js?v=20261125be';
+import { generateC } from './c-codegen.js?v=20261125bm';
+import { assemble } from './pic16.js?v=20261125bm';
 
 export const C_VERSION = '20261125ax';
 

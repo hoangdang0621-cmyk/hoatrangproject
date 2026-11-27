@@ -295,93 +295,140 @@ export function resolvePeripherals(netlist) {
   return { leds, buttons, pots, lcd, buzzers, sevensegs, keypads, nets: netsOut, netOf, psuLedOn };
 }
 
-// Mức logic của một net (dùng cho LED/còi): VCC=1, GND=0, chân PIC -> mức chân đó
-export function netLevel(cpu, members) {
-  if (members.includes('VCC')) return 1;
-  if (members.includes('GND')) return 0;
-  for (const m of members) {
-    if (m.startsWith('PIC.')) {
-      const pin = PIN_BY_ID[m.slice(4)];
-      if (pin && pin.port !== null) return cpu.pinLevel(pin.port, pin.bit);
-    }
+// Điện áp đã giải của 1 đầu nối ('LED0.A', 'PIC.RB0', 'VCC', 'GND'):
+// tra node của đầu nối qua nets (kết quả buildSolverNets trong
+// circuit-solver.js) rồi đọc nodeVoltage (Map node -> volt, null =
+// floating). Trả số volt, hoặc null nếu đầu nối chưa nối dây / node
+// floating / đầu nối không hợp lệ.
+// Bản cũ (cpu, members) chỉ biết VCC=1, GND=0, chân PIC -> mức chân,
+// nên LED/còi/đoạn 7 thanh sau chiết áp hay cầu phân áp không bao giờ
+// bật; bản mới trả điện áp thật đã giải nên thống nhất được 2 mô hình
+// mạch (logic VCC/GND/PIC và solver MNA): solver dùng chính hàm này
+// để quyết định diode bật/tắt (xem solveCircuit trong circuit-solver.js).
+export function netLevel(nodeVoltage, nets, term) {
+  if (!nodeVoltage || !nets || typeof term !== 'string') return null;
+  let node = null;
+  if (term === 'VCC') node = nets.railPlus;
+  else if (term === 'GND') node = nets.railMinus;
+  else if (term.startsWith('PIC.')) node = nets.nodeOfPicPin(term.slice(4));
+  else {
+    const dot = term.indexOf('.');
+    if (dot > 0) node = nets.nodeOfTerm(term.slice(0, dot), term.slice(dot + 1));
   }
-  return null; // thả nổi
+  if (!node) return null;
+  const v = nodeVoltage.get(node);
+  return (v === null || v === undefined) ? null : v;
 }
 
-export function ledStates(cpu, mapping) {
+// --- Đường LEGACY cho ledStates/buzzerStates/sevenSegStates (chỉ dùng
+// cho các test wiring cũ) ---
+// Các test wiring cũ gọi ledStates(cpu, mapping) với netlist
+// defaultNetlist — không có bench state nên không giải solver được.
+// Trong các test đó LED/còi/đoạn chỉ nối chân PIC/VCC/GND (không có
+// chiết áp/cầu phân áp), nên tính điện áp 2 đầu từ mapping + mức chân
+// CPU rồi áp ngưỡng ≥2V như solver cho cùng kết quả. Đừng dùng dạng
+// (cpu, mapping) cho bàn 3D hay test mới — nó KHÔNG thấy điện áp
+// chiết áp/cầu phân áp; bàn 3D và test mới phải dùng dạng
+// (solveResult, state).
+function pinVoltsLegacy(cpu, pin) {
+  if (!pin || pin.port === null || pin.port === undefined) return null;
+  if (cpu.pinDirection(pin.port, pin.bit) !== 'out') return null;
+  return cpu.pinLevel(pin.port, pin.bit) === 1 ? 5 : 0;
+}
+function ledStatesLegacy(cpu, mapping) {
   return mapping.leds.map((led) => {
-    let on = false;
-    // Anode đã có +5V (từ nguồn hoặc rail +): LED sáng khi cathode về
-    // GND, hoặc cathode nối chân PIC đang là ngõ ra mức 0. Không cần
-    // điện trở nối tiếp mới sáng (thiếu điện trở chỉ là cảnh báo).
-    if (led.vccAnode) {
-      if (led.cathPin) {
-        on = cpu.pinDirection(led.cathPin.port, led.cathPin.bit) === 'out' && cpu.pinLevel(led.cathPin.port, led.cathPin.bit) === 0;
-      } else if (led.gnd) on = true;
-    } else if (led.pin && led.gnd) {
-      const anodeHigh = cpu.pinDirection(led.pin.port, led.pin.bit) === 'out' && cpu.pinLevel(led.pin.port, led.pin.bit) === 1;
-      on = anodeHigh;
-    } else if (led.pin && led.cathPin) {
-      const anodeHigh = cpu.pinDirection(led.pin.port, led.pin.bit) === 'out' && cpu.pinLevel(led.pin.port, led.pin.bit) === 1;
-      const cathLow = cpu.pinDirection(led.cathPin.port, led.cathPin.bit) === 'out' && cpu.pinLevel(led.cathPin.port, led.cathPin.bit) === 0;
-      on = anodeHigh && cathLow;
-    }
-    return { id: led.id, on };
+    const vA = led.vccAnode ? 5 : pinVoltsLegacy(cpu, led.pin);
+    const vK = led.gnd ? 0 : pinVoltsLegacy(cpu, led.cathPin);
+    return { id: led.id, on: vA !== null && vK !== null && (vA - vK) >= 2 };
   });
 }
-
-// LED 7 thanh: 8 đoạn (a–g + dp). Trả [{id, common, on: {a, b, c, d,
-// e, f, g, dp}}] — on[t] = đoạn t đang sáng.
-// - Chung cathode: đoạn sáng khi net của đoạn ở mức 1 (chân PIC output
-//   mức 1 hoặc VCC với 0 < volts ≤ 10) và net chân chung ở mức 0 (GND
-//   hoặc chân PIC output mức 0).
-// - Chung anode: ngược lại — đoạn sáng khi net của đoạn ở mức 0 và net
-//   chân chung ở mức 1.
-// Net thả nổi (không nối nguồn/chân output) thì đoạn tắt.
-export const SEVEN_SEG_TERMS = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'dp'];
-export function sevenSegStates(cpu, mapping) {
+function buzzerStatesLegacy(cpu, mapping) {
+  return mapping.buzzers.map((bz) => {
+    const vP = bz.vccP ? 5 : pinVoltsLegacy(cpu, bz.pin);
+    const vN = bz.gnd ? 0 : null;
+    return { id: bz.id, on: vP !== null && vN !== null && (vP - vN) >= 2 };
+  });
+}
+function sevenSegStatesLegacy(cpu, mapping) {
   const psuLedOn = mapping.psuLedOn !== false;
-  // Mức logic của 1 đầu nối (đã ghi trong mapping.sevensegs): VCC
-  // (chỉ khi 0 < volts ≤ 10) = 1, GND = 0, chân PIC output = mức chân,
-  // còn lại null (thả nổi / chân input).
   const levelOf = (info) => {
     if (!info) return null;
-    if (info.vcc && psuLedOn) return 1;
+    if (info.vcc && psuLedOn) return 5;
     if (info.gnd) return 0;
-    if (info.pin) {
-      if (cpu.pinDirection(info.pin.port, info.pin.bit) !== 'out') return null;
-      return cpu.pinLevel(info.pin.port, info.pin.bit);
-    }
-    return null;
+    return pinVoltsLegacy(cpu, info.pin);
   };
   return (mapping.sevensegs || []).map((seg) => {
-    const comLevel = levelOf(seg.com);
+    const vCom = levelOf(seg.com);
     const on = {};
     for (const t of SEVEN_SEG_TERMS) {
-      const sLevel = levelOf(seg.seg[t]);
+      const vS = levelOf(seg.seg[t]);
       let lit = false;
-      if (seg.common === 'cathode') lit = sLevel === 1 && comLevel === 0;
-      else lit = sLevel === 0 && comLevel === 1;
+      if (vS !== null && vCom !== null) {
+        lit = seg.common === 'cathode' ? (vS - vCom) >= 2 : (vCom - vS) >= 2;
+      }
       on[t] = lit;
     }
     return { id: seg.id, common: seg.common, on };
   });
 }
 
-// Trạng thái còi: kêu khi chân − về GND và chân + có nguồn — hoặc nối
-// thẳng VCC (0 < psu.volts ≤ 10, cùng quy tắc LED) hoặc chân PIC đang
-// là ngõ ra mức 1. Thiếu GND thì không kêu.
-export function buzzerStates(cpu, mapping) {
-  return mapping.buzzers.map((bz) => {
-    let on = false;
-    if (bz.gnd) {
-      if (bz.vccP) on = true;
-      else if (bz.pin) {
-        on = cpu.pinDirection(bz.pin.port, bz.pin.bit) === 'out' && cpu.pinLevel(bz.pin.port, bz.pin.bit) === 1;
-      }
-    }
-    return { id: bz.id, on };
-  });
+// Trạng thái LED: SÁNG/TỐI theo kết quả solver (solveCircuit) — cùng 1
+// nguồn sự thật với đồng hồ đo và đồng hồ hiện sóng. KHÔNG tự tính từ
+// mức logic nữa (bản cũ chỉ biết VCC/GND/chân PIC nên LED sau chiết áp,
+// cầu phân áp hay nguồn khác không phải VCC/PIC thì không bao giờ sáng).
+// Trả [{id, on}] như cũ.
+// Hai dạng gọi: ledStates(solveResult, state) — đường chính (bàn 3D +
+// test solver), đọc ledOn từ kết quả solveCircuit; ledStates(cpu,
+// mapping) — LEGACY, chỉ cho test wiring cũ (xem chú thích trên).
+export function ledStates(a, b) {
+  if (a && typeof a.pinLevel === 'function' && b && Array.isArray(b.leds)) {
+    return ledStatesLegacy(a, b);
+  }
+  const solveResult = a, state = b;
+  const onMap = solveResult && solveResult.ledOn;
+  return (state && state.components ? state.components : [])
+    .filter((c) => c.type === 'led')
+    .map((c) => ({ id: c.id, on: onMap ? onMap.get(c.id) === true : false }));
+}
+
+// LED 7 thanh: 8 đoạn (a–g + dp). Trả [{id, common, on: {a, b, c, d,
+// e, f, g, dp}}] — on[t] = đoạn t đang sáng. Trạng thái đoạn lấy từ
+// kết quả solver (solveCircuit, đọc segOn) như ledStates — cùng 1 nguồn
+// sự thật với đồng hồ đo; KHÔNG tự tính từ mức logic nữa (bản cũ chỉ
+// biết VCC/GND/chân PIC nên đoạn nối chiết áp không bao giờ sáng).
+// Hai dạng gọi: sevenSegStates(solveResult, state) — đường chính;
+// sevenSegStates(cpu, mapping) — LEGACY, chỉ cho test wiring cũ.
+export const SEVEN_SEG_TERMS = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'dp'];
+export function sevenSegStates(a, b) {
+  if (a && typeof a.pinLevel === 'function' && b && Array.isArray(b.sevensegs)) {
+    return sevenSegStatesLegacy(a, b);
+  }
+  const solveResult = a, state = b;
+  const segOn = solveResult && solveResult.segOn;
+  return (state && state.components ? state.components : [])
+    .filter((c) => c.type === 'sevenseg')
+    .map((c) => {
+      const common = c.props?.common === 'anode' ? 'anode' : 'cathode';
+      const on = {};
+      for (const t of SEVEN_SEG_TERMS) on[t] = segOn ? segOn.get(c.id + '.' + t) === true : false;
+      return { id: c.id, common, on };
+    });
+}
+
+// Trạng thái còi: KÊU/TẮT theo kết quả solver (solveCircuit, đọc
+// buzzerOn) — còi kêu khi điện áp đã giải trên 2 chân P−N ≥
+// BUZZER_ON_VOLTS (xem circuit-solver.js). Trả [{id, on}] như cũ.
+// Hai dạng gọi: buzzerStates(solveResult, state) — đường chính;
+// buzzerStates(cpu, mapping) — LEGACY, chỉ cho test wiring cũ.
+export function buzzerStates(a, b) {
+  if (a && typeof a.pinLevel === 'function' && b && Array.isArray(b.buzzers)) {
+    return buzzerStatesLegacy(a, b);
+  }
+  const solveResult = a, state = b;
+  const onMap = solveResult && solveResult.buzzerOn;
+  return (state && state.components ? state.components : [])
+    .filter((c) => c.type === 'buzzer')
+    .map((c) => ({ id: c.id, on: onMap ? onMap.get(c.id) === true : false }));
 }
 
 // Nhấn/thả nút: đóng mạch giữa chân PIC và đầu còn lại (GND=0, VCC=1)

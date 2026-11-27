@@ -1,11 +1,11 @@
 // test-pic16.mjs — Kiểm thử xác định cho lõi pic16.js (KHÔNG đưa vào public/).
 // Chạy: node test-pic16.mjs   (exit 0 = tất cả pass)
 import { readFileSync } from 'node:fs';
-import { assemble, createCPU, parseIntelHex, exportHex, disassemble, ProgramRunner, cyclesForElapsedMs, LCD } from './public/pic16.js';
+import { assemble, createCPU, parseIntelHex, exportHex, disassemble, ProgramRunner, cyclesForElapsedMs, LCD, applySolvedVoltages } from './public/pic16.js';
 import { defaultNetlist, resolvePeripherals, checkWiring, ledStates, buzzerStates, sevenSegStates, SEVEN_SEG_TERMS, applyButtonToCpu, applyPotToCpu, applyKeypadToCpu, KEYPAD_KEYS, PIC_PINS } from './public/wiring.js';
 import { PITCH, SEGMENT_GAP_MM, rowZ, HOLE_RADIUS, HOLE_HEIGHT, HOLE_TOP_ABOVE_BOARD, holeCenterY, depthPrecisionAt, MAX_CAMERA_DISTANCE, SEGMENT_LINE_WIDTH_MM, segmentBoundaries, allHoles, stripKey, parseHole, holePos, holeId, rowLabel, rowIndexFromLabel, migrateOldHoleId, picLegs, picLegsForAnchor, picAnchor, legsFor, canPlace, buildBenchNets, benchToNetlist, defaultBenchState, sanitizeState, boardSize, picCol, picRows, picBodyDepth, picBodyDepthForRows, bodyDepth, pruneStateForSize, validateWireEnd, retargetWireEnd, togglePlacement, normalizeSize, holeCount, sizeLabel, sameSize, compLabel, nextComponentId, defaultProps, psuVolts, validatePsuVolts, parsePsuPost, psuPostPos, PSU_SCALE, PSU_POST_DX, PSU_POST_Y, PSU_POST_DZ, parseScopePost, scopePostPos, SCOPE_POST_DX, SCOPE_POST_Y, SCOPE_POST_DZ, SCOPE_DEFAULT_TX, SCOPE_DEFAULT_TZ, parseSerialPost, serialPostPos, SERIAL_POST_DX, SERIAL_POST_Y, SERIAL_POST_DZ, SERIAL_DEFAULT_TX, SERIAL_DEFAULT_TZ, normalizeWireEnd, clampCamTarget, zoomTowardPoint, panTarget, meterMode, crystalFreq, CRYSTAL_FREQS, cleanNewProps } from './public/bench-model.js';
 import { LABS, getLab, buildLabState } from './public/labs.js';
-import { buildSolverNets, solveLinear, solveCircuit, meterReadings, motorReadings, MOTOR_MAX_RPM, scopeVoltages, pushScopeSample, SCOPE_MAX_SAMPLES, formatVolts, formatAmps, formatCurrentDirection, LED_FORWARD_VOLTS, LED_SERIES_OHMS, PIC_OUTPUT_VOLTS, sevenSegReadings, sevenSegDigit } from './public/circuit-solver.js';
+import { buildSolverNets, solveLinear, solveCircuit, meterReadings, motorReadings, MOTOR_MAX_RPM, scopeVoltages, pushScopeSample, SCOPE_MAX_SAMPLES, formatVolts, formatAmps, formatCurrentDirection, LED_FORWARD_VOLTS, LED_SERIES_OHMS, PIC_OUTPUT_VOLTS, sevenSegReadings, sevenSegDigit, BUZZER_OHMS, BUZZER_ON_VOLTS, LED_MAX_VOLTS } from './public/circuit-solver.js';
 import { compileC, C_VERSION } from './public/c-compiler.js';
 
 // Fixture C thật của Điệp (khôi phục từ chat, lưu bền trong repo thay vì
@@ -2655,6 +2655,30 @@ const SLEEP_PROG = `    ORG 0
   // (v-j) Hằng số mô hình LED/PIC đúng như nhiệm vụ.
   check('(v-j) LED_FORWARD_VOLTS = 2.0, LED_SERIES_OHMS = 10, PIC_OUTPUT_VOLTS = 5',
     LED_FORWARD_VOLTS === 2.0 && LED_SERIES_OHMS === 10 && PIC_OUTPUT_VOLTS === 5, '');
+  // (v-k) Chiết áp là nguồn áp trong solver: đồng hồ đo chế độ V đọc được
+  // điện áp wiper (pct/100 × 5V). Trước fix này chiết áp chỉ cấp cho ADC
+  // (qua setPot) nên net W lơ lửng, đồng hồ hiện trống dù nối W + GND đúng.
+  const potWithMeter = (pct) => {
+    const st = defaultBenchState(830);
+    st.components.push({ id: 'POT0', type: 'pot', anchor: 'a10', rot: 0, props: { pct } });
+    st.components.push({ id: 'MM0', type: 'multimeter', anchor: 'a20', rot: 0, props: { mode: 'V' } });
+    st.wires.push({ id: 'T-P1', a: 'b10', b: 'T+10', color: '#DC2626' }); // VCC chiết áp -> +5V
+    st.wires.push({ id: 'T-P2', a: 'b12', b: 'T-10', color: '#0F172A' }); // GND chiết áp -> GND
+    st.wires.push({ id: 'T-P3', a: 'b11', b: 'b20', color: '#2563EB' }); // W -> chân P đồng hồ
+    st.wires.push({ id: 'T-P4', a: 'b24', b: 'T-10', color: '#0F172A' }); // chân N đồng hồ -> GND
+    return st;
+  };
+  check('(v-k) chiết áp pct=83 + đồng hồ đo chế độ V (P->W, N->GND) đọc ≈ 4.15V',
+    (() => {
+      const v = meterReadings(potWithMeter(83), createCPU()).voltmeters[0].volts;
+      return approx(v, 4.15, 0.01);
+    })(), '');
+  check('(v-k) chiết áp pct=0 đọc 0V; pct=100 đọc 5V',
+    (() => {
+      const v0 = meterReadings(potWithMeter(0), createCPU()).voltmeters[0].volts;
+      const v100 = meterReadings(potWithMeter(100), createCPU()).voltmeters[0].volts;
+      return v0 === 0 && v100 === 5;
+    })(), '');
 }
 
 // Nhóm (w): định dạng số đo cho màn hình 3D + Inspector (giai đoạn 2),
@@ -5165,7 +5189,7 @@ function cpuWithPortB(state, portB) {
 //   (pull-up). Mapping chân lấy từ netlist KHÔNG nhấn phím (phím nhấn nối
 //   hàng+cột thành 1 net chứa 2 chân PIC, picPinInNet sẽ lấy nhầm).
 // - Motor: tải trở (điện trở cuộn dây mặc định 100Ω) giữa 2 chân +/−;
-//   RPM = volts/5 × 6000. PWM: tốc độ theo điện áp trung bình (duty).
+//   RPM = volts/20 × 1000. PWM: tốc độ theo điện áp trung bình (duty).
 // - Serial: linh kiện ngoài bàn (như scope), 3 cọc TX/RX/GND; dữ liệu
 //   chạy qua CPU onTx/receiveChar, dây/cọc chỉ để mạch đầy đủ.
 {
@@ -5243,15 +5267,15 @@ function cpuWithPortB(state, portB) {
       return cpu.pinLevel(3, 3) === 0 && cpu.pinLevel(3, 1) === 1;
     })(), '');
   // (be-e) Motor: chân, đặt được, id/nhãn, điện trở mặc định 100Ω.
-  check('(be-e) motor chân + a10, - a11; đặt được, id M0, nhãn "Động cơ DC 0", R mặc định 100Ω, MOTOR_MAX_RPM=6000',
+  check('(be-e) motor chân + a10, - a11; đặt được, id M0, nhãn "Động cơ DC 0", R mặc định 100Ω, MOTOR_MAX_RPM=1000',
     JSON.stringify(legsFor({ type: 'motor', anchor: 'a10', rot: 0 }, 830)) === JSON.stringify([{ term: '+', hole: 'a10' }, { term: '-', hole: 'a11' }])
     && canPlace(defaultBenchState(830), 'motor', 'a10').ok
     && nextComponentId(defaultBenchState(830), 'motor') === 'M0'
     && compLabel({ id: 'M0', type: 'motor' }) === 'Động cơ DC 0'
-    && defaultProps('motor').value === 100 && MOTOR_MAX_RPM === 6000, '');
-  // (be-f) Motor qua PSU 5V: V=5, I=50mA (R=100Ω), RPM=6000; R=50Ω thì
-  // I=100mA, RPM vẫn 6000; chưa nối dây thì null.
-  check('(be-f) motor qua PSU 5V: V=5, I=50mA, RPM=6000; R=50Ω -> I=100mA, RPM vẫn 6000; chưa nối -> null',
+    && defaultProps('motor').value === 100 && MOTOR_MAX_RPM === 1000, '');
+  // (be-f) Motor qua PSU 5V: V=5, I=50mA (R=100Ω), RPM=250 (20V mới là
+  // 1000); R=50Ω thì I=100mA, RPM vẫn 250; chưa nối dây thì null.
+  check('(be-f) motor qua PSU 5V: V=5, I=50mA, RPM=250; R=50Ω -> I=100mA, RPM vẫn 250; chưa nối -> null',
     (() => {
       const st = defaultBenchState(830);
       st.components.push({ id: 'M0', type: 'motor', anchor: 'a10', rot: 0, props: { value: 100 } });
@@ -5259,17 +5283,17 @@ function cpuWithPortB(state, portB) {
       st.wires.push({ id: 'T-M2', a: 'a11', b: 'T-10', color: '#0F172A' });
       const cpu = createCPU();
       const r = motorReadings(st, cpu);
-      if (!(r.length === 1 && approx(r[0].volts, 5, 0.01) && approx(r[0].amps, 0.05, 0.001) && approx(r[0].rpm, 6000, 1))) return false;
+      if (!(r.length === 1 && approx(r[0].volts, 5, 0.01) && approx(r[0].amps, 0.05, 0.001) && approx(r[0].rpm, 250, 1))) return false;
       st.components.find((c) => c.id === 'M0').props.value = 50;
       const r2 = motorReadings(st, cpu);
-      if (!(approx(r2[0].amps, 0.1, 0.001) && approx(r2[0].rpm, 6000, 1))) return false;
+      if (!(approx(r2[0].amps, 0.1, 0.001) && approx(r2[0].rpm, 250, 1))) return false;
       const st2 = defaultBenchState(830);
       st2.components.push({ id: 'M0', type: 'motor', anchor: 'a10', rot: 0, props: { value: 100 } });
       const r3 = motorReadings(st2, cpu);
       return r3.length === 1 && r3[0].volts === null && r3[0].amps === null && r3[0].rpm === null;
     })(), '');
-  // (be-g) Motor nối chân PIC RB0: RB0=1 -> 6000 RPM, RB0=0 -> 0 RPM.
-  check('(be-g) motor RB0=1: V=5, I=50mA, RPM=6000; RB0=0: V=0, I=0, RPM=0',
+  // (be-g) Motor nối chân PIC RB0: RB0=1 -> 250 RPM, RB0=0 -> 0 RPM.
+  check('(be-g) motor RB0=1: V=5, I=50mA, RPM=250; RB0=0: V=0, I=0, RPM=0',
     (() => {
       const st = defaultBenchState(830);
       st.components.push({ id: 'M0', type: 'motor', anchor: 'a10', rot: 0, props: { value: 100 } });
@@ -5282,16 +5306,16 @@ function cpuWithPortB(state, portB) {
       };
       setRB0(true);
       const rHi = motorReadings(st, cpu);
-      if (!(approx(rHi[0].volts, 5, 0.01) && approx(rHi[0].amps, 0.05, 0.001) && approx(rHi[0].rpm, 6000, 1))) return false;
+      if (!(approx(rHi[0].volts, 5, 0.01) && approx(rHi[0].amps, 0.05, 0.001) && approx(rHi[0].rpm, 250, 1))) return false;
       setRB0(false);
       const rLo = motorReadings(st, cpu);
       return approx(rLo[0].volts, 0, 0.01) && approx(rLo[0].amps, 0, 0.001) && approx(rLo[0].rpm, 0, 1);
     })(), '');
   // (be-h) Motor PWM 50% (CCP1 -> RC2, PR2=255, CCPR1L=127): tốc độ trung
-  // bình ~3000 (2000–4000), có lúc 0 và lúc 6000. Chu kỳ PWM 256 dài hơn
+  // bình ~125 (80–170), có lúc 0 và lúc 250. Chu kỳ PWM 256 dài hơn
   // bước lấy mẫu 20 nên không aliasing (PR2=3, chu kỳ 4, lấy mẫu mỗi 20
   // thì luôn trúng cùng 1 pha — đã dính 1 lần).
-  check('(be-h) motor PWM 50% (CCP1, PR2=255, CCPR1L=127): RPM trung bình 2000–4000, min=0, max=6000',
+  check('(be-h) motor PWM 50% (CCP1, PR2=255, CCPR1L=127): RPM trung bình 80–170, min=0, max=250',
     (() => {
       const st = defaultBenchState(830);
       st.components.push({ id: 'M0', type: 'motor', anchor: 'a10', rot: 0, props: { value: 100 } });
@@ -5322,7 +5346,7 @@ function cpuWithPortB(state, portB) {
         }
       }
       const avg = n ? sum / n : 0;
-      return n > 10 && avg > 2000 && avg < 4000 && min === 0 && max === 6000;
+      return n > 10 && avg > 80 && avg < 170 && min === 0 && max === 250;
     })(), '');
   // (be-i) Serial: cọc TX/RX/GND đúng tọa độ mặt trước, ngoài bàn
   // (legsFor=[]), đặt được, id SER0, nhãn "Màn hình Serial 0", vị trí
@@ -5431,6 +5455,199 @@ void main() {
         && src.includes('getSerialText') && src.includes('sendSerial') && src.includes('clearSerial')
         && src.includes('cpu.onTx') && src.includes('serialBuffers');
     })(), '');
+}
+
+// Nhóm (p0): P0 Issues 1+2 — LED/7 đoạn/còi quyết định từ điện áp đã giải
+// (không còn theo mức logic VCC/GND/chân PIC), còi có nhánh trong solver.
+{
+  const approx = (v, target, tol) => typeof v === 'number' && Number.isFinite(v) && Math.abs(v - target) <= tol;
+  // Chiết áp POT0 (a10: VCC=a10, W=a11, GND=a12), VCC->+5V, GND->GND.
+  const potState = (pct) => {
+    const st = defaultBenchState(830);
+    st.components.push({ id: 'POT0', type: 'pot', anchor: 'a10', rot: 0, props: { pct } });
+    st.wires.push({ id: 'T-P1', a: 'b10', b: 'T+10', color: '#DC2626' });
+    st.wires.push({ id: 'T-P2', a: 'b12', b: 'T-10', color: '#0F172A' });
+    return st;
+  };
+  // Chiết áp -> R 220Ω -> LED -> GND, ampe kế nối tiếp (W=b11, R=a20/a24, LED=c30/c31, MM=a40/a44).
+  const potLedState = (pct) => {
+    const st = potState(pct);
+    st.components.push({ id: 'R0', type: 'resistor', anchor: 'a20', rot: 0, props: { value: 220 } });
+    st.components.push({ id: 'LED0', type: 'led', anchor: 'c30', rot: 0, props: { color: '#DC2626' } });
+    st.components.push({ id: 'MM0', type: 'multimeter', anchor: 'a40', rot: 0, props: { mode: 'A' } });
+    st.wires.push({ id: 'T-A1', a: 'b11', b: 'b20', color: '#2563EB' });
+    st.wires.push({ id: 'T-A2', a: 'b24', b: 'b30', color: '#2563EB' });
+    st.wires.push({ id: 'T-A3', a: 'b31', b: 'b40', color: '#2563EB' });
+    st.wires.push({ id: 'T-A4', a: 'b44', b: 'T-40', color: '#0F172A' });
+    return st;
+  };
+  const ledOnOf = (st, cpu) => ledStates(solveCircuit(st, cpu), st);
+  const buzOnOf = (st, cpu) => buzzerStates(solveCircuit(st, cpu), st);
+  const segOnOf = (st, cpu) => sevenSegStates(solveCircuit(st, cpu), st);
+  // (p0-a) Pot 100% -> R220 -> LED: LED SÁNG, ampe kế ≈ 13.04mA = (5-2)/(220+10).
+  check('(p0-a) pot 100% -> R220 -> LED -> GND: LED SÁNG, ampe kế ≈ 13.04mA',
+    (() => {
+      const st = potLedState(100);
+      const cpu = createCPU();
+      return ledOnOf(st, cpu).find((s) => s.id === 'LED0').on === true
+        && approx(meterReadings(st, cpu).ammeters[0].amps, 0.01304, 0.001);
+    })(), '');
+  // (p0-a) Pot 0%: LED TỐI, dòng 0.
+  check('(p0-a) pot 0% -> R220 -> LED -> GND: LED TỐI, dòng 0',
+    (() => {
+      const st = potLedState(0);
+      const cpu = createCPU();
+      return ledOnOf(st, cpu).find((s) => s.id === 'LED0').on === false
+        && meterReadings(st, cpu).ammeters[0].amps === 0;
+    })(), '');
+  // (p0-b) Đoạn a 7 thanh nối wiper 100%, COM -> GND: chỉ đoạn a SÁNG, dòng ≈ 0.3A.
+  check('(p0-b) đoạn a 7 thanh nối wiper 100%, COM->GND: chỉ a SÁNG, dòng ≈ 0.3A',
+    (() => {
+      const st = defaultBenchState(830);
+      st.components.push({ id: 'POT0', type: 'pot', anchor: 'a30', rot: 0, props: { pct: 100 } });
+      st.components.push({ id: 'SEG0', type: 'sevenseg', anchor: 'a10', rot: 0, props: { common: 'cathode' } });
+      st.wires.push({ id: 'T-B1', a: 'b30', b: 'T+30', color: '#DC2626' });
+      st.wires.push({ id: 'T-B2', a: 'b32', b: 'T-30', color: '#0F172A' });
+      st.wires.push({ id: 'T-B3', a: 'b31', b: 'b10', color: '#2563EB' });
+      st.wires.push({ id: 'T-B4', a: 'g13', b: 'B-13', color: '#0F172A' });
+      const cpu = createCPU();
+      const seg = segOnOf(st, cpu).find((s) => s.id === 'SEG0');
+      return seg && seg.on.a === true && ['b', 'c', 'd', 'e', 'f', 'g', 'dp'].every((t) => seg.on[t] === false)
+        && approx(solveCircuit(st, cpu).branchCurrent.get('SEG0.a'), 0.3, 0.02);
+    })(), '');
+  // (p0-c) Còi P -> wiper 100%, N -> GND: còi KÊU, dòng ≈ 22.7mA (5V/220Ω).
+  check('(p0-c) còi P->wiper 100%, N->GND: còi KÊU, dòng ≈ 22.7mA',
+    (() => {
+      const st = defaultBenchState(830);
+      st.components.push({ id: 'POT0', type: 'pot', anchor: 'a30', rot: 0, props: { pct: 100 } });
+      st.components.push({ id: 'BUZ0', type: 'buzzer', anchor: 'c10', rot: 0, props: {} });
+      st.wires.push({ id: 'T-C1', a: 'b30', b: 'T+30', color: '#DC2626' });
+      st.wires.push({ id: 'T-C2', a: 'b32', b: 'T-30', color: '#0F172A' });
+      st.wires.push({ id: 'T-C3', a: 'b31', b: 'b10', color: '#2563EB' });
+      st.wires.push({ id: 'T-C4', a: 'b11', b: 'T-10', color: '#0F172A' });
+      const cpu = createCPU();
+      return buzOnOf(st, cpu).find((s) => s.id === 'BUZ0').on === true
+        && approx(solveCircuit(st, cpu).branchCurrent.get('BUZ0'), 5 / 220, 0.001);
+    })(), '');
+  // (p0-d) PSU+ -> MM(A) -> còi -> GND + vôn kế ngang còi: ≈ 22.7mA (không phải 0), ≈ 5V.
+  check('(p0-d) PSU+ -> MM(A) -> còi -> GND: ampe kế ≈ 22.7mA, vôn kế ngang còi ≈ 5V',
+    (() => {
+      const st = defaultBenchState(830);
+      st.components.push({ id: 'MM0', type: 'multimeter', anchor: 'a20', rot: 0, props: { mode: 'A' } });
+      st.components.push({ id: 'BUZ0', type: 'buzzer', anchor: 'c10', rot: 0, props: {} });
+      st.components.push({ id: 'MM1', type: 'multimeter', anchor: 'a30', rot: 0, props: { mode: 'V' } });
+      st.wires.push({ id: 'T-D1', a: 'b20', b: 'T+20', color: '#DC2626' });
+      st.wires.push({ id: 'T-D2', a: 'b24', b: 'b10', color: '#2563EB' });
+      st.wires.push({ id: 'T-D3', a: 'b11', b: 'T-10', color: '#0F172A' });
+      st.wires.push({ id: 'T-D4', a: 'b30', b: 'b10', color: '#2563EB' });
+      st.wires.push({ id: 'T-D5', a: 'b34', b: 'b11', color: '#2563EB' });
+      const r = meterReadings(st, createCPU());
+      return approx(r.ammeters.find((m) => m.id === 'MM0').amps, 5 / 220, 0.001)
+        && approx(r.voltmeters.find((m) => m.id === 'MM1').volts, 5, 0.05);
+    })(), '');
+  // (p0-e) PSU+ -> còi -> R 220Ω -> GND: điểm giữa ≈ 2.5V (cầu phân áp 220/220), dòng ≈ 11.36mA.
+  check('(p0-e) PSU+ -> còi -> R220 -> GND: điểm giữa ≈ 2.5V, dòng qua còi ≈ 11.36mA',
+    (() => {
+      const st = defaultBenchState(830);
+      st.components.push({ id: 'BUZ0', type: 'buzzer', anchor: 'c10', rot: 0, props: {} });
+      st.components.push({ id: 'R0', type: 'resistor', anchor: 'a20', rot: 0, props: { value: 220 } });
+      st.components.push({ id: 'MM0', type: 'multimeter', anchor: 'a30', rot: 0, props: { mode: 'V' } });
+      st.wires.push({ id: 'T-E1', a: 'b10', b: 'T+10', color: '#DC2626' });
+      st.wires.push({ id: 'T-E2', a: 'b11', b: 'b20', color: '#2563EB' });
+      st.wires.push({ id: 'T-E3', a: 'b24', b: 'T-20', color: '#0F172A' });
+      st.wires.push({ id: 'T-E4', a: 'b30', b: 'b11', color: '#2563EB' });
+      st.wires.push({ id: 'T-E5', a: 'b34', b: 'T-30', color: '#0F172A' });
+      const cpu = createCPU();
+      return approx(meterReadings(st, cpu).voltmeters[0].volts, 2.5, 0.05)
+        && approx(solveCircuit(st, cpu).branchCurrent.get('BUZ0'), 5 / 440, 0.0005);
+    })(), '');
+  // (p0-f) Hằng số mô hình còi / ngưỡng: BUZZER_OHMS=220, BUZZER_ON_VOLTS=2.0, LED_MAX_VOLTS=10.
+  check('(p0-f) BUZZER_OHMS=220, BUZZER_ON_VOLTS=2.0, LED_MAX_VOLTS=10',
+    BUZZER_OHMS === 220 && BUZZER_ON_VOLTS === 2.0 && LED_MAX_VOLTS === 10, '');
+}
+
+// Nhóm (w-i): P0 Issue 3 + 4 — CPU đọc MẠCH (solver), không chỉ chiết áp.
+// Đạo hàm giống hệt applyBenchNetlist trong app.js: setWiring rồi
+// applySolvedVoltages từ solveCircuit.
+function applySolvedToCpu(cpu, st, potVolts = {}) {
+  const mapping = resolvePeripherals(benchToNetlist(st));
+  cpu.setWiring(mapping);
+  const solved = solveCircuit(st, cpu);
+  applySolvedVoltages(cpu, mapping, solved, { potVolts, vccVolts: 5 });
+  return mapping;
+}
+function adcReadAn0(cpu) { // ADCON1: ADFM=1; ADCON0: ADON+GO, kênh AN0
+  cpu.writeFile(0x03, 0x20); cpu.writeFile(0x1f, 0x80); // bank1: ADCON1
+  cpu.writeFile(0x03, 0x00); cpu.writeFile(0x1f, 0x03); // bank0: ADCON0
+  cpu.run(100);
+  return (cpu.sfr.ADRESH << 8) | cpu.sfr.ADRESL;
+}
+function setTrisLatch(cpu, port, trisVal, latchVal) {
+  cpu.writeFile(0x03, 0x20); cpu.writeFile(0x05 + port, trisVal); // TRISx (bank1)
+  cpu.writeFile(0x03, 0x00); cpu.writeFile(0x05 + port, latchVal); // PORTx latch
+}
+// Lỗ chân PIC (board 830): RA0=chân 2, RB0=chân 33, RB1=chân 34, RB2=chân 35.
+const PIN_HOLE = new Map(picLegs(830).map((l) => [l.pin, l.hole]));
+const RA0_HOLE = PIN_HOLE.get(2), RB0_HOLE = PIN_HOLE.get(33);
+const RB1_HOLE = PIN_HOLE.get(34), RB2_HOLE = PIN_HOLE.get(35);
+function dividerState(r1, r2) { // cầu phân áp R1 (VCC->mid) + R2 (mid->GND), mid -> RA0
+  const st = defaultBenchState(830);
+  st.components.push({ id: 'R1', type: 'resistor', anchor: 'a20', rot: 0, props: { value: r1 } });
+  st.components.push({ id: 'R2', type: 'resistor', anchor: 'a30', rot: 0, props: { value: r2 } });
+  let n = 100;
+  const w = (a, b) => st.wires.push({ id: 'W' + (n++), a, b });
+  w('b20', 'T+20'); w('b24', 'b30'); w('b34', 'T-34'); w(RA0_HOLE, 'b24');
+  return st;
+}
+function wireState(a, b) {
+  const st = defaultBenchState(830);
+  st.wires.push({ id: 'W901', a, b });
+  return st;
+}
+
+// (w-i) Issue 3: divider 10k/10k -> AN0 ≈ 512 (không phải 0 như trước fix)
+{
+  const cpu = createCPU();
+  applySolvedToCpu(cpu, dividerState(10000, 10000));
+  check('(w-i) divider 10k/10k -> AN0 ≈ 512', Math.abs(adcReadAn0(cpu) - 512) <= 2, `ADRES=${(cpu.sfr.ADRESH << 8) | cpu.sfr.ADRESL} AN0=${cpu.analogVolts[0]}V`);
+  // Gỡ divider -> ADC 0, không giữ giá trị cũ.
+  const cpu2 = createCPU();
+  applySolvedToCpu(cpu2, defaultBenchState(830));
+  check('(w-i) gỡ divider -> AN0 = 0 (không stale)', adcReadAn0(cpu2) === 0, `ADRES=${(cpu2.sfr.ADRESH << 8) | cpu2.sfr.ADRESL}`);
+  // VCC -> AN0 ≈ 1023; GND -> AN0 = 0.
+  const cpuV = createCPU();
+  applySolvedToCpu(cpuV, wireState(RA0_HOLE, 'T+23'));
+  check('(w-i) VCC -> AN0 ≈ 1023', Math.abs(adcReadAn0(cpuV) - 1023) <= 1, `ADRES=${(cpuV.sfr.ADRESH << 8) | cpuV.sfr.ADRESL}`);
+  const cpuG = createCPU();
+  applySolvedToCpu(cpuG, wireState(RA0_HOLE, 'T-23'));
+  check('(w-i) GND -> AN0 = 0', adcReadAn0(cpuG) === 0, `ADRES=${(cpuG.sfr.ADRESH << 8) | cpuG.sfr.ADRESL}`);
+  // Divider 30k/10k -> mid 1.25V -> ADC ≈ 256, mức số RA0 = 0 (ngưỡng 2,5V).
+  const cpu3 = createCPU();
+  applySolvedToCpu(cpu3, dividerState(30000, 10000));
+  check('(w-i) divider 30k/10k -> AN0 ≈ 256, RA0 số = 0', Math.abs(adcReadAn0(cpu3) - 256) <= 2 && (cpu3.readPort(0) & 1) === 0,
+    `ADRES=${(cpu3.sfr.ADRESH << 8) | cpu3.sfr.ADRESL} PORTA=0x${cpu3.readPort(0).toString(16)}`);
+}
+
+// (w-i) Issue 4: chân input nối GND/VCC/chân output khác đọc đúng, theo live.
+{
+  const gnd = createCPU();
+  applySolvedToCpu(gnd, wireState(RB0_HOLE, 'T-29'));
+  setTrisLatch(gnd, 1, 0xff, 0); // TRISB=input hết
+  check('(w-i) RB0->GND đọc 0', (gnd.readPort(1) & 1) === 0, `PORTB=0x${gnd.readPort(1).toString(16)}`);
+  const vcc = createCPU();
+  applySolvedToCpu(vcc, wireState(RB0_HOLE, 'T+29'));
+  setTrisLatch(vcc, 1, 0xff, 0);
+  check('(w-i) RB0->VCC đọc 1', (vcc.readPort(1) & 1) === 1, `PORTB=0x${vcc.readPort(1).toString(16)}`);
+  // RB1 output nối RB2 input: RB1=1 -> RB2=1, RB1=0 -> RB2=0 (theo live).
+  const st = wireState(RB1_HOLE, RB2_HOLE);
+  const hi = createCPU();
+  applySolvedToCpu(hi, st);
+  setTrisLatch(hi, 1, 0xfd, 0x02); // RB1 output, latch 1
+  check('(w-i) RB1=1 -> RB2 đọc 1', (hi.readPort(1) & 0x04) === 0x04, `PORTB=0x${hi.readPort(1).toString(16)}`);
+  const lo = createCPU();
+  applySolvedToCpu(lo, st);
+  setTrisLatch(lo, 1, 0xfd, 0x00); // RB1 output, latch 0
+  check('(w-i) RB1=0 -> RB2 đọc 0', (lo.readPort(1) & 0x04) === 0, `PORTB=0x${lo.readPort(1).toString(16)}`);
 }
 
 console.log(`\nKết quả: ${pass} pass, ${fail} fail`);

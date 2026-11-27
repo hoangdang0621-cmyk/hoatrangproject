@@ -86,6 +86,31 @@ const SFR_MAP = [
 
 const PORT_BITS = [6, 8, 8, 8, 3]; // số chân thật của PORTA..PORTE
 const PORT_NAMES = ['PORTA', 'PORTB', 'PORTC', 'PORTD', 'PORTE'];
+const PORT_PREFIX = ['RA', 'RB', 'RC', 'RD', 'RE'];
+
+// 'RB1' -> { id, port: 1, bit: 1 }; null nếu không phải chân I/O
+// (MCLR/VDD/VSS/OSC, RA6/RA7/RE3.. không tồn tại trên DIP-40).
+export function parsePicPinId(id) {
+  const m = typeof id === 'string' ? id.match(/^(RA|RB|RC|RD|RE)([0-7])$/) : null;
+  if (!m) return null;
+  const port = PORT_PREFIX.indexOf(m[1]);
+  const bit = Number(m[2]);
+  if (port < 0 || bit >= PORT_BITS[port]) return null;
+  return { id, port, bit };
+}
+const picIdOf = (portIdx, bit) => PORT_PREFIX[portIdx] + bit;
+
+// Chân analog AN0..AN7 (datasheet): RA0–RA3, RA5, RE0–RE2.
+export const ANALOG_PINS = [
+  { id: 'RA0', port: 0, bit: 0, analog: 0 },
+  { id: 'RA1', port: 0, bit: 1, analog: 1 },
+  { id: 'RA2', port: 0, bit: 2, analog: 2 },
+  { id: 'RA3', port: 0, bit: 3, analog: 3 },
+  { id: 'RA5', port: 0, bit: 5, analog: 4 },
+  { id: 'RE0', port: 4, bit: 0, analog: 5 },
+  { id: 'RE1', port: 4, bit: 1, analog: 6 },
+  { id: 'RE2', port: 4, bit: 2, analog: 7 },
+];
 
 // ---------------------------------------------------------------------------
 // Tiện ích số
@@ -772,6 +797,17 @@ export class PIC16F877A {
     this.lcd = new LCD();
     this.wiring = null; // cấu hình ngoại vi từ netlist breadboard (wiring.js); null = đấu cứng cũ
     this.analogVolts = [0, 0, 0, 0, 0, 0, 0, 0]; // AN0..AN7 (V)
+    // Điện áp mạch đã giải tại từng chân input ('port:bit' -> volts):
+    // đặt bởi applySolvedVoltages (từ solver, qua app.js) cho net KHÔNG
+    // chứa chân PIC output (net có output thì pinLevel theo live, không
+    // snapshot để khỏi stale). pinLevel đọc theo thứ tự: theo chân
+    // output cùng net (live) -> netVoltage ngưỡng hoá ~2,5V -> VCC/GND
+    // trong net -> portInput. Thứ tự này quan trọng: netlist (wiring.js)
+    // nối strip qua ĐIỆN TRỞ như dây nên net của điểm giữa cầu phân áp
+    // chứa cả VCC lẫn GND trong mapping — chỉ solver mới biết điện áp
+    // thật (2,5V), nên netVoltage phải thắng VCC/GND của mapping.
+    this.netVoltage = new Map();
+    this._netById = null; // Map root net -> net (tra nhanh trong pinLevel)
     this.txLog = [];        // mã ký tự đã phát qua TX
     this.onTx = null;       // callback(code) khi CPU phát 1 ký tự
     this.onLcd = null;
@@ -891,9 +927,58 @@ export class PIC16F877A {
           return 1; // cột có pull-up
         }
       }
+      // Thứ tự đọc chân input (xem ghi chú ở netVoltage): (1) theo chân
+      // PIC output cùng net — live, kể cả nối qua điện trở; (2) điện áp
+      // mạch đã giải (netVoltage) ngưỡng hoá ~2,5V — thắng VCC/GND của
+      // mapping vì mapping nối strip qua điện trở như dây (vd điểm giữa
+      // cầu phân áp chứa cả VCC lẫn GND trong mapping nhưng thực tế chỉ
+      // 2,5V); (3) VCC/GND trong net (khi chưa có solver); (4) portInput
+      // (nút nhấn / thả nổi).
+      const net = this.netOfPin(portIdx, bit);
+      if (net) {
+        const outLevel = this.followOutputInNet(net, portIdx, bit);
+        if (outLevel !== null) return outLevel;
+      }
+      const nv = this.netVoltage.get(portIdx + ':' + bit);
+      if (nv !== undefined) return nv >= 2.5 ? 1 : 0;
+      if (net) {
+        if (net.members.includes('VCC')) return 1;
+        if (net.members.includes('GND')) return 0;
+      }
       return (this.portInput[portIdx] >> bit) & 1;
     }
     return (this.portLatch[portIdx] >> bit) & 1;
+  }
+  // Net chứa 1 chân PIC theo wiring (null nếu chưa có wiring / chân
+  // không thuộc net nào). Dùng chung cho pinLevel.
+  netOfPin(portIdx, bit) {
+    const w = this.wiring;
+    if (!w || !w.netOf || !w.nets) return null;
+    const root = w.netOf.get('PIC.' + picIdOf(portIdx, bit));
+    if (root === undefined) return null;
+    return (this._netById ? this._netById.get(root) : w.nets.find((n) => n.id === root)) || null;
+  }
+  // Mức của chân PIC OUTPUT cùng net với chân input đang đọc (trừ chính
+  // nó): null nếu không có. Chỉ theo chân OUTPUT: pinLevel của output
+  // trả latch trực tiếp nên không đệ quy (không có vòng input -> input).
+  // Chỉ đọc, không ghi portInput: nút nhấn vẫn đi qua setPinInput như
+  // cũ (xem applyButtonToCpu), và thứ tự trong bench.js (syncToCpu
+  // trước rồi mới pressButton) làm 2 đường này cho cùng 1 mức nên không
+  // xung đột. Nút nhấn đang nhấn cũng đóng mạch trong netlist nên net
+  // của chân lúc đó chứa GND/VCC và cho đúng mức nhấn — kể cả nút nối
+  // 2 chân PIC với nhau (trường hợp applyButtonToCpu không biết mức đầu
+  // kia, vì otherLevel chỉ nhìn VCC/GND).
+  followOutputInNet(net, portIdx, bit) {
+    if (!net) return null;
+    for (const m of net.members) {
+      if (!m.startsWith('PIC.')) continue;
+      const other = parsePicPinId(m.slice(4));
+      if (!other || (other.port === portIdx && other.bit === bit)) continue;
+      if (((this.tris[other.port] >> other.bit) & 1) === 0) {
+        return this.pinLevel(other.port, other.bit);
+      }
+    }
+    return null;
   }
   pinDirection(portIdx, bit) {
     if (portIdx === 2 && bit === 2 && (this.sfr.CCP1CON & 0x0f) === 0x0c) return 'out';
@@ -1003,6 +1088,12 @@ export class PIC16F877A {
   // Gọi sau mỗi lần đổi dây; reset/loadProgram không xoá wiring.
   setWiring(mapping) {
     this.wiring = mapping || null;
+    // Tra net nhanh cho pinLevel (Map root -> net); đổi wiring thì điện
+    // áp mạch đã giải cũ hết hiệu lực (app.js tính lại ngay sau đó trong
+    // applyBenchNetlist, qua applySolvedVoltages).
+    this._netById = (this.wiring && this.wiring.nets)
+      ? new Map(this.wiring.nets.map((n) => [n.id, n])) : null;
+    this.netVoltage.clear();
     const w = this.wiring && this.wiring.lcd;
     if (w && w.e) this.prevE = this.pinLevel(w.e.port, w.e.bit);
     else if (!w) this.prevE = (this.portLatch[4] >> 1) & 1;
@@ -1075,6 +1166,19 @@ export class PIC16F877A {
   }
 
   setAnalog(channel, volts) { this.analogVolts[channel & 7] = Math.max(0, Math.min(5, volts)); }
+
+  // Điện áp mạch đã giải tại 1 chân (đặt bởi applySolvedVoltages, từ
+  // solver; chỉ cho net không chứa chân PIC output): pinLevel dùng
+  // ngưỡng 2,5V, sau bước theo output cùng net và trước VCC/GND của
+  // mapping (xem pinLevel). volts null/không phải số = xoá (net không
+  // còn nguồn lái / net có output nên theo live).
+  // KHÔNG đổi ngữ nghĩa finishAdc/setAnalog: finishAdc vẫn đọc
+  // analogVolts[ch], setAnalog vẫn kẹp 0–5V.
+  setNetVoltage(portIdx, bit, volts) {
+    const k = portIdx + ':' + bit;
+    if (volts === null || volts === undefined || !Number.isFinite(volts)) this.netVoltage.delete(k);
+    else this.netVoltage.set(k, volts);
+  }
 
   receiveChar(code) {
     if (!(this.sfr.RCSTA & 0x80)) return; // SPEN=0: UART tắt
@@ -1500,6 +1604,92 @@ export class ProgramRunner {
 
 export function createCPU() { return new PIC16F877A(); }
 
+// Áp điện áp mạch đã giải vào CPU (ADC + mức chân input) — 1 chỗ duy
+// nhất, dùng chung cho app.js (applyBenchNetlist) và test Node.
+// - solved: kết quả solveCircuit(state, cpu, ...) ({nodeVoltage, nets});
+//   null hoặc !solved.ok thì suy từ mapping (VCC/GND/chân output/wiper).
+// - opts: { potVolts: {POT0: volts...} (điện áp wiper hiện tại),
+//         vccVolts: điện áp rail VCC (mặc định 5) }.
+// Mỗi kênh AN: solver là chuẩn khi có số (VCC -> ~vccVolts, GND -> 0,
+// chân output -> mức*5V, chiết áp/cầu phân áp -> giá trị đã giải —
+// solver mô hình điện trở đúng thành nhánh, còn netlist nối strip qua
+// điện trở như dây nên net của điểm giữa cầu phân áp chứa cả VCC lẫn
+// GND trong mapping, không được lấy VCC/GND của mapping làm điện áp);
+// không nguồn nào lái (net floating / chân chưa nối) -> setAnalog(ch, 0)
+// để ADC không đọc giá trị cũ còn sót (stale pot value).
+// Mức logic chân input (netVoltage): chỉ snapshot net KHÔNG chứa chân
+// PIC output — net có output thì pinLevel theo live (followOutputInNet)
+// nên snapshot sẽ stale khi output đổi mức. Net mềm (chiết áp / cầu
+// phân áp / điện trở kéo) thì snapshot để pinLevel ngưỡng hoá ~2,5V;
+// net không có nguồn lái -> xoá netVoltage (rơi về portInput).
+// Hạn chế đã biết: code đổi TRIS của 1 chân từ output sang input lúc
+// chạy thì netVoltage của net đó vẫn là snapshot cũ (đã xoá lúc còn là
+// output); đổi dây / nhấn nút (sync lại bench) thì tính lại đúng.
+export function applySolvedVoltages(cpu, mapping, solved, opts = {}) {
+  const potVolts = opts.potVolts || {};
+  const vccVolts = Number.isFinite(opts.vccVolts) ? opts.vccVolts : 5;
+  const netMembersOf = (term) => {
+    if (!mapping || !mapping.netOf || !mapping.nets) return [];
+    const root = mapping.netOf.get(term);
+    if (root === undefined) return [];
+    const net = mapping.nets.find((n) => n.id === root);
+    return net ? net.members : [];
+  };
+  // Net có chân PIC nào đang là output không (kể cả chính chân đang xét
+  // và kể cả nối qua điện trở — mapping nối strip qua điện trở như dây
+  // nên vẫn thấy).
+  const netHasOutput = (members) => members.some((m) => {
+    if (!m.startsWith('PIC.')) return false;
+    const pin = parsePicPinId(m.slice(4));
+    return pin && cpu.pinDirection(pin.port, pin.bit) === 'out';
+  });
+  // Điện áp của net chứa 1 chân PIC: solver trước (số là chuẩn), mapping
+  // sau (chỉ khi không có solver; gần đúng vì không phân biệt được net
+  // nối qua điện trở với nối bằng dây).
+  const netVolts = (pinId, members) => {
+    if (solved && solved.ok && solved.nets && solved.nodeVoltage) {
+      const node = solved.nets.nodeOfPicPin(pinId);
+      if (node) {
+        const v = solved.nodeVoltage.get(node);
+        if (typeof v === 'number') return v;
+      }
+    }
+    if (members.includes('VCC')) return vccVolts;
+    if (members.includes('GND')) return 0;
+    for (const m of members) {
+      if (!m.startsWith('PIC.')) continue;
+      const pin = parsePicPinId(m.slice(4));
+      if (!pin) continue;
+      if (cpu.pinDirection(pin.port, pin.bit) === 'out') {
+        return cpu.pinLevel(pin.port, pin.bit) ? 5 : 0;
+      }
+    }
+    for (const m of members) {
+      if (!m.endsWith('.W')) continue;
+      const potId = m.slice(0, -2);
+      if (potId in potVolts) return potVolts[potId];
+    }
+    return null;
+  };
+  // Kênh AN: đặt (và xoá) đủ 8 kênh mỗi lần gọi.
+  for (const pin of ANALOG_PINS) {
+    const members = netMembersOf('PIC.' + pin.id);
+    const volts = netVolts(pin.id, members);
+    cpu.setAnalog(pin.analog, volts === null ? 0 : volts);
+  }
+  // Mọi chân I/O: chỉ snapshot net không có output; net có output thì
+  // xoá để pinLevel theo live.
+  for (let port = 0; port < PORT_BITS.length; port++) {
+    for (let bit = 0; bit < PORT_BITS[port]; bit++) {
+      const id = PORT_PREFIX[port] + bit;
+      const members = netMembersOf('PIC.' + id);
+      if (netHasOutput(members)) cpu.setNetVoltage(port, bit, null);
+      else cpu.setNetVoltage(port, bit, netVolts(id, members));
+    }
+  }
+  return true;
+}
+
 // Đổi thời gian thực đã trôi qua (ms) ra số chu kỳ lệnh mô phỏng tương ứng.
 // PIC chạy 4 chu kỳ dao động cho 1 chu kỳ lệnh, nên ở clockHz thì
 // 1ms = clockHz/4000 chu kỳ lệnh (ở 4MHz là 1000 chu kỳ/ms).
@@ -1510,5 +1700,5 @@ export function cyclesForElapsedMs(elapsedMs, clockHz = 4000000, maxCycles = 500
 
 // Tiện cho debug trong console trình duyệt (không ảnh hưởng Node test)
 if (typeof globalThis !== 'undefined') {
-  globalThis.PIC16 = { assemble, disassemble, parseIntelHex, exportHex, createCPU, PIC16F877A, ProgramRunner, LCD, REGISTERS };
+  globalThis.PIC16 = { assemble, disassemble, parseIntelHex, exportHex, createCPU, PIC16F877A, ProgramRunner, LCD, REGISTERS, applySolvedVoltages, parsePicPinId, ANALOG_PINS };
 }
