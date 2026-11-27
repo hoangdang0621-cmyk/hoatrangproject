@@ -1,8 +1,8 @@
 // test-pic16.mjs — Kiểm thử xác định cho lõi pic16.js (KHÔNG đưa vào public/).
 // Chạy: node test-pic16.mjs   (exit 0 = tất cả pass)
 import { readFileSync } from 'node:fs';
-import { assemble, createCPU, parseIntelHex, exportHex, disassemble, ProgramRunner, cyclesForElapsedMs, LCD, applySolvedVoltages } from './public/pic16.js';
-import { defaultNetlist, resolvePeripherals, checkWiring, ledStates, buzzerStates, sevenSegStates, SEVEN_SEG_TERMS, applyButtonToCpu, applyPotToCpu, applyKeypadToCpu, KEYPAD_KEYS, PIC_PINS } from './public/wiring.js';
+import { assemble, createCPU, parseIntelHex, exportHex, disassemble, ProgramRunner, cyclesForElapsedMs, LCD, applySolvedVoltages, configFoscMode } from './public/pic16.js';
+import { defaultNetlist, resolvePeripherals, checkWiring, ledStates, buzzerStates, sevenSegStates, SEVEN_SEG_TERMS, applyButtonToCpu, applyPotToCpu, applyKeypadToCpu, KEYPAD_KEYS, PIC_PINS, netLevel } from './public/wiring.js';
 import { PITCH, SEGMENT_GAP_MM, rowZ, HOLE_RADIUS, HOLE_HEIGHT, HOLE_TOP_ABOVE_BOARD, holeCenterY, depthPrecisionAt, MAX_CAMERA_DISTANCE, SEGMENT_LINE_WIDTH_MM, segmentBoundaries, allHoles, stripKey, parseHole, holePos, holeId, rowLabel, rowIndexFromLabel, migrateOldHoleId, picLegs, picLegsForAnchor, picAnchor, legsFor, canPlace, buildBenchNets, benchToNetlist, defaultBenchState, sanitizeState, boardSize, picCol, picRows, picBodyDepth, picBodyDepthForRows, bodyDepth, pruneStateForSize, validateWireEnd, retargetWireEnd, togglePlacement, normalizeSize, holeCount, sizeLabel, sameSize, compLabel, nextComponentId, defaultProps, psuVolts, validatePsuVolts, parsePsuPost, psuPostPos, PSU_SCALE, PSU_POST_DX, PSU_POST_Y, PSU_POST_DZ, parseScopePost, scopePostPos, SCOPE_POST_DX, SCOPE_POST_Y, SCOPE_POST_DZ, SCOPE_DEFAULT_TX, SCOPE_DEFAULT_TZ, parseSerialPost, serialPostPos, SERIAL_POST_DX, SERIAL_POST_Y, SERIAL_POST_DZ, SERIAL_DEFAULT_TX, SERIAL_DEFAULT_TZ, normalizeWireEnd, clampCamTarget, zoomTowardPoint, panTarget, meterMode, crystalFreq, CRYSTAL_FREQS, cleanNewProps } from './public/bench-model.js';
 import { LABS, getLab, buildLabState } from './public/labs.js';
 import { buildSolverNets, solveLinear, solveCircuit, meterReadings, motorReadings, MOTOR_MAX_RPM, scopeVoltages, pushScopeSample, SCOPE_MAX_SAMPLES, formatVolts, formatAmps, formatCurrentDirection, LED_FORWARD_VOLTS, LED_SERIES_OHMS, PIC_OUTPUT_VOLTS, sevenSegReadings, sevenSegDigit, BUZZER_OHMS, BUZZER_ON_VOLTS, LED_MAX_VOLTS } from './public/circuit-solver.js';
@@ -5648,6 +5648,902 @@ function wireState(a, b) {
   applySolvedToCpu(lo, st);
   setTrisLatch(lo, 1, 0xfd, 0x00); // RB1 output, latch 0
   check('(w-i) RB1=0 -> RB2 đọc 0', (lo.readPort(1) & 0x04) === 0, `PORTB=0x${lo.readPort(1).toString(16)}`);
+}
+
+// Nhóm (p1-5): P1 Issue 5 — chiết áp lấy Vref từ nguồn thật, không cứng 5V.
+// - Wiper = pct × V(net chân VCC) từ solver: PSU 3V, núm 50% -> ~1,5V.
+// - Chân GND chưa nối dây: wiper lơ lửng, đồng hồ đọc "—", ADC đọc 0
+//   (không giữ volt núm xoay cũ).
+// - Wiper nối tắt tới chân PIC output=1: chân PIC thắng, ADC đọc 1023
+//   bất kể núm xoay.
+{
+  const approx = (v, target, tol) => typeof v === 'number' && Number.isFinite(v) && Math.abs(v - target) <= tol;
+  // Tính potVolts ĐÚNG KIỂU app.js (applyBenchNetlist): điện áp wiper từ
+  // solver, 0 khi wiper lơ lửng.
+  const potVoltsFromSolved = (mapping, solved) => {
+    const potVolts = {};
+    for (const p of mapping.pots) {
+      let v = null;
+      if (solved && solved.ok && solved.nets && solved.nodeVoltage) {
+        const node = solved.nets.nodeOfTerm(p.id, 'W');
+        const nv = node ? solved.nodeVoltage.get(node) : null;
+        if (typeof nv === 'number') v = nv;
+      }
+      potVolts[p.id] = v === null ? 0 : v;
+    }
+    return potVolts;
+  };
+  // Mạch mẫu: chiết áp a10 (VCC=a10, W=a11, GND=a12) + đồng hồ đo chế độ V
+  // a20 (P=b20, N=b24); wiper -> RA0 để đọc ADC.
+  const p15State = ({ pct, psuVolts = 5, gndWired = true, shortToRb0 = false }) => {
+    const st = defaultBenchState(830);
+    if (psuVolts !== 5) st.components.find((c) => c.type === 'psu').props.volts = psuVolts;
+    st.components.push({ id: 'POT0', type: 'pot', anchor: 'a10', rot: 0, props: { pct } });
+    st.components.push({ id: 'MM0', type: 'multimeter', anchor: 'a20', rot: 0, props: { mode: 'V' } });
+    let n = 100;
+    const w = (a, b) => st.wires.push({ id: 'W' + (n++), a, b });
+    w('b10', 'T+10'); // VCC chiết áp -> +rail
+    if (gndWired) w('b12', 'T-10'); // GND chiết áp -> -rail
+    w('b11', 'b20'); // W -> chân P đồng hồ
+    w('b24', 'T-10'); // chân N đồng hồ -> GND
+    w('b11', RA0_HOLE); // W -> RA0 (AN0)
+    if (shortToRb0) w('b11', RB0_HOLE); // W nối tắt tới RB0
+    return st;
+  };
+  // (p1-5a) PSU=3V, núm 50% -> đồng hồ ở W ≈ 1.5V (không phải 2.5V).
+  check('(p1-5a) PSU=3V, pot 50% -> đồng hồ ở W ≈ 1.5V',
+    (() => {
+      const v = meterReadings(p15State({ pct: 50, psuVolts: 3 }), createCPU()).voltmeters[0].volts;
+      return approx(v, 1.5, 0.01);
+    })(), '');
+  // (p1-5b) PSU=3V, núm 100% -> W = 3V; núm 0% -> W = 0V.
+  check('(p1-5b) PSU=3V, pot 100% -> W = 3V; pot 0% -> W = 0V',
+    (() => {
+      const v100 = meterReadings(p15State({ pct: 100, psuVolts: 3 }), createCPU()).voltmeters[0].volts;
+      const v0 = meterReadings(p15State({ pct: 0, psuVolts: 3 }), createCPU()).voltmeters[0].volts;
+      return v100 === 3 && v0 === 0;
+    })(), '');
+  // (p1-5c) PSU=3V, núm 50% -> ADC AN0 ≈ 307 (1.5V theo thang 5V của ADC).
+  check('(p1-5c) PSU=3V, pot 50% -> ADC AN0 ≈ 307',
+    (() => {
+      const st = p15State({ pct: 50, psuVolts: 3 });
+      const cpu = createCPU();
+      const mapping = resolvePeripherals(benchToNetlist(st));
+      cpu.setWiring(mapping);
+      const solved = solveCircuit(st, cpu);
+      const potVolts = potVoltsFromSolved(mapping, solved);
+      applySolvedVoltages(cpu, mapping, solved, { potVolts, vccVolts: 5 });
+      return approx(potVolts.POT0, 1.5, 0.01)
+        && approx(cpu.analogVolts[0], 1.5, 0.01)
+        && Math.abs(adcReadAn0(cpu) - 307) <= 2;
+    })(), '');
+  // (p1-5d) Chân GND chiết áp không nối dây -> đồng hồ "—", ADC 0.
+  check('(p1-5d) GND chiết áp lơ lửng -> đồng hồ ở W = null ("—"), ADC AN0 = 0',
+    (() => {
+      const st = p15State({ pct: 83, gndWired: false });
+      const r = meterReadings(st, createCPU()).voltmeters[0];
+      if (r.volts !== null || formatVolts(r.volts) !== '—') return false;
+      const cpu = createCPU();
+      const mapping = resolvePeripherals(benchToNetlist(st));
+      cpu.setWiring(mapping);
+      const solved = solveCircuit(st, cpu);
+      if (netLevel(solved.nodeVoltage, solved.nets, 'POT0.W') !== null) return false;
+      const potVolts = potVoltsFromSolved(mapping, solved);
+      if (potVolts.POT0 !== 0) return false; // không giữ volt núm xoay cũ
+      applySolvedVoltages(cpu, mapping, solved, { potVolts, vccVolts: 5 });
+      return cpu.analogVolts[0] === 0 && adcReadAn0(cpu) === 0;
+    })(), '');
+  // (p1-5e) Wiper nối tắt tới RB0 output=1, núm 0% -> ADC 1023 (chân PIC thắng).
+  check('(p1-5e) wiper tắt tới RB0=1, núm 0% -> ADC AN0 = 1023',
+    (() => {
+      const st = p15State({ pct: 0, shortToRb0: true });
+      const cpu = createCPU();
+      setTrisLatch(cpu, 1, 0x00, 0x01); // TRISB=0 (output), PORTB=1 (RB0=1)
+      const mapping = resolvePeripherals(benchToNetlist(st));
+      cpu.setWiring(mapping);
+      const solved = solveCircuit(st, cpu);
+      applySolvedVoltages(cpu, mapping, solved, { potVolts: {}, vccVolts: 5 });
+      return solved.ok === true
+        && solved.nodeVoltage.get(solved.nets.nodeOfTerm('POT0', 'W')) === 5
+        && cpu.analogVolts[0] === 5 && adcReadAn0(cpu) === 1023;
+    })(), '');
+  // (p1-5f) Wiper nối tắt tới RB0 output=1, núm 100% -> ADC vẫn 1023.
+  check('(p1-5f) wiper tắt tới RB0=1, núm 100% -> ADC AN0 = 1023',
+    (() => {
+      const st = p15State({ pct: 100, shortToRb0: true });
+      const cpu = createCPU();
+      setTrisLatch(cpu, 1, 0x00, 0x01); // TRISB=0 (output), PORTB=1 (RB0=1)
+      const mapping = resolvePeripherals(benchToNetlist(st));
+      cpu.setWiring(mapping);
+      const solved = solveCircuit(st, cpu);
+      applySolvedVoltages(cpu, mapping, solved, { potVolts: {}, vccVolts: 5 });
+      return solved.ok === true && adcReadAn0(cpu) === 1023;
+    })(), '');
+}
+
+{
+  const s1 = buildLabState(LABS[0]).state;
+  const s2 = buildLabState(LABS[1]).state;
+  const s3 = buildLabState(LABS[2]).state;
+  check('(p1-7a) crystalFreq: Lab 1/2/3 đều 4000000 (thạch anh X0 nối đúng strip OSC)',
+    crystalFreq(s1) === 4000000 && crystalFreq(s2) === 4000000 && crystalFreq(s3) === 4000000,
+    `lab1=${crystalFreq(s1)} lab2=${crystalFreq(s2)} lab3=${crystalFreq(s3)}`);
+}
+// (p1-7b) Board 830: thạch anh trên strip OSC -> có xung; lệch strip -> null
+{
+  const on = defaultBenchState(830);
+  on.components.push({ id: 'X0', type: 'crystal', anchor: 'a34', rot: 0, props: { freq: 4000000 } });
+  const off = defaultBenchState(830);
+  off.components.push({ id: 'X0', type: 'crystal', anchor: 'a10', rot: 0, props: { freq: 4000000 } });
+  const off20 = defaultBenchState(830);
+  off20.components.push({ id: 'X0', type: 'crystal', anchor: 'a10', rot: 0, props: { freq: 20000000 } });
+  check('(p1-7b) crystalFreq 830: a34 (strip OSC) -> 4000000; a10 (lệch strip) -> null (cả 4MHz lẫn 20MHz)',
+    crystalFreq(on) === 4000000 && crystalFreq(off) === null && crystalFreq(off20) === null,
+    `on=${crystalFreq(on)} off=${crystalFreq(off)} off20=${crystalFreq(off20)}`);
+}
+// (p1-7c) Board 100x20: thạch anh f53 (strip OSC g53/g54) -> có xung; f60 -> null
+{
+  const on = defaultBenchState({ cols: 100, rows: 20, rails: true });
+  on.components.push({ id: 'X0', type: 'crystal', anchor: 'f53', rot: 0, props: { freq: 4000000 } });
+  const off = defaultBenchState({ cols: 100, rows: 20, rails: true });
+  off.components.push({ id: 'X0', type: 'crystal', anchor: 'f60', rot: 0, props: { freq: 8000000 } });
+  check('(p1-7c) crystalFreq 100x20: f53 (strip OSC) -> 4000000; f60 (lệch cột) -> null',
+    crystalFreq(on) === 4000000 && crystalFreq(off) === null,
+    `on=${crystalFreq(on)} off=${crystalFreq(off)}`);
+}
+// (p1-7d) Thạch anh đặt đúng lỗ nhưng không có chip PIC -> null; fixture rút gọn
+// (thạch anh không anchor, như test (ba-b) cũ) vẫn trả tần số như trước.
+{
+  const noPic = { size: 830, components: [{ id: 'X0', type: 'crystal', anchor: 'a34', rot: 0, props: { freq: 4000000 } }] };
+  const bare = { components: [{ id: 'X0', type: 'crystal', props: { freq: 8000000 } }] };
+  check('(p1-7d) crystalFreq: thạch anh a34 nhưng không có PIC -> null; thạch anh không anchor (fixture) -> 8000000',
+    crystalFreq(noPic) === null
+    && crystalFreq(bare) === 8000000,
+    `noPic=${crystalFreq(noPic)} bare=${crystalFreq(bare)}`);
+}
+// (p1-7e) Thạch anh đối xứng: xoay 180° (rot 2, 2 chân đổi strip OSC1/OSC2) vẫn có
+// xung; xoay 90° (rot 1, 2 chân cùng 1 strip) thì không.
+{
+  const swap = defaultBenchState(830);
+  swap.components.push({ id: 'X0', type: 'crystal', anchor: 'a35', rot: 2, props: { freq: 4000000 } });
+  const vert = defaultBenchState(830);
+  vert.components.push({ id: 'X0', type: 'crystal', anchor: 'a34', rot: 1, props: { freq: 4000000 } });
+  check('(p1-7e) crystalFreq: a35 rot2 (chân đổi nhau) -> 4000000; a34 rot1 (2 chân cùng strip) -> null',
+    crystalFreq(swap) === 4000000 && crystalFreq(vert) === null,
+    `swap=${crystalFreq(swap)} vert=${crystalFreq(vert)}`);
+}
+// (p1-7f) simTimeUs không Infinity/NaN khi không có xung (clockHz = 0 / NaN)
+{
+  const cpu = createCPU();
+  cpu.clockHz = 0; cpu.cycles = 1000000;
+  const t0 = cpu.simTimeUs;
+  cpu.clockHz = NaN;
+  const tNaN = cpu.simTimeUs;
+  cpu.clockHz = 4000000; cpu.cycles = 1000;
+  const t4 = cpu.simTimeUs;
+  check('(p1-7f) simTimeUs: clockHz=0 -> 0, clockHz=NaN -> 0, 4MHz + 1000 cycles -> 1000us',
+    t0 === 0 && tNaN === 0 && t4 === 1000,
+    `t0=${t0} tNaN=${tNaN} t4=${t4}`);
+}
+// (p1-7g) configFoscMode giải mã đúng bit FOSC1:FOSC0 (00 LP / 01 XT / 10 HS / 11 RC)
+check('(p1-7g) configFoscMode: 0x3ffc LP, 0x3ffd XT, 0x3ffe HS, 0x3fff RC',
+  configFoscMode(0x3ffc) === 'LP' && configFoscMode(0x3ffd) === 'XT'
+  && configFoscMode(0x3ffe) === 'HS' && configFoscMode(0x3fff) === 'RC',
+  `LP=${configFoscMode(0x3ffc)} XT=${configFoscMode(0x3ffd)} HS=${configFoscMode(0x3ffe)} RC=${configFoscMode(0x3fff)}`);
+
+// Nhóm (p1-8): Issue 8 — CPU chạy khi mất nguồn; MCLR bị bỏ qua; chân PIC
+// là nguồn 5V lý tưởng bất kể nguồn chip.
+// + Nhóm (p1-7): Issue 7 (phần còn lại) — tick 50ms lấy lại cpu.clockHz từ
+// thạch anh trên bàn: gỡ thạch anh giữa chừng thì chương trình dừng ngay.
+// KHÔNG cần import mới: dùng check, createCPU, ProgramRunner,
+// cyclesForElapsedMs, applySolvedVoltages, defaultBenchState, benchToNetlist,
+// resolvePeripherals, checkWiring, ledStates, solveCircuit, meterReadings,
+// crystalFreq (đã import sẵn trong test-pic16.mjs).
+// Chèn 2 block dưới vào test-pic16.mjs (trước dòng tổng kết cuối file).
+
+// Nhóm (p1-8)
+{
+  const approx8 = (v, t, tol) => typeof v === 'number' && Number.isFinite(v) && Math.abs(v - t) <= tol;
+  // Mạch: RB0 (lỗ h29, chân 33) -> LED0.A (a42) -> GND, vôn kế MM0 ngang LED.
+  // Board 830: 63 cột, rail chỉ tới cột 50 (T±51 không hợp lệ!).
+  const ledState8 = () => {
+    const st = defaultBenchState(830);
+    st.components.push({ id: 'LED0', type: 'led', anchor: 'a42', rot: 0, props: { color: '#DC2626' } });
+    st.components.push({ id: 'MM0', type: 'multimeter', anchor: 'a45', rot: 0, props: { mode: 'V' } });
+    let n = 300;
+    const w = (a, b) => st.wires.push({ id: 'W' + (n++), a, b });
+    w('i29', 'b42'); // RB0 (strip h29) -> LED.A (strip a42)
+    w('b43', 'T-43'); // LED.K -> GND
+    w('b45', 'b42'); // MM.P -> LED.A
+    w('b49', 'b43'); // MM.N -> LED.K
+    return st;
+  };
+  // Đạo hàm applyBenchNetlist trong app.js: setWiring rồi applySolvedVoltages.
+  const syncBench8 = (cpu, st) => {
+    const m = resolvePeripherals(benchToNetlist(st));
+    cpu.setWiring(m);
+    applySolvedVoltages(cpu, m, solveCircuit(st, cpu), { vccVolts: 5 });
+    return m;
+  };
+  const rb0High8 = (cpu) => {
+    cpu.writeFile(0x03, 0x20); cpu.writeFile(0x06, 0x00); // bank1: TRISB=0 (output)
+    cpu.writeFile(0x03, 0x00); cpu.writeFile(0x06, 0x01); // bank0: PORTB bit0=1
+  };
+  const meterV8 = (st, cpu) => meterReadings(st, cpu).voltmeters.find((m) => m.id === 'MM0').volts;
+  const ledOn8 = (st, cpu) => ledStates(solveCircuit(st, cpu), st).find((s) => s.id === 'LED0').on;
+  // (p1-8) Đối chứng có nguồn: RB0=1 -> vôn kế ≈5V, LED sáng.
+  check('(p1-8) có nguồn: RB0=1 -> vôn kế ≈5V, LED sáng',
+    (() => {
+      const st = ledState8();
+      const cpu = createCPU();
+      syncBench8(cpu, st);
+      rb0High8(cpu);
+      const s = solveCircuit(st, cpu);
+      return s.picPowered === true && s.picSupplyVolts === 5 && approx8(meterV8(st, cpu), 5, 0.05) && ledOn8(st, cpu) === true;
+    })(), '');
+  // (p1-8) Bỏ W2+W3 (2 dây VDD): RB0=1 -> vôn kế null, LED tối.
+  check('(p1-8) bỏ W2/W3: RB0=1 -> vôn kế null, LED tối',
+    (() => {
+      const st = ledState8();
+      st.wires = st.wires.filter((w) => w.id !== 'W2' && w.id !== 'W3');
+      const cpu = createCPU();
+      syncBench8(cpu, st);
+      rb0High8(cpu);
+      const s = solveCircuit(st, cpu);
+      return s.picPowered === false && meterV8(st, cpu) === null && ledOn8(st, cpu) === false;
+    })(), '');
+  // (p1-8) Chỉ bỏ W3 (chân VDD 11 vẫn nối rail): chip vẫn có nguồn.
+  check('(p1-8) chỉ bỏ W3: chip vẫn có nguồn, vôn kế ≈5V',
+    (() => {
+      const st = ledState8();
+      st.wires = st.wires.filter((w) => w.id !== 'W3');
+      const cpu = createCPU();
+      syncBench8(cpu, st);
+      rb0High8(cpu);
+      return solveCircuit(st, cpu).picPowered === true && approx8(meterV8(st, cpu), 5, 0.05);
+    })(), '');
+  // (p1-8) PSU 0V: chip chết, vôn kế null, LED tối.
+  check('(p1-8) PSU 0V: vôn kế null, LED tối',
+    (() => {
+      const st = ledState8();
+      st.components.find((c) => c.type === 'psu').props.volts = 0;
+      const cpu = createCPU();
+      syncBench8(cpu, st);
+      rb0High8(cpu);
+      return solveCircuit(st, cpu).picPowered === false && meterV8(st, cpu) === null && ledOn8(st, cpu) === false;
+    })(), '');
+  // (p1-8) PSU 12V (quá áp): chip không lái, vôn kế null, LED tối.
+  check('(p1-8) PSU 12V: vôn kế null, LED tối',
+    (() => {
+      const st = ledState8();
+      st.components.find((c) => c.type === 'psu').props.volts = 12;
+      const cpu = createCPU();
+      syncBench8(cpu, st);
+      rb0High8(cpu);
+      return solveCircuit(st, cpu).picPowered === false && meterV8(st, cpu) === null && ledOn8(st, cpu) === false;
+    })(), '');
+  // (p1-8) PSU 3.3V: chân ra theo nguồn (3.3V), LED vẫn sáng.
+  check('(p1-8) PSU 3.3V: vôn kế ≈3.3V, LED sáng',
+    (() => {
+      const st = ledState8();
+      st.components.find((c) => c.type === 'psu').props.volts = 3.3;
+      const cpu = createCPU();
+      syncBench8(cpu, st);
+      rb0High8(cpu);
+      const s = solveCircuit(st, cpu);
+      return s.picPowered === true && s.picSupplyVolts === 3.3 && approx8(meterV8(st, cpu), 3.3, 0.05) && ledOn8(st, cpu) === true;
+    })(), '');
+  // (p1-8) MCLR -> GND: pc/cycles không tăng (kể cả step() trực tiếp);
+  // thả MCLR (bỏ dây, không cần nối lại W1) thì chạy tiếp.
+  check('(p1-8) MCLR->GND: pc=0, cycles không tăng; thả MCLR thì chạy tiếp',
+    (() => {
+      const st = ledState8();
+      const cpu = createCPU();
+      syncBench8(cpu, st);
+      const runner = new ProgramRunner(cpu);
+      if (!runner.loadAsm('LOOP\n GOTO LOOP').ok) return false;
+      runner.run();
+      runner.tick(2000);
+      if (!(cpu.cycles > 0)) return false;
+      // W1 nối sẵn MCLR về T+ nên phải bỏ W1 trước khi kéo MCLR về GND
+      // (không thì nối tắt 2 rail).
+      st.wires = st.wires.filter((w) => w.id !== 'W1');
+      st.wires.push({ id: 'W-MCLR', a: 'c22', b: 'T-22' }); // MCLR (b22) -> GND
+      syncBench8(cpu, st);
+      if (solveCircuit(st, cpu).mclrLow !== true) return false;
+      const c1 = cpu.cycles;
+      runner.tick(2000);
+      if (!(cpu.cycles === c1 && cpu.pc === 0)) return false;
+      cpu.step();
+      if (!(cpu.cycles === c1 && cpu.pc === 0)) return false;
+      st.wires = st.wires.filter((w) => w.id !== 'W-MCLR');
+      syncBench8(cpu, st);
+      if (solveCircuit(st, cpu).mclrLow !== false) return false;
+      runner.tick(2000);
+      return cpu.cycles > c1;
+    })(), '');
+  // (p1-8) checkWiring: cảnh báo mất nguồn / MCLR; mạch mặc định không có cảnh báo pic.
+  check('(p1-8) checkWiring: mặc định không cảnh báo pic; bỏ W2/W3, PSU 0V/12V -> pic-nopower; MCLR->GND -> pic-mclr',
+    (() => {
+      const clean = checkWiring(benchToNetlist(defaultBenchState(830)));
+      if (clean.some((w) => w.id.startsWith('pic-'))) return false;
+      const stNoVdd = ledState8();
+      stNoVdd.wires = stNoVdd.wires.filter((w) => w.id !== 'W2' && w.id !== 'W3');
+      if (!checkWiring(benchToNetlist(stNoVdd)).some((w) => w.id === 'pic-nopower')) return false;
+      const st0V = ledState8();
+      st0V.components.find((c) => c.type === 'psu').props.volts = 0;
+      if (!checkWiring(benchToNetlist(st0V)).some((w) => w.id === 'pic-nopower')) return false;
+      const st12V = ledState8();
+      st12V.components.find((c) => c.type === 'psu').props.volts = 12;
+      if (!checkWiring(benchToNetlist(st12V)).some((w) => w.id === 'pic-nopower')) return false;
+      const stMclr = ledState8();
+      stMclr.wires = stMclr.wires.filter((w) => w.id !== 'W1');
+      stMclr.wires.push({ id: 'W-MCLR', a: 'c22', b: 'T-22' });
+      return checkWiring(benchToNetlist(stMclr)).some((w) => w.id === 'pic-mclr');
+    })(), '');
+}
+
+// Nhóm (p1-7): Issue 7 (phần còn lại) — gỡ thạch anh giữa chừng thì dừng ngay.
+// Mô phỏng đúng app.js: tick 50ms lấy lại cpu.clockHz = crystalFreq(state)
+// (0 khi không có thạch anh) rồi chạy runner.tick(cyclesForElapsedMs(...)).
+{
+  check('(p1-7) gỡ thạch anh giữa chừng: cycles dừng ngay, gắn lại thì chạy tiếp',
+    (() => {
+      const st = defaultBenchState(830);
+      st.components.push({ id: 'X0', type: 'crystal', anchor: 'a34', rot: 0, props: { freq: 4000000 } });
+      if (crystalFreq(st) !== 4000000) return false; // thạch anh nối đúng strip OSC1/OSC2 (b34/b35)
+      const cpu = createCPU();
+      const runner = new ProgramRunner(cpu);
+      if (!runner.loadAsm('LOOP\n GOTO LOOP').ok) return false;
+      cpu.clockHz = crystalFreq(st); // như loadC
+      runner.run();
+      runner.tick(cyclesForElapsedMs(50, cpu.clockHz));
+      if (!(cpu.cycles > 0)) return false;
+      // Gỡ thạch anh giữa chừng:
+      st.components = st.components.filter((c) => c.type !== 'crystal');
+      cpu.clockHz = crystalFreq(st) || 0; // app tick lấy lại mỗi 50ms
+      const c1 = cpu.cycles;
+      runner.tick(cyclesForElapsedMs(50, cpu.clockHz)); // 0 chu kỳ như app tick
+      if (cpu.cycles !== c1) return false;
+      runner.tick(50000); // kể cả tick với budget lớn cũng không chạy khi mất xung
+      if (cpu.cycles !== c1) return false;
+      cpu.step(); // step() trực tiếp cũng đóng băng khi clockHz=0
+      if (cpu.cycles !== c1) return false;
+      // Gắn lại thạch anh -> chạy tiếp.
+      st.components.push({ id: 'X0', type: 'crystal', anchor: 'a34', rot: 0, props: { freq: 4000000 } });
+      cpu.clockHz = crystalFreq(st);
+      runner.tick(cyclesForElapsedMs(50, cpu.clockHz));
+      return cpu.cycles > c1;
+    })(), '');
+}
+
+// Nhóm (p1-9): Issue 9 — phím bàn phím đang nhấn nối mạch cho LED/còi/7 thanh
+// (trước đây vôn kế đọc 5V qua phím nhấn nhưng LED 3D tối: mapping từ
+// netlist chưa nhấn không thấy VCC qua phím).
+// KHÔNG cần import mới: dùng check, createCPU, defaultBenchState,
+// benchToNetlist, resolvePeripherals, ledStates, buzzerStates,
+// sevenSegStates, solveCircuit, meterReadings (đã import sẵn trong
+// test-pic16.mjs). Chèn block dưới vào test-pic16.mjs (trước dòng tổng kết).
+
+// Nhóm (p1-9)
+{
+  const approx9 = (v, t, tol) => typeof v === 'number' && Number.isFinite(v) && Math.abs(v - t) <= tol;
+  const KP9 = { id: 'KP0', row: 0, col: 0 }; // phím (0,0) đang nhấn giữ
+  // Mạch gốc: VCC -> KP.R0 (a52), KP.C0 (f52) -> ...; MM0 ngang LED.
+  // Board 830: 63 cột, rail tới cột 50; keypad/LED/MM đặt ở cột 44–59
+  // (tránh chân PIC 22–41).
+  const baseState9 = () => {
+    const st = defaultBenchState(830);
+    st.components.push({ id: 'KP0', type: 'keypad', anchor: 'a52', rot: 0, props: {} });
+    let n = 300;
+    const w = (a, b) => st.wires.push({ id: 'W' + (n++), a, b });
+    w('b52', 'T+50'); // KP.R0 -> VCC
+    return { st, w };
+  };
+  const ledCircuit9 = () => {
+    const { st, w } = baseState9();
+    st.components.push({ id: 'LED0', type: 'led', anchor: 'a58', rot: 0, props: { color: '#DC2626' } });
+    st.components.push({ id: 'MM0', type: 'multimeter', anchor: 'a44', rot: 0, props: { mode: 'V' } });
+    w('g52', 'b58'); // KP.C0 -> LED.A
+    w('b59', 'T-50'); // LED.K -> GND
+    w('b44', 'b58'); // MM.P -> LED.A
+    w('b48', 'b59'); // MM.N -> LED.K
+    return st;
+  };
+  // (p1-9) LED: nhấn (0,0) -> solver SÁNG + vôn kế ≈5V + mapping (legacy) SÁNG.
+  check('(p1-9) LED nhấn (0,0): solver SÁNG, vôn kế ≈5V, mapping SÁNG',
+    (() => {
+      const st = ledCircuit9();
+      const cpu = createCPU();
+      cpu.setWiring(resolvePeripherals(benchToNetlist(st)));
+      const solverOn = ledStates(solveCircuit(st, cpu, [], KP9), st).find((s) => s.id === 'LED0').on;
+      const meterOn = meterReadings(st, cpu, [], KP9).voltmeters.find((m) => m.id === 'MM0').volts;
+      const legacyOn = ledStates(cpu, resolvePeripherals(benchToNetlist(st), KP9)).find((s) => s.id === 'LED0').on;
+      return solverOn === true && approx9(meterOn, 5, 0.05) && legacyOn === true;
+    })(), '');
+  // (p1-9) LED: nhả phím -> cả 3 cùng tắt (solver TỐI, vôn kế null, mapping TỐI).
+  check('(p1-9) LED nhả phím: solver TỐI, vôn kế null, mapping TỐI',
+    (() => {
+      const st = ledCircuit9();
+      const cpu = createCPU();
+      cpu.setWiring(resolvePeripherals(benchToNetlist(st)));
+      const solverOff = ledStates(solveCircuit(st, cpu, [], null), st).find((s) => s.id === 'LED0').on;
+      const meterOff = meterReadings(st, cpu, [], null).voltmeters.find((m) => m.id === 'MM0').volts;
+      const legacyOff = ledStates(cpu, resolvePeripherals(benchToNetlist(st))).find((s) => s.id === 'LED0').on;
+      return solverOff === false && meterOff === null && legacyOff === false;
+    })(), '');
+  // (p1-9) Mapping chân KHÔNG bị phím nhấn làm bẩn: C0 nối RB0 thì
+  // cols[0]=RB0, nhưng rows[0] vẫn null khi nhấn (closure chỉ dùng cho
+  // VCC/GND, không cho picPinInNet).
+  check('(p1-9) C0->RB0: cols[0]=RB0, rows[0] vẫn null khi nhấn',
+    (() => {
+      const st = ledCircuit9();
+      st.wires.push({ id: 'W-RB0', a: 'g52', b: 'i29' }); // KP.C0 -> RB0 (h29)
+      const unpressed = resolvePeripherals(benchToNetlist(st));
+      const pressed = resolvePeripherals(benchToNetlist(st), KP9);
+      const kpU = unpressed.keypads.find((k) => k.id === 'KP0');
+      const kpP = pressed.keypads.find((k) => k.id === 'KP0');
+      return kpU.cols[0] && kpU.cols[0].id === 'RB0' && kpP.cols[0] && kpP.cols[0].id === 'RB0'
+        && kpU.rows[0] === null && kpP.rows[0] === null;
+    })(), '');
+  // (p1-9) Còi: P nối C0, N nối GND -> nhấn thì KÊU (solver + mapping, dòng ≈22.7mA), nhả thì tắt.
+  check('(p1-9) còi nhấn (0,0): solver KÊU, mapping KÊU, dòng ≈22.7mA; nhả thì tắt',
+    (() => {
+      const { st, w } = baseState9();
+      st.components.push({ id: 'BUZ0', type: 'buzzer', anchor: 'c58', rot: 0, props: {} });
+      w('g52', 'b58'); // KP.C0 -> BUZ.P
+      w('b59', 'T-50'); // BUZ.N -> GND
+      const cpu = createCPU();
+      cpu.setWiring(resolvePeripherals(benchToNetlist(st)));
+      const solverOn = buzzerStates(solveCircuit(st, cpu, [], KP9), st).find((s) => s.id === 'BUZ0').on;
+      const legacyOn = buzzerStates(cpu, resolvePeripherals(benchToNetlist(st), KP9)).find((s) => s.id === 'BUZ0').on;
+      const amps = solveCircuit(st, cpu, [], KP9).branchCurrent.get('BUZ0');
+      if (!(solverOn === true && legacyOn === true && approx9(amps, 5 / 220, 0.001))) return false;
+      const solverOff = buzzerStates(solveCircuit(st, cpu, [], null), st).find((s) => s.id === 'BUZ0').on;
+      const legacyOff = buzzerStates(cpu, resolvePeripherals(benchToNetlist(st))).find((s) => s.id === 'BUZ0').on;
+      return solverOff === false && legacyOff === false;
+    })(), '');
+  // (p1-9) LED 7 thanh: đoạn a nối C0, COM nối GND -> nhấn thì chỉ đoạn a
+  // SÁNG (solver + mapping); nhả thì tất cả tối.
+  check('(p1-9) 7 thanh nhấn (0,0): chỉ đoạn a SÁNG (solver + mapping); nhả thì tối',
+    (() => {
+      const { st, w } = baseState9();
+      st.components.push({ id: 'SEG0', type: 'sevenseg', anchor: 'a58', rot: 0, props: { common: 'cathode' } });
+      w('b58', 'g52'); // đoạn a (a58) -> KP.C0
+      w('g61', 'T-50'); // COM (f61) -> GND
+      const cpu = createCPU();
+      cpu.setWiring(resolvePeripherals(benchToNetlist(st)));
+      const onlyA = (o) => o && o.a === true && ['b', 'c', 'd', 'e', 'f', 'g', 'dp'].every((t) => o[t] === false);
+      const allOff = (o) => o && Object.values(o).every((v) => v === false);
+      const solverSeg = sevenSegStates(solveCircuit(st, cpu, [], KP9), st).find((s) => s.id === 'SEG0');
+      const legacySeg = sevenSegStates(cpu, resolvePeripherals(benchToNetlist(st), KP9)).find((s) => s.id === 'SEG0');
+      if (!(onlyA(solverSeg && solverSeg.on) && onlyA(legacySeg && legacySeg.on))) return false;
+      const solverOff = sevenSegStates(solveCircuit(st, cpu, [], null), st).find((s) => s.id === 'SEG0');
+      const legacyOff = sevenSegStates(cpu, resolvePeripherals(benchToNetlist(st))).find((s) => s.id === 'SEG0');
+      return allOff(solverOff && solverOff.on) && allOff(legacyOff && legacyOff.on);
+    })(), '');
+  // (p1-9) Nhấn phím khác (1,2) không nối mạch: LED vẫn tối.
+  check('(p1-9) nhấn phím khác (1,2): LED vẫn tối (solver + mapping)',
+    (() => {
+      const st = ledCircuit9();
+      const cpu = createCPU();
+      cpu.setWiring(resolvePeripherals(benchToNetlist(st)));
+      const other = { id: 'KP0', row: 1, col: 2 };
+      const solverOn = ledStates(solveCircuit(st, cpu, [], other), st).find((s) => s.id === 'LED0').on;
+      const legacyOn = ledStates(cpu, resolvePeripherals(benchToNetlist(st), other)).find((s) => s.id === 'LED0').on;
+      return solverOn === false && legacyOn === false;
+    })(), '');
+}
+
+// Nhóm (p1-10): P1 Issue 10 — còi buzzer low-side PIC drive.
+// Fragment test cho test-pic16.mjs — chèn nguyên khối vào file test
+// (vị trí gợi ý: ngay sau nhóm (l-d), trước nhóm (m)).
+// KHÔNG cần import mới: dùng createCPU, defaultBenchState,
+// benchToNetlist, resolvePeripherals, buzzerStates, solveCircuit — tất cả
+// đã import sẵn ở đầu test-pic16.mjs.
+// Quy ước lỗ/strip như các nhóm (l)/(i): còi ở c10 (P=c10, N=c11),
+// strip RB0 = h29, strip RB1 = h28, lỗ GND rail T-5, cọc nguồn PSU1.+.
+
+// ===========================================================================
+// (p1-10) CÒI LOW-SIDE: P→VCC/N→RB0 và P→RB1/N→RB0 (issue 10)
+// Trước fix: legacy buzzerStates chỉ kêu khi bz.gnd (N về GND), còi nối
+// N vào chân PIC ngõ ra mức 0 im lặng dù đủ 5V trên 2 đầu. Fix ở
+// wiring.js: resolvePeripherals ghi thêm nPin, buzzerStatesLegacy tính
+// vN từ nPin như cathPin của LED. Đường solver không đổi: còi vốn đã là
+// nhánh 220Ω trong solveCircuit nên low-side đã kêu sẵn (kiểm chứng ở
+// (p1-10e) dưới đây).
+// ===========================================================================
+// (p1-10a) Mapping: P→VCC, N→RB0 ghi nPin=RB0
+{
+  const st = defaultBenchState();
+  st.components.push({ id: 'BUZ0', type: 'buzzer', anchor: 'c10', rot: 0, props: {} });
+  st.wires.push({ id: 'W10', a: 'PSU1.+', b: 'c10', color: '#DC2626' });
+  st.wires.push({ id: 'W11', a: 'c11', b: 'h29', color: '#2563EB' });
+  const mapping = resolvePeripherals(benchToNetlist(st));
+  check('(p1-10a) còi P→VCC/N→RB0: mapping ghi nPin=RB0, vccP=true, gnd=false',
+    mapping.buzzers[0].nPin && mapping.buzzers[0].nPin.id === 'RB0'
+    && mapping.buzzers[0].vccP === true && mapping.buzzers[0].gnd === false,
+    JSON.stringify(mapping.buzzers[0]));
+}
+// (p1-10b) P→VCC, N=RB0: out 0 -> kêu, out 1 -> tắt
+{
+  const st = defaultBenchState();
+  st.components.push({ id: 'BUZ0', type: 'buzzer', anchor: 'c10', rot: 0, props: {} });
+  st.wires.push({ id: 'W10', a: 'PSU1.+', b: 'c10', color: '#DC2626' });
+  st.wires.push({ id: 'W11', a: 'c11', b: 'h29', color: '#2563EB' });
+  const mapping = resolvePeripherals(benchToNetlist(st));
+  const cpu = createCPU();
+  cpu.setWiring(mapping);
+  cpu.writeFile(0x03, 0x20); // bank1: RP0=1
+  cpu.writeFile(0x06, 0x00); // TRISB = 0 (ngõ ra)
+  cpu.writeFile(0x03, 0x00); // về bank0
+  cpu.writeFile(0x06, 0x00); // PORTB = 0x00 -> RB0=0
+  check('(p1-10b) còi P→VCC, N=RB0 out 0: còi KÊU',
+    buzzerStates(cpu, mapping).find((s) => s.id === 'BUZ0').on === true, '');
+  cpu.writeFile(0x06, 0x01); // PORTB = 0x01 -> RB0=1
+  check('(p1-10b) còi P→VCC, N=RB0 out 1: còi TẮT',
+    buzzerStates(cpu, mapping).find((s) => s.id === 'BUZ0').on === false, '');
+}
+// (p1-10c) P=RB1=1, N=RB0=0: kêu (2 chân PIC kẹp 2 đầu còi)
+{
+  const st = defaultBenchState();
+  st.components.push({ id: 'BUZ0', type: 'buzzer', anchor: 'c10', rot: 0, props: {} });
+  st.wires.push({ id: 'W10', a: 'c10', b: 'h28', color: '#2563EB' }); // P -> RB1
+  st.wires.push({ id: 'W11', a: 'c11', b: 'h29', color: '#2563EB' }); // N -> RB0
+  const mapping = resolvePeripherals(benchToNetlist(st));
+  const cpu = createCPU();
+  cpu.setWiring(mapping);
+  cpu.writeFile(0x03, 0x20); // bank1: RP0=1
+  cpu.writeFile(0x06, 0x00); // TRISB = 0 (ngõ ra)
+  cpu.writeFile(0x03, 0x00); // về bank0
+  cpu.writeFile(0x06, 0x02); // PORTB = 0x02 -> RB1=1, RB0=0
+  check('(p1-10c) còi P=RB1=1, N=RB0=0: còi KÊU',
+    buzzerStates(cpu, mapping).find((s) => s.id === 'BUZ0').on === true, '');
+  cpu.writeFile(0x06, 0x03); // PORTB = 0x03 -> RB1=1, RB0=1
+  check('(p1-10c) còi P=RB1=1, N=RB0=1: còi TẮT (không có áp trên 2 đầu)',
+    buzzerStates(cpu, mapping).find((s) => s.id === 'BUZ0').on === false, '');
+}
+// (p1-10d) Hồi quy: P=RB1=1, N→GND vẫn kêu (đường cũ, test l-b)
+{
+  const st = defaultBenchState();
+  st.components.push({ id: 'BUZ0', type: 'buzzer', anchor: 'c10', rot: 0, props: {} });
+  st.wires.push({ id: 'W10', a: 'c10', b: 'h28', color: '#2563EB' }); // P -> RB1
+  st.wires.push({ id: 'W11', a: 'c11', b: 'T-5', color: '#0F172A' }); // N -> GND
+  const mapping = resolvePeripherals(benchToNetlist(st));
+  const cpu = createCPU();
+  cpu.setWiring(mapping);
+  cpu.writeFile(0x03, 0x20); // bank1: RP0=1
+  cpu.writeFile(0x06, 0x00); // TRISB = 0 (ngõ ra)
+  cpu.writeFile(0x03, 0x00); // về bank0
+  cpu.writeFile(0x06, 0x02); // PORTB = 0x02 -> RB1=1
+  check('(p1-10d) còi P=RB1=1, N→GND: còi KÊU (hồi quy)',
+    buzzerStates(cpu, mapping).find((s) => s.id === 'BUZ0').on === true, '');
+}
+// (p1-10e) Đường solver: P→VCC, N=RB0 out 0 kêu + dòng ≈ 22.7mA (5V/220Ω);
+// N=RB0 out 1 thì tắt. Solver vốn đã có nhánh còi nên low-side chạy sẵn,
+// test này khóa hành vi đó lại (buzzerStates(solveCircuit, st)).
+{
+  const approx = (v, target, tol) => typeof v === 'number' && Number.isFinite(v) && Math.abs(v - target) <= tol;
+  const st = defaultBenchState();
+  st.components.push({ id: 'BUZ0', type: 'buzzer', anchor: 'c10', rot: 0, props: {} });
+  st.wires.push({ id: 'W10', a: 'PSU1.+', b: 'c10', color: '#DC2626' });
+  st.wires.push({ id: 'W11', a: 'c11', b: 'h29', color: '#2563EB' });
+  const cpu = createCPU();
+  cpu.writeFile(0x03, 0x20); // bank1: RP0=1
+  cpu.writeFile(0x06, 0x00); // TRISB = 0 (ngõ ra)
+  cpu.writeFile(0x03, 0x00); // về bank0
+  cpu.writeFile(0x06, 0x00); // PORTB = 0x00 -> RB0=0
+  const solved = solveCircuit(st, cpu);
+  check('(p1-10e) solver P→VCC, N=RB0 out 0: còi KÊU, dòng ≈ 22.7mA',
+    buzzerStates(solved, st).find((s) => s.id === 'BUZ0').on === true
+    && approx(solved.branchCurrent.get('BUZ0'), 5 / 220, 0.001),
+    `I=${solved.branchCurrent.get('BUZ0')}`);
+  cpu.writeFile(0x06, 0x01); // PORTB = 0x01 -> RB0=1
+  check('(p1-10e) solver P→VCC, N=RB0 out 1: còi TẮT',
+    buzzerStates(solveCircuit(st, cpu), st).find((s) => s.id === 'BUZ0').on === false, '');
+}
+
+// Nhóm (p1-11): P1 Issue 11 — nút active-high (về VCC) và nút giữa 2 chân PIC.
+// Fragment test cho test-pic16.mjs — chèn nguyên khối vào file test
+// (vị trí gợi ý: ngay sau nhóm (i-d), trước nhóm (j)).
+// KHÔNG cần import mới: dùng createCPU, defaultBenchState,
+// benchToNetlist, resolvePeripherals, applyButtonToCpu — tất cả đã import
+// sẵn ở đầu test-pic16.mjs.
+// Quy ước lỗ/strip như nhóm (i-c): nút ở c10 (T1=c10, T2=c11),
+// strip RB0 = h29, strip RB1 = h28, lỗ GND rail T-5, cọc nguồn PSU1.+.
+
+// ===========================================================================
+// (p1-11) NÚT ACTIVE-HIGH + NÚT GIỮA 2 CHÂN PIC (issue 11)
+// Trước fix: applyButtonToCpu nhấn lấy otherLevel (chỉ biết VCC/GND) và
+// thả luôn về 1 (giả định pull-up). Nút về VCC: nhấn=1, thả=1 nên CPU
+// không bao giờ thấy lần nhấn; nút giữa 2 chân PIC: nhấn luôn =1 bất kể
+// chân kia. Fix ở wiring.js: resolvePeripherals ghi thêm otherPin (chân
+// PIC đầu kia) + idleLevel (VCC -> 0, còn lại -> 1); applyButtonToCpu
+// nhấn lấy mức live của otherPin (nếu có), thả về idleLevel.
+// ===========================================================================
+// (p1-11a) Mapping: T1=RB0, T2=VCC ghi otherLevel=1, idleLevel=0
+{
+  const st = defaultBenchState();
+  st.components.push({ id: 'BTN0', type: 'button', anchor: 'c10', rot: 0, props: {} });
+  st.wires.push({ id: 'W10', a: 'c10', b: 'h29', color: '#2563EB' }); // T1 -> RB0
+  st.wires.push({ id: 'W11', a: 'PSU1.+', b: 'c11', color: '#DC2626' }); // T2 -> VCC
+  const mapping = resolvePeripherals(benchToNetlist(st));
+  check('(p1-11a) nút RB0–VCC: mapping pin=RB0, otherLevel=1, idleLevel=0',
+    mapping.buttons[0].pin && mapping.buttons[0].pin.id === 'RB0'
+    && mapping.buttons[0].otherLevel === 1 && mapping.buttons[0].idleLevel === 0,
+    JSON.stringify(mapping.buttons[0]));
+}
+// (p1-11b) BTN T1=RB0, T2=VCC, RB0 input: nhấn -> PORTB bit0=1, thả -> 0
+{
+  const st = defaultBenchState();
+  st.components.push({ id: 'BTN0', type: 'button', anchor: 'c10', rot: 0, props: {} });
+  st.wires.push({ id: 'W10', a: 'c10', b: 'h29', color: '#2563EB' }); // T1 -> RB0
+  st.wires.push({ id: 'W11', a: 'PSU1.+', b: 'c11', color: '#DC2626' }); // T2 -> VCC
+  const mapping = resolvePeripherals(benchToNetlist(st));
+  const cpu = createCPU();
+  cpu.setWiring(mapping);
+  cpu.writeFile(0x03, 0x20); // bank1: RP0=1
+  cpu.writeFile(0x06, 0xff); // TRISB = 0xFF (RB0 input)
+  cpu.writeFile(0x03, 0x00); // về bank0
+  applyButtonToCpu(cpu, mapping, 'BTN0', true);
+  check('(p1-11b) nút RB0–VCC: nhấn -> PORTB bit0 = 1',
+    (cpu.readPort(1) & 1) === 1, `PORTB=${cpu.readPort(1).toString(16)}`);
+  applyButtonToCpu(cpu, mapping, 'BTN0', false);
+  check('(p1-11b) nút RB0–VCC: thả -> PORTB bit0 = 0',
+    (cpu.readPort(1) & 1) === 0, `PORTB=${cpu.readPort(1).toString(16)}`);
+}
+// (p1-11c) Nút RB0↔RB1 (RB1 output 0): mapping ghi otherPin=RB1,
+// nhấn -> RB0 đọc 0; thả -> RB0 đọc 1 (mở)
+{
+  const st = defaultBenchState();
+  st.components.push({ id: 'BTN0', type: 'button', anchor: 'c10', rot: 0, props: {} });
+  st.wires.push({ id: 'W10', a: 'c10', b: 'h29', color: '#2563EB' }); // T1 -> RB0
+  st.wires.push({ id: 'W11', a: 'c11', b: 'h28', color: '#2563EB' }); // T2 -> RB1
+  const mapping = resolvePeripherals(benchToNetlist(st));
+  check('(p1-11c) nút RB0–RB1: mapping pin=RB0, otherPin=RB1, idleLevel=1',
+    mapping.buttons[0].pin && mapping.buttons[0].pin.id === 'RB0'
+    && mapping.buttons[0].otherPin && mapping.buttons[0].otherPin.id === 'RB1'
+    && mapping.buttons[0].idleLevel === 1,
+    JSON.stringify(mapping.buttons[0]));
+  const cpu = createCPU();
+  cpu.setWiring(mapping);
+  cpu.writeFile(0x03, 0x20); // bank1: RP0=1
+  cpu.writeFile(0x06, 0xfd); // TRISB = 0xFD (RB1 out, RB0 in)
+  cpu.writeFile(0x03, 0x00); // về bank0
+  cpu.writeFile(0x06, 0x00); // PORTB = 0x00 -> RB1=0
+  applyButtonToCpu(cpu, mapping, 'BTN0', true);
+  check('(p1-11c) nút RB0–RB1(out 0): nhấn -> RB0 đọc 0', cpu.pinLevel(1, 0) === 0, '');
+  applyButtonToCpu(cpu, mapping, 'BTN0', false);
+  check('(p1-11c) nút RB0–RB1(out 0): thả -> RB0 đọc 1', cpu.pinLevel(1, 0) === 1, '');
+}
+// (p1-11d) Mức nhấn theo live chân kia: RB1 đổi sang out 1 thì nhấn -> RB0 đọc 1
+{
+  const st = defaultBenchState();
+  st.components.push({ id: 'BTN0', type: 'button', anchor: 'c10', rot: 0, props: {} });
+  st.wires.push({ id: 'W10', a: 'c10', b: 'h29', color: '#2563EB' }); // T1 -> RB0
+  st.wires.push({ id: 'W11', a: 'c11', b: 'h28', color: '#2563EB' }); // T2 -> RB1
+  const mapping = resolvePeripherals(benchToNetlist(st));
+  const cpu = createCPU();
+  cpu.setWiring(mapping);
+  cpu.writeFile(0x03, 0x20); // bank1: RP0=1
+  cpu.writeFile(0x06, 0xfd); // TRISB = 0xFD (RB1 out, RB0 in)
+  cpu.writeFile(0x03, 0x00); // về bank0
+  cpu.writeFile(0x06, 0x02); // PORTB = 0x02 -> RB1=1
+  applyButtonToCpu(cpu, mapping, 'BTN0', true);
+  check('(p1-11d) nút RB0–RB1(out 1): nhấn -> RB0 đọc 1 (theo mức live)',
+    cpu.pinLevel(1, 0) === 1, '');
+}
+// (p1-11e) Hồi quy: nút RB1–GND vẫn nhấn -> 0, thả -> 1 (như test i-c)
+{
+  const st = defaultBenchState();
+  st.components.push({ id: 'BTN0', type: 'button', anchor: 'c10', rot: 0, props: {} });
+  st.wires.push({ id: 'W10', a: 'c10', b: 'h28', color: '#2563EB' }); // T1 -> RB1
+  st.wires.push({ id: 'W11', a: 'c11', b: 'T-5', color: '#0F172A' }); // T2 -> GND
+  const mapping = resolvePeripherals(benchToNetlist(st));
+  const cpu = createCPU();
+  cpu.setWiring(mapping);
+  applyButtonToCpu(cpu, mapping, 'BTN0', true);
+  check('(p1-11e) nút RB1–GND: nhấn -> RB1 đọc 0', cpu.pinLevel(1, 1) === 0, '');
+  applyButtonToCpu(cpu, mapping, 'BTN0', false);
+  check('(p1-11e) nút RB1–GND: thả -> RB1 đọc 1 (pull-up)', cpu.pinLevel(1, 1) === 1, '');
+}
+
+// Nhóm (p1-12): Issue 12 — LCD 4-bit, display-off bị bỏ qua, E chỉ chốt
+// từ CPU (writeSFR PORTx).
+// KHÔNG cần import mới: dùng check, createCPU, assemble, defaultNetlist,
+// resolvePeripherals, checkWiring, readFileSync (đã import sẵn trong
+// test-pic16.mjs). Chèn block dưới vào test-pic16.mjs (trước dòng tổng kết).
+
+// Nhóm (p1-12)
+{
+  // Netlist LCD 4-bit: chỉ RS/E/D4–D7 nối (gỡ dây D0–D3 khỏi defaultNetlist).
+  const net4bit12 = () => {
+    const net = defaultNetlist();
+    net.wires = net.wires.filter((w) => !(
+      w.a === 'LCD1.D0' || w.a === 'LCD1.D1' || w.a === 'LCD1.D2' || w.a === 'LCD1.D3'));
+    return net;
+  };
+  const trisOut12 = (cpu) => {
+    cpu.writeFile(0x03, 0x20); // bank1
+    cpu.writeFile(0x08, 0x00); // TRISD = 0 (output)
+    cpu.writeFile(0x09, 0x00); // TRISE = 0 (output)
+    cpu.writeFile(0x03, 0x00); // bank0
+  };
+  // Chốt 1 nibble (bit 0-3) lên D4–D7 qua PORTD + xung E (RE1), RS=RE0.
+  const poke412 = (cpu, rs, nib) => {
+    cpu.writeFile(0x08, (nib & 0xf) << 4); // PORTD: D4-D7 = nibble
+    cpu.writeFile(0x09, rs ? 0x01 : 0x00); // PORTE: RS, E=0
+    cpu.writeFile(0x09, rs ? 0x03 : 0x02); // E=1 -> chốt nibble
+    cpu.writeFile(0x09, rs ? 0x01 : 0x00); // E=0
+  };
+  const cmd412 = (cpu, b) => { poke412(cpu, 0, (b >> 4) & 0xf); poke412(cpu, 0, b & 0xf); };
+  const dat412 = (cpu, b) => { poke412(cpu, 1, (b >> 4) & 0xf); poke412(cpu, 1, b & 0xf); };
+  const init4bit12 = (cpu) => {
+    poke412(cpu, 0, 0x3); poke412(cpu, 0, 0x3); poke412(cpu, 0, 0x3); poke412(cpu, 0, 0x2);
+    cmd412(cpu, 0x28); // function set: 4-bit, 2 dòng
+    cmd412(cpu, 0x0c); // display on
+    cmd412(cpu, 0x01); // clear
+    cmd412(cpu, 0x06); // entry mode
+  };
+  // (p1-12) Mapping 4-bit: complete, mode='4bit', missing=[].
+  check("(p1-12) LCD 4-bit: mapping complete, mode='4bit', missing=[]",
+    (() => {
+      const mapping = resolvePeripherals(net4bit12());
+      return mapping.lcd.complete === true && mapping.lcd.mode === '4bit' && mapping.lcd.missing.length === 0;
+    })(), '');
+  // (p1-12) Chạy init 4-bit + ghi HELLO -> LCD hiện HELLO.
+  check("(p1-12) LCD 4-bit: init + ghi HELLO -> dòng 1 = 'HELLO'",
+    (() => {
+      const cpu = createCPU();
+      cpu.setWiring(resolvePeripherals(net4bit12()));
+      trisOut12(cpu);
+      init4bit12(cpu);
+      for (const ch of 'HELLO') dat412(cpu, ch.charCodeAt(0));
+      return cpu.lcd.getLines()[0].startsWith('HELLO') && cpu.lcd.displayOn === true;
+    })(), '');
+  // (p1-12) Gửi 0x08 (display off) -> displayOn=false, DDRAM giữ HELLO;
+  // gửi 0x0C -> displayOn=true, chữ về.
+  check("(p1-12) LCD 4-bit: 0x08 -> displayOn=false, DDRAM giữ HELLO; 0x0C -> chữ về",
+    (() => {
+      const cpu = createCPU();
+      cpu.setWiring(resolvePeripherals(net4bit12()));
+      trisOut12(cpu);
+      init4bit12(cpu);
+      for (const ch of 'HELLO') dat412(cpu, ch.charCodeAt(0));
+      cmd412(cpu, 0x08);
+      if (!(cpu.lcd.displayOn === false && cpu.lcd.getLines()[0].startsWith('HELLO'))) return false;
+      cmd412(cpu, 0x0c);
+      return cpu.lcd.displayOn === true && cpu.lcd.getLines()[0].startsWith('HELLO');
+    })(), '');
+  // (p1-12) Chương trình asm thật chạy init 4-bit + ghi 'HI' (end-to-end).
+  check("(p1-12) LCD 4-bit: chương trình asm chạy thật -> LCD hiện 'HI'",
+    (() => {
+      const prog = `
+    BANKSEL TRISD
+    CLRF TRISD
+    CLRF TRISE
+    BANKSEL PORTD
+    MOVLW 0x03
+    CALL SEND_NIB
+    MOVLW 0x03
+    CALL SEND_NIB
+    MOVLW 0x03
+    CALL SEND_NIB
+    MOVLW 0x02
+    CALL SEND_NIB
+    MOVLW 0x28
+    CALL LCD_CMD
+    MOVLW 0x0C
+    CALL LCD_CMD
+    MOVLW 0x01
+    CALL LCD_CMD
+    MOVLW 0x06
+    CALL LCD_CMD
+    MOVLW 'H'
+    CALL LCD_DATA
+    MOVLW 'I'
+    CALL LCD_DATA
+    GOTO $
+SEND_NIB
+    MOVWF 0x21
+    SWAPF 0x21, F
+    MOVF 0x21, W
+    ANDLW 0xF0
+    MOVWF PORTD
+    BSF PORTE, 1
+    BCF PORTE, 1
+    RETURN
+LCD_CMD
+    BCF PORTE, 0
+    CALL SEND_BYTE
+    RETURN
+LCD_DATA
+    BSF PORTE, 0
+    CALL SEND_BYTE
+    RETURN
+SEND_BYTE
+    MOVWF 0x20
+    SWAPF 0x20, W
+    ANDLW 0x0F
+    CALL SEND_NIB
+    MOVF 0x20, W
+    ANDLW 0x0F
+    CALL SEND_NIB
+    RETURN
+`;
+      const r = assemble(prog);
+      if (r.errors.length) return false;
+      const cpu = createCPU();
+      cpu.setWiring(resolvePeripherals(net4bit12()));
+      cpu.loadProgram(r.program);
+      cpu.run(200000);
+      return cpu.lcd.getLines()[0].startsWith('HI');
+    })(), '');
+  // (p1-12) E xung từ ngoài CPU (setPinInput): RE1 là input, code lái
+  // RS/data, xung E do bên ngoài đưa vào thì LCD vẫn chốt.
+  check("(p1-12) E ngoài CPU (setPinInput): init 4-bit + ghi 'H' -> LCD hiện 'H'",
+    (() => {
+      const cpu = createCPU();
+      cpu.setWiring(resolvePeripherals(net4bit12()));
+      cpu.writeFile(0x03, 0x20); // bank1
+      cpu.writeFile(0x08, 0x00); // TRISD = 0 (output: data)
+      cpu.writeFile(0x09, 0x02); // TRISE = 0x02 (RE1 input = E ngoài, RE0 output = RS)
+      cpu.writeFile(0x03, 0x00); // bank0
+      const pokeExt = (rs, nib) => {
+        cpu.writeFile(0x08, (nib & 0xf) << 4); // PORTD: D4-D7
+        cpu.writeFile(0x09, rs ? 0x01 : 0x00); // PORTE latch: RS (bit E không lái vì RE1 là input)
+        cpu.setPinInput(4, 1, 0);
+        cpu.setPinInput(4, 1, 1); // cạnh lên E từ ngoài -> chốt nibble
+        cpu.setPinInput(4, 1, 0);
+      };
+      const cmdExt = (b) => { pokeExt(0, (b >> 4) & 0xf); pokeExt(0, b & 0xf); };
+      const datExt = (b) => { pokeExt(1, (b >> 4) & 0xf); pokeExt(1, b & 0xf); };
+      pokeExt(0, 0x3); pokeExt(0, 0x3); pokeExt(0, 0x3); pokeExt(0, 0x2);
+      cmdExt(0x28); cmdExt(0x0c); cmdExt(0x01); cmdExt(0x06);
+      datExt('H'.charCodeAt(0));
+      return cpu.lcd.getLines()[0].startsWith('H');
+    })(), '');
+  // (p1-12) Hồi quy 8-bit: defaultNetlist, poke 8-bit 'HI' -> hiện như cũ.
+  check("(p1-12) hồi quy 8-bit: mapping mode='8bit', poke 'HI' hiện đúng",
+    (() => {
+      const mapping = resolvePeripherals(defaultNetlist());
+      if (mapping.lcd.mode !== '8bit') return false;
+      const cpu = createCPU();
+      cpu.setWiring(resolvePeripherals(defaultNetlist()));
+      trisOut12(cpu);
+      const poke8 = (rs, data) => {
+        cpu.writeFile(0x08, data);
+        cpu.writeFile(0x09, rs ? 0x01 : 0x00);
+        cpu.writeFile(0x09, rs ? 0x03 : 0x02);
+        cpu.writeFile(0x09, rs ? 0x01 : 0x00);
+      };
+      poke8(0, 0x01);
+      poke8(1, 0x48); poke8(1, 0x49);
+      return cpu.lcd.getLines()[0].startsWith('HI');
+    })(), '');
+  // (p1-12) checkWiring: LCD 4-bit không bị cảnh báo thiếu D0–D3;
+  // thiếu D7 (8-bit) vẫn báo missing=[D7] + "thiếu: D7" như cũ.
+  check('(p1-12) checkWiring LCD 4-bit: không cảnh báo lcd/open D0–D3; thiếu D7 vẫn báo đúng',
+    (() => {
+      const warns4 = checkWiring(net4bit12());
+      if (warns4.some((w) => w.id.startsWith('lcd-'))) return false;
+      if (warns4.some((w) => w.id.startsWith('open-LCD1.D') && /D[0-3]$/.test(w.id))) return false;
+      const net = defaultNetlist();
+      net.wires = net.wires.filter((w) => !(w.a === 'LCD1.D7' && w.b === 'PIC.RD7'));
+      const mapping = resolvePeripherals(net);
+      const warns = checkWiring(net);
+      return !mapping.lcd.complete && mapping.lcd.missing.join(',') === 'D7'
+        && warns.some((w) => w.message.includes('thiếu: D7'));
+    })(), '');
+  // (p1-12) Cầu nối hiển thị: app.js getLcd có displayOn; bench.js vẽ tối khi display off.
+  check('(p1-12) app.js getLcd trả displayOn; bench.js vẽ tối khi displayOn=false',
+    (() => {
+      const appSrc = readFileSync(new URL('./public/app.js', import.meta.url), 'utf8');
+      const benchSrc = readFileSync(new URL('./public/bench.js', import.meta.url), 'utf8');
+      return appSrc.includes('displayOn: cpu.lcd.displayOn')
+        && benchSrc.includes("lcd.displayOn === false ? '0' : '1'")
+        && benchSrc.includes('lcd.displayOn !== false');
+    })(), '');
 }
 
 console.log(`\nKết quả: ${pass} pass, ${fail} fail`);

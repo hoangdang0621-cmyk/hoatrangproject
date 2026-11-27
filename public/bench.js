@@ -17,10 +17,10 @@ import {
   parseScopePost, scopePostPos, SCOPE_POST_DX, SCOPE_POST_Y, SCOPE_POST_DZ, SCOPE_DEFAULT_TX, SCOPE_DEFAULT_TZ,
   parseSerialPost, serialPostPos, SERIAL_POST_DX, SERIAL_POST_Y, SERIAL_POST_DZ, SERIAL_DEFAULT_TX, SERIAL_DEFAULT_TZ,
   clampCamTarget, zoomTowardPoint, panTarget, meterMode, crystalFreq,
-} from './bench-model.js?v=20261125be';
-import { checkWiring, SIGNAL_COLORS, SEVEN_SEG_TERMS, KEYPAD_KEYS } from './wiring.js?v=20261125bm';
-import { formatVolts, formatAmps, formatCurrentDirection, sevenSegDigit } from './circuit-solver.js?v=20261125bm';
-import { LABS, getLab, buildLabState } from './labs.js?v=20261125be';
+} from './bench-model.js?v=20261125bn';
+import { checkWiring, SIGNAL_COLORS, SEVEN_SEG_TERMS, KEYPAD_KEYS } from './wiring.js?v=20261125bn';
+import { formatVolts, formatAmps, formatCurrentDirection, sevenSegDigit } from './circuit-solver.js?v=20261125bn';
+import { LABS, getLab, buildLabState } from './labs.js?v=20261125bn';
 
 const $ = (id) => document.getElementById(id);
 const benchView = $('benchView');
@@ -140,7 +140,7 @@ function main() {
       // Netlist vào CPU KHÔNG có phím đang nhấn (xem chú thích trên).
       b.applyBenchNetlist(benchToNetlist(state, pressedIds()), state, pressedIds(), pressedKeypad);
       for (const c of state.components) {
-        if (c.type === 'pot') b.setPot(c.id, ((c.props?.pct ?? 0) / 100) * 5);
+        if (c.type === 'pot') b.setPot(c.id, c.props?.pct ?? 0);
       }
     }
     renderChecks();
@@ -834,10 +834,15 @@ void main() {
           <select class="select" id="inspLedColor">${ledOpts}</select>
           <p class="sub">LED sáng khi anode ở mức 1 và cathode về GND (hoặc mức 0).</p>`;
       } else if (comp.type === 'pot') {
+        // Số volt wiper đọc từ SOLVER (điện áp thật của net chân VCC ×
+        // pct), không tính (pct/100)*5: PSU 3V, núm 50% thì ~1,5V; chân
+        // GND chưa nối thì wiper lơ lửng, hiện "—".
         const pct = comp.props?.pct ?? 0;
-        body = `<label class="bench-insp-label" for="inspPotRange">Chiết áp — <span id="inspPotVal">${((pct / 100) * 5).toFixed(2)} V</span></label>
+        const b = bridge();
+        const wv = b && typeof b.getPotVolts === 'function' ? b.getPotVolts(comp.id) : null;
+        body = `<label class="bench-insp-label" for="inspPotRange">Chiết áp — <span id="inspPotVal">${wv === null || wv === undefined ? '—' : wv.toFixed(2) + ' V'}</span></label>
           <input type="range" class="pot-slider" id="inspPotRange" min="0" max="100" step="1" value="${pct}">
-          <p class="sub">Wiper nối kênh AN nào thì ADC đọc điện áp đó (0–5V).</p>`;
+          <p class="sub">Wiper nối kênh AN nào thì ADC đọc điện áp đó (0 đến điện áp nguồn). Chân GND chưa nối thì wiper lơ lửng, ADC đọc 0.</p>`;
       } else if (comp.type === 'button') {
         body = `<p class="sub">Nhấn giữ linh kiện trên bàn: nối 2 chân T1–T2 với nhau như công tắc (vd nối tiếp nguồn–LED qua nút thì nhấn mới sáng). Nếu 1 chân nối chân PIC thì nhấn kéo chân đó về mức 0 (active-low, có pull-up).</p>`;
       } else if (comp.type === 'lcd') {
@@ -1024,10 +1029,15 @@ void main() {
         potRange.addEventListener('input', () => {
           const pct = Number(potRange.value);
           comp.props = { ...(comp.props || {}), pct };
-          const valEl = inspectorEl.querySelector('#inspPotVal');
-          if (valEl) valEl.textContent = ((pct / 100) * 5).toFixed(2) + ' V';
           const b = bridge();
-          if (b && typeof b.setPot === 'function') b.setPot(comp.id, (pct / 100) * 5);
+          if (b && typeof b.setPot === 'function') b.setPot(comp.id, pct);
+          // Số volt hiện lại theo solver sau khi xoay núm (Vref theo
+          // nguồn thật, "—" khi wiper lơ lửng).
+          const valEl = inspectorEl.querySelector('#inspPotVal');
+          if (valEl) {
+            const wv = b && typeof b.getPotVolts === 'function' ? b.getPotVolts(comp.id) : null;
+            valEl.textContent = (wv === null || wv === undefined) ? '—' : wv.toFixed(2) + ' V';
+          }
         });
         potRange.addEventListener('change', () => save());
       }
@@ -2902,7 +2912,10 @@ void main() {
             const cellsKey = lcd.cells
               ? lcd.cells.map((ln) => ln.map((c) => (c.custom ? '#' + c.custom.map((v) => v.toString(16)).join('') : c.ch)).join('')).join('|')
               : lcd.lines[0] + '|' + lcd.lines[1];
-            const key = (lcd.complete ? '1' : '0') + '|' + cellsKey;
+            // Key gồm cả displayOn: lệnh tắt màn hình (0x08) phải vẽ
+            // lại ngay (màn hình tối) dù DDRAM không đổi; 0x0C bật lại
+            // thì chữ về (DDRAM giữ nguyên khi tắt).
+            const key = (lcd.complete ? '1' : '0') + '|' + (lcd.displayOn === false ? '0' : '1') + '|' + cellsKey;
             if (key === t.last) continue;
             t.last = key;
             const ctx = t.ctx;
@@ -2911,9 +2924,12 @@ void main() {
             ctx.fillStyle = '#7CFFB2';
             ctx.font = '28px "Fira Code", monospace';
             ctx.textBaseline = 'middle';
-            if (lcd.complete && lcd.cells) {
+            if (lcd.complete && lcd.cells && lcd.displayOn !== false) {
               drawLcdLine(ctx, lcd.cells[0], 18);
               drawLcdLine(ctx, lcd.cells[1], 48);
+            } else if (lcd.complete && lcd.displayOn === false) {
+              // Display off (lệnh 0x08): màn hình tối, không vẽ chữ —
+              // DDRAM giữ nguyên nên 0x0C bật lại thì chữ về.
             } else {
               ctx.fillText(lcd.complete ? lcd.lines[0] : 'CHUA NOI DU DAY', 8, 18);
               ctx.fillText(lcd.complete ? lcd.lines[1] : '', 8, 48);

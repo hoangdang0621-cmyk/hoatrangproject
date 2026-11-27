@@ -3,14 +3,14 @@
 // chưa nạp chương trình nào; code mẫu nằm sẵn trong tab "Nạp viết code",
 // người dùng bấm "Nạp & chạy" thì chip mới chạy. ProgramRunner điều khiển
 // chạy/tạm dừng/chạy từng lệnh/breakpoint.
-import { createCPU, ProgramRunner, cyclesForElapsedMs, applySolvedVoltages, parsePicPinId } from './pic16.js?v=20261125bm';
+import { createCPU, ProgramRunner, cyclesForElapsedMs, applySolvedVoltages, parsePicPinId } from './pic16.js?v=20261125bn';
 import {
   resolvePeripherals, ledStates, buzzerStates, sevenSegStates,
   applyButtonToCpu, applyPotToCpu, applyKeypadToCpu,
-} from './wiring.js?v=20261125bm';
-import { defaultBenchState, benchToNetlist, crystalFreq } from './bench-model.js?v=20261125be';
-import { meterReadings, motorReadings, scopeVoltages, pushScopeSample, SCOPE_MAX_SAMPLES, solveCircuit } from './circuit-solver.js?v=20261125bm';
-import { compileC } from './c-compiler.js?v=20261125bm';
+} from './wiring.js?v=20261125bn';
+import { defaultBenchState, benchToNetlist, crystalFreq } from './bench-model.js?v=20261125bn';
+import { meterReadings, motorReadings, scopeVoltages, pushScopeSample, SCOPE_MAX_SAMPLES, solveCircuit } from './circuit-solver.js?v=20261125bn';
+import { compileC } from './c-compiler.js?v=20261125bn';
 
 const cpu = createCPU();
 cpu.clockHz = 4000000;
@@ -36,7 +36,19 @@ cpu.onTx = (code) => {
 // Netlist ban đầu = bàn mặc định (chip PIC + nguồn + dây nguồn về rail).
 let mapping = resolvePeripherals(benchToNetlist(defaultBenchState()));
 cpu.setWiring(mapping);
-let potVoltsById = {};         // id chiết áp -> volt (0..5)
+let potVoltsById = {};         // id chiết áp -> volt wiper đã giải từ solver
+                               // (0 khi wiper lơ lửng); làm fallback cho
+                               // applySolvedVoltages, KHÔNG tính từ pct*5.
+
+// Điện áp wiper của 1 chiết áp trong kết quả solver (null = lơ lửng:
+// chân GND chưa nối, hoặc chân VCC chưa nối tới nguồn nào).
+function solverWiperVolts(solved, potId) {
+  if (!solved || !solved.ok || !solved.nets || !solved.nodeVoltage) return null;
+  const node = solved.nets.nodeOfTerm(potId, 'W');
+  if (!node) return null;
+  const v = solved.nodeVoltage.get(node);
+  return typeof v === 'number' ? v : null;
+}
 
 // Thành viên của net chứa 1 terminal ('PIC.RA0', 'POT0.W', ...) theo
 // mapping hiện tại; [] nếu terminal không thuộc net nào.
@@ -61,14 +73,29 @@ function wiperHasOtherDriver(pot) {
   return false;
 }
 
-// Áp nhanh 1 chiết áp (đường slider / nạp code): chỉ khi wiper là nguồn
-// duy nhất trên net. Có nguồn khác lái thì bỏ qua (solver đã đặt đúng
-// giá trị trong applyBenchNetlist, không đè bằng volt núm xoay).
+// Áp nhanh 1 chiết áp (đường slider / nạp code): điện áp wiper lấy từ
+// SOLVER (giải lại mạch với núm xoay hiện tại) — Vref là điện áp thật
+// của net chân VCC (PSU 3V, núm 50% -> ~1,5V), không cứng 5V. Chỉ áp
+// khi wiper là nguồn duy nhất trên net và chiết áp nối đủ 2 chân nguồn:
+// - Wiper có nguồn khác lái (VCC/GND/chân PIC output, vd nối tắt tới
+//   RB0=1) thì bỏ qua — solver đã đặt đúng giá trị (ADC đọc mức chân
+//   PIC), không đè bằng volt núm xoay.
+// - Thiếu 1 chân nguồn (mapping.pots[].vcc/gnd: chân VCC/GND không nằm
+//   trên net rail tương ứng) thì wiper lơ lửng: trả false và ADC về 0,
+//   không giữ giá trị núm xoay cũ.
+// - Wiper lơ lửng theo solver (vd chân GND chưa nối dây) cũng vậy.
 // Đồng thời cập nhật netVoltage cho mọi chân input cùng net wiper để
 // pinLevel đọc đúng ngay khi kéo slider (không cần sync lại bench).
-function applyOnePot(pot, volts) {
+function applyOnePot(pot) {
   if (!pot || !pot.wiper || pot.wiper.analog === null || pot.wiper.analog === undefined) return false;
   if (wiperHasOtherDriver(pot)) return false;
+  if (!pot.vcc || !pot.gnd) { cpu.setAnalog(pot.wiper.analog, 0); return false; }
+  if (!benchStateForMeters) return false;
+  let solved = null;
+  try { solved = solveCircuit(benchStateForMeters, cpu, pressedIdsForMeters, pressedKeypadForMeters); } catch { solved = null; }
+  const volts = solverWiperVolts(solved, pot.id);
+  if (volts === null) { cpu.setAnalog(pot.wiper.analog, 0); return false; }
+  potVoltsById[pot.id] = volts;
   applyPotToCpu(cpu, mapping, pot.id, volts);
   for (const m of netMembersOf(pot.id + '.W')) {
     if (!m.startsWith('PIC.')) continue;
@@ -80,7 +107,7 @@ function applyOnePot(pot, volts) {
 
 // Áp điện áp của mọi chiết áp vào đúng kênh AN đã nối dây
 function applyAllPots() {
-  for (const p of mapping.pots) applyOnePot(p, potVoltsById[p.id] ?? 0);
+  for (const p of mapping.pots) applyOnePot(p);
 }
 applyAllPots();
 
@@ -114,6 +141,13 @@ setInterval(() => {
   const now = performance.now();
   const elapsedMs = now - lastTick;
   lastTick = now;
+  // Xung nhịp lấy lại từ thạch anh trên bàn MỖI NHỊP (Issue 7): gỡ
+  // thạch anh giữa chừng thì clockHz về 0 ngay, chương trình dừng lập
+  // tức (runner.tick(0) + step() chặn clockHz=0 nên không chạy thêm chu
+  // kỳ nào); gắn thạch anh lại (hoặc đổi tần số) thì chạy tiếp với tần
+  // số mới mà không cần nạp lại code. Trước đây clockHz chỉ đặt lúc
+  // nạp code nên gỡ thạch anh giữa chừng chương trình vẫn chạy tiếp.
+  cpu.clockHz = benchCrystalFreq && benchCrystalFreq > 0 ? benchCrystalFreq : 0;
   const cycles = cyclesForElapsedMs(elapsedMs, cpu.clockHz);
   if (cycles > 0) runner.tick(cycles);
   // Lấy mẫu sóng cho đồng hồ hiện sóng (cả khi CPU pause: tín hiệu tĩnh
@@ -160,7 +194,11 @@ function sampleScopes() {
 }
 window.HoaTrangBenchBridge = {
   applyBenchNetlist(nl, st, pressed, pressedKeypad) {
-    mapping = resolvePeripherals(nl);
+    // Mapping chân lấy từ netlist CHƯA nhấn phím (xem syncToCpu trong
+    // bench.js); phím đang nhấn chỉ truyền riêng làm "đường có nguồn"
+    // cho LED/còi/7 thanh (resolvePeripherals, Issue 9) — không làm
+    // CPU tưởng chân hàng là chân cột.
+    mapping = resolvePeripherals(nl, pressedKeypad || null);
     cpu.setWiring(mapping);
     if (st) {
       benchStateForMeters = st; pressedIdsForMeters = pressed || [];
@@ -168,14 +206,21 @@ window.HoaTrangBenchBridge = {
     }
     // ADC + mức chân input từ mạch đã giải (solver là chuẩn, chạy trên
     // bench state đầy đủ): mỗi kênh AN đều được đặt lại — net không còn
-    // nguồn lái thì về 0 chứ không giữ giá trị chiết áp cũ. Sau đó mới
-    // áp nhanh chiết áp (đã chặn khi wiper có nguồn khác lái, xem
-    // applyOnePot) — thứ tự này quan trọng vì bench.js gọi setPot cho
-    // mọi chiết áp ngay sau applyBenchNetlist trong syncToCpu, và setPot
-    // không được đè giá trị solver vừa đặt.
+    // nguồn lái thì về 0 chứ không giữ giá trị chiết áp cũ. Điện áp
+    // wiper từng chiết áp cũng lấy từ chính kết quả này (solverWiperVolts,
+    // 0 khi wiper lơ lửng) làm fallback cho applySolvedVoltages — để
+    // chiết áp chưa nối chân GND không đè ADC bằng volt núm xoay cũ.
+    // Sau đó mới áp nhanh chiết áp (đã chặn khi wiper có nguồn khác lái
+    // hoặc thiếu chân nguồn, xem applyOnePot) — thứ tự này quan trọng vì
+    // bench.js gọi setPot cho mọi chiết áp ngay sau applyBenchNetlist
+    // trong syncToCpu, và setPot không được đè giá trị solver vừa đặt.
     let solved = null;
     if (benchStateForMeters) {
       try { solved = solveCircuit(benchStateForMeters, cpu, pressedIdsForMeters, pressedKeypadForMeters); } catch { solved = null; }
+    }
+    for (const p of mapping.pots) {
+      const v = solverWiperVolts(solved, p.id);
+      potVoltsById[p.id] = v === null ? 0 : v;
     }
     const psuV = Number(nl && nl.psu && nl.psu.volts);
     applySolvedVoltages(cpu, mapping, solved, {
@@ -235,6 +280,16 @@ window.HoaTrangBenchBridge = {
     try { return meterReadings(benchStateForMeters, cpu, pressedIdsForMeters, pressedKeypadForMeters); }
     catch { return { voltmeters: [], ammeters: [] }; }
   },
+  // Điện áp wiper của 1 chiết áp theo solver (null = lơ lửng: chân GND
+  // chưa nối hoặc chân VCC chưa tới nguồn) — để Inspector chiết áp hiện
+  // đúng số đo thay vì tính (pct/100)*5.
+  getPotVolts: (id) => {
+    if (!benchStateForMeters) return null;
+    try {
+      const solved = solveCircuit(benchStateForMeters, cpu, pressedIdsForMeters, pressedKeypadForMeters);
+      return solverWiperVolts(solved, id);
+    } catch { return null; }
+  },
   // Động cơ DC: điện áp, dòng, tốc độ quay (để bench.js vẽ cánh quạt
   // quay và Inspector hiện V/A/RPM). Trả [{id, volts, amps, rpm}].
   getMotorState: () => {
@@ -280,12 +335,24 @@ window.HoaTrangBenchBridge = {
     return sent;
   },
   clearSerial: (id) => { serialBuffers.set(id, ''); },
-  getLcd: () => ({ lines: cpu.lcd.getLines(), cells: cpu.lcd.getDisplayCells(), complete: !mapping.lcd.id || mapping.lcd.complete }),
+  getLcd: () => ({ lines: cpu.lcd.getLines(), cells: cpu.lcd.getDisplayCells(), complete: !mapping.lcd.id || mapping.lcd.complete, displayOn: cpu.lcd.displayOn }),
   getPin: (port, bit) => ({ dir: cpu.pinDirection(port, bit), level: cpu.pinLevel(port, bit) }),
   getTris: () => cpu.tris,
   getMapping: () => mapping,
   pressButton: (id, pressed) => applyButtonToCpu(cpu, mapping, id, pressed),
-  setPot: (id, volts) => { potVoltsById[id] = volts; const p = mapping.pots.find((x) => x.id === id); if (p) applyOnePot(p, volts); },
+  setPot: (id, pct) => {
+    // pct: vị trí núm xoay 0–100 (bench.js đã ghi vào props của linh kiện
+    // trên bàn; ghi lại ở đây cho chắc khi gọi trực tiếp). Điện áp wiper
+    // KHÔNG tính ở đây — applyOnePot giải lại mạch và lấy từ solver
+    // (Vref = điện áp thật của net chân VCC, không cứng 5V).
+    const pctNum = Math.max(0, Math.min(100, Number(pct) || 0));
+    if (benchStateForMeters) {
+      const comp = benchStateForMeters.components.find((c) => c.id === id && c.type === 'pot');
+      if (comp) comp.props = { ...(comp.props || {}), pct: pctNum };
+    }
+    const p = mapping.pots.find((x) => x.id === id);
+    if (p) applyOnePot(p);
+  },
   // --- Tab "Nạp viết code": soạn code C (XC8) / nạp file .hex ---
   defaultProgram: () => DEFAULT_C_PROGRAM,
   // Dịch code C trong editor rồi nạp vào CPU. compileC trả lineToAddr

@@ -22,8 +22,8 @@
 import {
   DEFAULT_SIZE, legsFor, stripKey, parseHole, parsePsuPost, parseScopePost, parseSerialPost, psuVolts,
   normalizeWireEnd, meterMode,
-} from './bench-model.js?v=20261125be';
-import { netLevel, sevenSegStates, SEVEN_SEG_TERMS, PIC_PINS } from './wiring.js?v=20261125bm';
+} from './bench-model.js?v=20261125bn';
+import { netLevel, sevenSegStates, SEVEN_SEG_TERMS, PIC_PINS } from './wiring.js?v=20261125bn';
 
 export const LED_FORWARD_VOLTS = 2.0;  // sụt áp thuận LED khi sáng
 export const LED_SERIES_OHMS = 10;     // điện trở nối tiếp trong mô hình LED
@@ -217,6 +217,34 @@ export function solveCircuit(state, cpu, pressedIds = [], pressedKeypad = null) 
   const nets = buildSolverNets(state, pressedIds, pressedKeypad);
   const ref = nets.railMinus;
 
+  // --- Nguồn của chip PIC (Issue 8): chip chỉ "sống" khi có nguồn ---
+  // VDD nối tới rail + (nối trực tiếp cọc PSU+ cũng về rail+) và điện áp
+  // nguồn trong (0, 5.5V]: PSU 0V thì chip không có điện, quá 5.5V thì
+  // chip quá áp (chết) — cả 2 trường hợp chân PIC đều không lái mức.
+  // VDD có 2 chân (11, 32): chỉ cần 1 chân nối rail+ là chip có nguồn.
+  // (nodeOfPicPin('VDD') chỉ giữ 1 trong 2 chân nên phải quét cả 2 chân
+  // bằng legsFor.) Không có PSU thì rail không có nguồn -> chip chết.
+  // Điện áp chân mức cao theo điện áp nguồn thật (PSU 3.3V -> chân ra
+  // 3.3V), không cứng 5V. MCLR nối về GND thì chip giữ ở reset (xem
+  // isHeldInReset trong pic16.js); 2 rail nối tắt nhau thì không tính là
+  // MCLR thấp (mạch nối tắt đó đã có cảnh báo riêng, và các test p0-b/c
+  // nối tắt rail vẫn phải chạy).
+  const psu = state.components.find((c) => c.type === 'psu');
+  const psuV = psuVolts(psu);
+  let vddOnRail = false;
+  const picComp = state.components.find((c) => c.type === 'pic');
+  if (picComp) {
+    for (const leg of legsFor(picComp, size)) {
+      if (leg.term !== 'PIC.VDD' || !leg.hole) continue;
+      if (nets.nodeOfStrip(stripKey(leg.hole, size)) === nets.railPlus) { vddOnRail = true; break; }
+    }
+  }
+  const picPowered = !!psu && vddOnRail && psuV > 0 && psuV <= 5.5;
+  const picSupplyVolts = picPowered ? psuV : null;
+  const mclrNode = nets.nodeOfPicPin('MCLR');
+  const mclrLow = !!mclrNode && mclrNode === nets.railMinus && nets.railPlus !== nets.railMinus;
+  const powerInfo = { picPowered, picSupplyVolts, mclrLow };
+
   // --- 1 lần giải MNA với 1 tập diode (LED / đoạn 7 thanh) đang bật ---
   // ledSet: Set id LED đang bật; segSet: Set 'SEG0.a' đoạn đang bật.
   // Trả { ok, nodeVoltage, branchCurrent } (chưa có nets và các tập
@@ -224,7 +252,12 @@ export function solveCircuit(state, cpu, pressedIds = [], pressedKeypad = null) 
   // nằm trong này, không đổi logic, chỉ khác: tập diode bật là đối số
   // (thay vì lấy từ ledStates/sevenSegStates theo mức logic), và thêm
   // nhánh dẫn của còi buzzer (xem dưới).
-  const runMna = (ledSet, segSet) => {
+  // potVolts: Map id chiết áp -> điện áp wiper (V) đã tính trước từ 1
+  // lần giải không có chiết áp (xem cuối solveCircuit); null = bỏ qua
+  // mọi nguồn chiết áp (lần giải thăm dò). Nhánh nguồn chiết áp chỉ nối
+  // W–GND nên không ảnh hưởng tới V(chân VCC) của chính nó, 1 lần giải
+  // thăm dò là đủ chính xác, không cần lặp.
+  const runMna = (ledSet, segSet, potVolts = null) => {
     const psu = state.components.find((c) => c.type === 'psu');
     const psuV = psuVolts(psu);
 
@@ -262,13 +295,20 @@ export function solveCircuit(state, cpu, pressedIds = [], pressedKeypad = null) 
     // đồng hồ chế độ A đấu tắt qua PSU bị đánh dấu chập (dòng Infinity ->
     // hiển thị OL), PSU vẫn giữ 5V.
     if (psu) addVSource(nets.railPlus, nets.railMinus, psuV, psu.id, 'psu');
-    for (const pin of PIC_PINS) {
-      if (pin.port === null) continue;
-      if (cpu.pinDirection(pin.port, pin.bit) !== 'out') continue; // input: trở kháng cao
-      const node = nets.nodeOfPicPin(pin.id);
-      if (!node) continue;
-      const level = cpu.pinLevel(pin.port, pin.bit);
-      addVSource(node, nets.railMinus, level ? PIC_OUTPUT_VOLTS : 0, 'PIC.' + pin.id, 'picpin');
+    // Chân PIC output CHỈ lái khi chip có nguồn (picPowered, xem đầu
+    // solveCircuit): mất nguồn thì chân thả nổi (không phải nguồn áp
+    // 5V/0V lý tưởng), đồng hồ đo trên net đó đọc null, LED không sáng,
+    // động cơ không quay. Điện áp mức cao = điện áp nguồn thật (psuV),
+    // không cứng 5V: PSU 3.3V thì chân ra 3.3V.
+    if (picPowered) {
+      for (const pin of PIC_PINS) {
+        if (pin.port === null) continue;
+        if (cpu.pinDirection(pin.port, pin.bit) !== 'out') continue; // input: trở kháng cao
+        const node = nets.nodeOfPicPin(pin.id);
+        if (!node) continue;
+        const level = cpu.pinLevel(pin.port, pin.bit);
+        addVSource(node, nets.railMinus, level ? psuV : 0, 'PIC.' + pin.id, 'picpin');
+      }
     }
 
     for (const comp of state.components) {
@@ -334,17 +374,37 @@ export function solveCircuit(state, cpu, pressedIds = [], pressedKeypad = null) 
         if (nP === nN) { shorted.add(comp.id); continue; }
         addVSource(nP, nN, 0, comp.id, 'ammeter');
       } else if (comp.type === 'pot') {
-        // Chiết áp: wiper là nguồn áp (điện áp theo núm xoay, 0–5V) giữa
-        // chân W và chân GND. Nhờ vậy đồng hồ đo chế độ V (và mọi mạch
-        // khác) đọc được điện áp ra của chiết áp. Trước đây chiết áp chỉ
-        // cấp cho ADC (qua setPot), không có trong solver nên net W lơ
-        // lửng và đồng hồ hiện trống dù đã nối W + GND đúng. Nguồn PSU và
-        // chân PIC output đăng ký trước nên thắng nếu xung đột cùng cặp node.
+        // Chiết áp: wiper là nguồn áp giữa chân W và chân GND, điện áp =
+        // pct × (V(chân VCC) − V(chân GND)) — Vref là điện áp THẬT của
+        // net chân VCC (PSU 3V, núm 50% -> ~1,5V), KHÔNG cứng 5V. Điện
+        // áp từng chiết áp tính trước ở cuối solveCircuit (potVolts, từ
+        // 1 lần giải không có chiết áp) rồi truyền vào đây. Nhờ vậy đồng
+        // hồ đo chế độ V (và mọi mạch khác) đọc được điện áp ra của
+        // chiết áp. Chiết áp là nguồn lý tưởng: không nhánh trở, không
+        // hút dòng (ampe kế trên chân VCC của nó đọc 0).
+        // - Chân GND chưa nối dây (nG null) thì KHÔNG mượn railMinus:
+        //   wiper lơ lửng, đồng hồ đọc "—", ADC đọc 0.
+        // - Wiper bị chân PIC output chiếm (nối tắt tới RB0=1...) thì
+        //   chân PIC thắng: bỏ nguồn chiết áp để solver không bị 2 nguồn
+        //   áp mâu thuẫn trên cùng 1 net (vd chân GND lại nối 1 chân
+        //   output khác thì ma trận MNA suy biến, cả mạch giải sai).
         const nW = nets.nodeOfTerm(comp.id, 'W');
-        const nG = nets.nodeOfTerm(comp.id, 'GND') || nets.railMinus;
-        const pct = Math.max(0, Math.min(100, Number(comp.props?.pct ?? 0) || 0));
+        const nG = nets.nodeOfTerm(comp.id, 'GND');
         if (!nW || !nG || nW === nG) continue;
-        addVSource(nW, nG, (pct / 100) * 5, comp.id, 'pot');
+        let picDrivesWiper = false;
+        // Chip mất nguồn thì chân output không lái gì (picPowered):
+        // chiết áp lại là nguồn duy nhất trên net wiper.
+        if (picPowered) {
+          for (const pin of PIC_PINS) {
+            if (pin.port === null) continue;
+            if (cpu.pinDirection(pin.port, pin.bit) !== 'out') continue;
+            if (nets.nodeOfPicPin(pin.id) === nW) { picDrivesWiper = true; break; }
+          }
+        }
+        if (picDrivesWiper) continue;
+        const volts = potVolts ? potVolts.get(comp.id) : undefined;
+        if (typeof volts !== 'number') continue;
+        addVSource(nW, nG, volts, comp.id, 'pot');
       }
     }
 
@@ -516,10 +576,48 @@ export function solveCircuit(state, cpu, pressedIds = [], pressedKeypad = null) 
   const ledSet = () => new Set([...ledOn].filter(([, on]) => on).map(([id]) => id));
   const segSet = () => new Set([...segOn].filter(([, on]) => on).map(([k]) => k));
 
+  // Điện áp wiper của từng chiết áp: pct × (V(chân VCC) − V(chân GND)),
+  // với V(chân VCC)/V(chân GND) lấy từ 1 lần giải thăm dò KHÔNG có
+  // chiết áp. Nhánh nguồn chiết áp chỉ nối W–GND nên không ảnh hưởng
+  // tới V(chân VCC) của chính nó — 1 lần giải là chính xác, không cần
+  // lặp. Chiết áp nào thiếu chân (VCC/GND chưa nối tới nguồn nào, điện
+  // áp null ở lần thăm dò) thì không có trong map -> không lái wiper.
+  // Vref ở đây là điện áp thật của net chân VCC (psuVolts của PSU, mức
+  // chân PIC output, hay cầu phân áp...), KHÔNG cứng 5V.
+  const computePotVolts = (nodeVoltage) => {
+    const map = new Map();
+    const psu = state.components.find((c) => c.type === 'psu');
+    const psuV = psuVolts(psu);
+    for (const comp of state.components) {
+      if (comp.type !== 'pot') continue;
+      const nV = nets.nodeOfTerm(comp.id, 'VCC');
+      const nG = nets.nodeOfTerm(comp.id, 'GND');
+      if (!nV || !nG) continue;
+      // Chân VCC nối thẳng rail + thì Vref = điện áp danh định của PSU
+      // (psuVolts — nguồn sự thật duy nhất cho Vref). Lần giải thăm dò
+      // cho cùng 1 số khi mạch bình thường, nhưng không đọc được khi 2
+      // rail bị nối tắt (node rail+ trùng node mốc GND nên thăm dò = 0)
+      // — mạch nối tắt đó vẫn cho chiết áp lái wiper như cũ (test p0-b/c:
+      // chân GND của chiết áp a30 chung strip với chân VDD của PIC nên
+      // dây T-30 nối tắt 2 rail trong mô hình solver).
+      const vV = nV === nets.railPlus ? psuV : nodeVoltage.get(nV);
+      const vG = nodeVoltage.get(nG);
+      if (typeof vV !== 'number' || typeof vG !== 'number') continue;
+      const pct = Math.max(0, Math.min(100, Number(comp.props?.pct ?? 0) || 0));
+      map.set(comp.id, (pct / 100) * (vV - vG));
+    }
+    return map;
+  };
+  let potVolts = new Map();
+  if (state.components.some((c) => c.type === 'pot')) {
+    const probe = runMna(new Set(), new Set(), null);
+    if (probe.ok) potVolts = computePotVolts(probe.nodeVoltage);
+  }
+
   // Lần 1: hở mạch toàn bộ diode -> điện áp hở mạch -> tập bật ban đầu.
-  const open = runMna(new Set(), new Set());
+  const open = runMna(new Set(), new Set(), potVolts);
   if (!open.ok) {
-    return { ok: false, nodeVoltage: open.nodeVoltage, branchCurrent: open.branchCurrent, nets, ledOn, segOn, buzzerOn };
+    return { ok: false, nodeVoltage: open.nodeVoltage, branchCurrent: open.branchCurrent, nets, ledOn, segOn, buzzerOn, ...powerInfo };
   }
   decideDiodes(open.nodeVoltage);
   decideBuzzers(open.nodeVoltage);
@@ -527,7 +625,7 @@ export function solveCircuit(state, cpu, pressedIds = [], pressedKeypad = null) 
   let result = open;
   let stale = false; // tập on/off đã đổi sau lần giải cuối -> cần giải lại 1 lần
   for (let round = 0; round < 3; round++) {
-    const solved = runMna(ledSet(), segSet());
+    const solved = runMna(ledSet(), segSet(), potVolts);
     if (!solved.ok) { result = solved; stale = false; break; }
     result = solved;
     decideBuzzers(solved.nodeVoltage); // còi: cập nhật theo điện áp mới nhất
@@ -537,10 +635,10 @@ export function solveCircuit(state, cpu, pressedIds = [], pressedKeypad = null) 
   if (stale) {
     // Vòng cuối vẫn còn diode bị tắt: giải thêm 1 lần cuối để điện áp
     // trả về khớp đúng tập on/off cuối cùng.
-    const solved = runMna(ledSet(), segSet());
+    const solved = runMna(ledSet(), segSet(), potVolts);
     if (solved.ok) { result = solved; decideBuzzers(solved.nodeVoltage); }
   }
-  return { ok: result.ok, nodeVoltage: result.nodeVoltage, branchCurrent: result.branchCurrent, nets, ledOn, segOn, buzzerOn };
+  return { ok: result.ok, nodeVoltage: result.nodeVoltage, branchCurrent: result.branchCurrent, nets, ledOn, segOn, buzzerOn, ...powerInfo };
 }
 
 // ---------------------------------------------------------------------------

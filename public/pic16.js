@@ -544,6 +544,19 @@ export function assemble(source) {
       info.directive = 'ORG'; info.addr = pc; lineInfo.push(info); continue;
     }
     if (first === 'END') { info.directive = 'END'; lineInfo.push(info); break; }
+    // __CONFIG / CONFIG: CHẤP NHẬN nhưng KHÔNG ĐÁNH GIÁ giá trị (dòng
+    // này toàn ký hiệu chưa định nghĩa trong assembler, vd
+    // "__CONFIG _HS_OSC & _WDT_OFF" — không có bảng ký hiệu _HS_OSC...),
+    // nên bit FOSC trong code nguồn KHÔNG chọn chế độ dao động ở đây.
+    // Chế độ dao động duy nhất được mô phỏng là THẠCH ANH (HS/XT — xem
+    // configFoscMode ở dưới): xung nhịp luôn lấy từ thạch anh trên bàn
+    // (crystalFreq trong bench-model.js), không lấy từ từ cấu hình.
+    // LP (thạch anh 32kHz, tiết kiệm điện) và RC (điện trở + tụ trên
+    // OSC1, không có thạch anh) KHÔNG được mô phỏng — code chọn RC/LP
+    // vẫn dịch được nhưng chip chỉ chạy khi có thạch anh nối đúng strip
+    // OSC1/OSC2, như chip chọn HS/XT. Từ cấu hình trong file .hex thì
+    // parseIntelHex vẫn đọc word 0x2007 vào cpu.config (để exportHex
+    // giữ nguyên khi xuất lại), nhưng cũng không dùng nó để chọn dao động.
     if (first === '__CONFIG' || first === 'CONFIG') { info.directive = 'CONFIG'; lineInfo.push(info); continue; }
     if (first === 'LIST' || first === '#INCLUDE' || first === 'INCLUDE') { info.directive = 'IGNORE'; lineInfo.push(info); continue; }
     // Chỉ thị chỉ ảnh hưởng listing / không ảnh hưởng code: bỏ qua an toàn.
@@ -788,6 +801,19 @@ function isTwoCycle(op) {
 }
 
 // ---------------------------------------------------------------------------
+// Chế độ dao động theo word cấu hình 0x2007 (bit FOSC1:FOSC0, datasheet
+// §14.1): 00 = LP, 01 = XT, 10 = HS, 11 = RC. Chỉ để ĐỌC/GHI CHÚ —
+// simulator KHÔNG dùng nó để chọn dao động (xem ghi chú ở __CONFIG
+// trong assemble()): HS và XT đều là thạch anh nên cùng chạy bằng tần số
+// thạch anh trên bàn (crystalFreq); LP và RC KHÔNG được mô phỏng. Trả về
+// 'LP' | 'XT' | 'HS' | 'RC' ('HS' khi word chưa hợp lệ/về mặc định).
+// ---------------------------------------------------------------------------
+export function configFoscMode(config = 0x3fff) {
+  const fosc = (Number(config) || 0) & 0x03;
+  return fosc === 0 ? 'LP' : fosc === 1 ? 'XT' : fosc === 2 ? 'HS' : 'RC';
+}
+
+// ---------------------------------------------------------------------------
 // CPU PIC16F877A
 // ---------------------------------------------------------------------------
 export class PIC16F877A {
@@ -815,6 +841,15 @@ export class PIC16F877A {
     // null (không nhấn phím nào). Đặt bằng setKeypadPressed (xem dưới);
     // pinLevel dùng nó để tính mức cột khi CPU đọc (xem pinLevel).
     this.keypadPressed = new Map();
+    // Nguồn của chip (Issue 8): powered=false khi VDD chưa nối rail có
+    // điện / PSU 0V / quá 5.5V; mclrLow=true khi MCLR nối về GND. Đặt
+    // bởi applyPowerState (từ kết quả solveCircuit, qua app.js) — mặc
+    // định coi như có nguồn 5V, MCLR cao (test lõi không có bench vẫn
+    // chạy như trước). reset()/loadProgram KHÔNG đổi 3 trường này (trạng
+    // thái nguồn thuộc về bàn, không thuộc về chương trình).
+    this.powered = true;
+    this.supplyVolts = 5;
+    this.mclrLow = false;
     // EEPROM dữ liệu (256 byte): KHÔNG xoá khi reset (như phần cứng thật,
     // dữ liệu ghi rồi vẫn còn sau khi nạp lại code). Xoá tay bằng loadEeprom([]).
     this.eeprom = new Uint8Array(256);
@@ -849,18 +884,32 @@ export class PIC16F877A {
     this.tmr0Prescale = 0; this.tmr1Prescale = 0; this.tmr2Prescale = 0; this.tmr2Postscale = 0;
     this.prevRB0 = 1; this.prevRB47 = 0xf0;
     this.prevE = 0;
+    this._lcdNibble = null; // nibble cao đang chờ nibble thấp (LCD 4-bit)
     this.lcd.reset();
     this.txLog = [];
   }
 
+  // Chip có đang giữ ở reset không: mất nguồn (VDD chưa nối rail có
+  // điện, PSU 0V hoặc quá 5.5V) hoặc MCLR ở mức thấp. Giữ reset thì PC=0,
+  // không chạy chu kỳ nào (xem step()).
+  isHeldInReset() { return !this.powered || this.mclrLow; }
+
   loadProgram(program, config = 0x3fff) {
     this.program = program;
+    // config chỉ lưu lại (vd exportHex giữ nguyên word 0x2007); bit FOSC
+    // trong config KHÔNG chọn chế độ dao động — xung nhịp luôn lấy từ
+    // thạch anh trên bàn (crystalFreq), xem configFoscMode.
     this.config = config;
     this.reset();
   }
 
   // --- Thời gian mô phỏng: 1 chu kỳ lệnh = 4 chu kỳ clock ---
-  get simTimeUs() { return (this.cycles * 4 * 1e6) / this.clockHz; }
+  // Không có xung (clockHz = 0, vd chưa có thạch anh nối đúng strip OSC)
+  // thì thời gian mô phỏng đứng yên ở 0 — không chia cho 0 (Infinity/NaN).
+  get simTimeUs() {
+    if (!Number.isFinite(this.clockHz) || this.clockHz <= 0) return 0;
+    return (this.cycles * 4 * 1e6) / this.clockHz;
+  }
   clockHz = 4000000;
 
   bank() { return (this.sfr.STATUS >> 5) & 3; }
@@ -975,6 +1024,9 @@ export class PIC16F877A {
       const other = parsePicPinId(m.slice(4));
       if (!other || (other.port === portIdx && other.bit === bit)) continue;
       if (((this.tris[other.port] >> other.bit) & 1) === 0) {
+        // Chip mất nguồn: chân output không lái net (trở kháng cao) nên
+        // không theo mức latch cũ của nó.
+        if (!this.powered) continue;
         return this.pinLevel(other.port, other.bit);
       }
     }
@@ -1094,6 +1146,7 @@ export class PIC16F877A {
     this._netById = (this.wiring && this.wiring.nets)
       ? new Map(this.wiring.nets.map((n) => [n.id, n])) : null;
     this.netVoltage.clear();
+    this._lcdNibble = null; // đổi wiring: bỏ nibble 4-bit đang chờ (nếu có)
     const w = this.wiring && this.wiring.lcd;
     if (w && w.e) this.prevE = this.pinLevel(w.e.port, w.e.bit);
     else if (!w) this.prevE = (this.portLatch[4] >> 1) & 1;
@@ -1104,17 +1157,39 @@ export class PIC16F877A {
   // Có wiring: RS/E/D0–D7 đọc từ chân PIC đã nối dây (bất kỳ PORT nào).
   // Không wiring: giữ hành vi cũ (data PORTD, RS=RE0, E=RE1).
   // Wiring LCD chưa đủ dây: không chốt gì (LCD hiện "chưa nối đủ dây" ở UI).
+  // Chế độ 4-bit (chỉ nối RS/E/D4–D7): mỗi cạnh lên của E chốt 1 nibble
+  // trên D4–D7 (nibble cao trước); 2 nibble ghép thành 1 byte rồi mới
+  // gửi lệnh/dữ liệu. Chuỗi khởi tạo 4-bit chuẩn của HD44780 (0x33,
+  // 0x32, 0x28, 0x0C, 0x01, ...) cũng ghép đúng như vậy: (3,3)=0x33,
+  // (3,2)=0x32, (2,8)=0x28 — các lệnh function-set 0x20–0x3F vốn đã
+  // được LCD.command bỏ qua nên không ảnh hưởng DDRAM.
   lcdTick() {
     const w = this.wiring && this.wiring.lcd;
     let rs, e, data;
     if (w && w.complete) {
       const bit = (pin) => (pin ? this.pinLevel(pin.port, pin.bit) : 0);
       rs = bit(w.rs); e = bit(w.e);
+      if (w.mode === '4bit') {
+        const nib = (bit(w.d[4]) << 4) | (bit(w.d[5]) << 5) | (bit(w.d[6]) << 6) | (bit(w.d[7]) << 7);
+        if (this.prevE === 0 && e === 1) {
+          if (this._lcdNibble === null || this._lcdNibble === undefined) {
+            this._lcdNibble = nib; // nibble cao (bit 4-7), chờ nibble thấp
+          } else {
+            const byte = this._lcdNibble | (nib >> 4);
+            this._lcdNibble = null;
+            if (rs) this.lcd.writeData(byte); else this.lcd.command(byte);
+            if (this.onLcd) this.onLcd();
+          }
+        }
+        this.prevE = e;
+        return;
+      }
       data = 0;
       for (let i = 0; i < 8; i++) data |= bit(w.d[i]) << i;
     } else if (w) {
       const bit = (pin) => (pin ? this.pinLevel(pin.port, pin.bit) : 0);
       this.prevE = bit(w.e); // đồng bộ để khỏi bắt cạnh giả khi nối lại dây
+      this._lcdNibble = null; // đổi dây giữa chừng: bỏ nibble đang chờ
       return;
     } else {
       rs = this.portLatch[4] & 1;
@@ -1143,6 +1218,12 @@ export class PIC16F877A {
       const cur = (this.portInput[1] >> 4) & 0xf;
       if (cur !== this.prevRB47) { this.sfr.INTCON |= 0x01; this.prevRB47 = cur; }
     }
+    // Chân E của LCD đổi mức từ ngoài (vd nút nhấn / nguồn ngoài lái E,
+    // không phải code ghi PORT): LCD chốt theo cạnh lên của E nên phải
+    // gọi lcdTick khi E đổi — trước đây E chỉ được chốt khi code ghi
+    // PORTx (writeSFR). lcdTick đọc E qua pinLevel nên thấy đúng mức mới.
+    const w = this.wiring && this.wiring.lcd;
+    if (w && w.e && w.e.port === portIdx && w.e.bit === bit) this.lcdTick();
     this.prevRB0 = level;
   }
 
@@ -1314,6 +1395,14 @@ export class PIC16F877A {
 
   // --- Thực thi 1 lệnh ---
   step() {
+    // Mất nguồn hoặc MCLR thấp: chip giữ ở reset — PC về 0, không chạy
+    // chu kỳ nào (kể cả khi đang SLEEP: reset ngoài thắng SLEEP).
+    if (this.isHeldInReset()) { this.pc = 0; return { addr: 0, op: 0, skipped: false }; }
+    // Không xung (clockHz = 0, chưa có thạch anh nối đúng strip OSC):
+    // đóng băng — không chạy chu kỳ nào, PC giữ nguyên để gắn thạch anh
+    // lại thì chạy tiếp đúng chỗ (xem app.js: tick lấy lại clockHz từ
+    // thạch anh mỗi 50ms).
+    if (!Number.isFinite(this.clockHz) || this.clockHz <= 0) return { addr: this.pc & 0x1fff, op: 0, skipped: false };
     if (this.sleeping) {
       // ADC với clock RC nội (ADCS=11) vẫn chạy trong SLEEP và có thể đánh thức
       // CPU khi xong (ADIF). Các clock Fosc/2/8/32 dừng theo Fosc nên ADC đứng.
@@ -1568,6 +1657,10 @@ export class ProgramRunner {
   // kiểm tra PC trước mỗi lệnh, chạm breakpoint thì dừng.
   tick(budget = 50000) {
     if (this.state !== 'running') return this.getStatus();
+    // Không xung (clockHz = 0, thạch anh vừa bị gỡ): không chạy chu kỳ nào.
+    if (!Number.isFinite(this.cpu.clockHz) || this.cpu.clockHz <= 0) return this.getStatus();
+    // Chip giữ reset (mất nguồn / MCLR thấp): PC về 0, không chạy chu kỳ nào.
+    if (this.cpu.isHeldInReset()) { this.cpu.pc = 0; return this.getStatus(); }
     let b = budget;
     if (this.justResumed) {
       if (!this.cpu.sleeping && !this.cpu.halted) {
@@ -1604,6 +1697,18 @@ export class ProgramRunner {
 
 export function createCPU() { return new PIC16F877A(); }
 
+// Áp trạng thái nguồn của chip từ kết quả solveCircuit (Issue 8): chip
+// chỉ chạy khi có nguồn (picPowered) và MCLR không thấp (mclrLow).
+// solved null hoặc !ok thì không đổi gì (giữ trạng thái hiện tại).
+// Trả false khi không áp được.
+export function applyPowerState(cpu, solved) {
+  if (!cpu || !solved || !solved.ok) return false;
+  cpu.powered = solved.picPowered === true;
+  cpu.supplyVolts = typeof solved.picSupplyVolts === 'number' ? solved.picSupplyVolts : null;
+  cpu.mclrLow = solved.mclrLow === true;
+  return true;
+}
+
 // Áp điện áp mạch đã giải vào CPU (ADC + mức chân input) — 1 chỗ duy
 // nhất, dùng chung cho app.js (applyBenchNetlist) và test Node.
 // - solved: kết quả solveCircuit(state, cpu, ...) ({nodeVoltage, nets});
@@ -1628,6 +1733,10 @@ export function createCPU() { return new PIC16F877A(); }
 export function applySolvedVoltages(cpu, mapping, solved, opts = {}) {
   const potVolts = opts.potVolts || {};
   const vccVolts = Number.isFinite(opts.vccVolts) ? opts.vccVolts : 5;
+  // Trạng thái nguồn của chip theo mạch đã giải (Issue 8): mất nguồn /
+  // MCLR thấp thì CPU giữ reset, chân output không lái net (xem
+  // applyPowerState + followOutputInNet + netVolts dưới).
+  applyPowerState(cpu, solved);
   const netMembersOf = (term) => {
     if (!mapping || !mapping.netOf || !mapping.nets) return [];
     const root = mapping.netOf.get(term);
@@ -1661,7 +1770,12 @@ export function applySolvedVoltages(cpu, mapping, solved, opts = {}) {
       const pin = parsePicPinId(m.slice(4));
       if (!pin) continue;
       if (cpu.pinDirection(pin.port, pin.bit) === 'out') {
-        return cpu.pinLevel(pin.port, pin.bit) ? 5 : 0;
+        // Chip mất nguồn thì chân output không lái net (kể cả khi solver
+        // không có số cho net này); mức cao theo điện áp nguồn của chip,
+        // không cứng 5V (PSU 3.3V -> chân ra 3.3V).
+        if (!cpu.powered) continue;
+        const vOut = Number.isFinite(cpu.supplyVolts) ? cpu.supplyVolts : 5;
+        return cpu.pinLevel(pin.port, pin.bit) ? vOut : 0;
       }
     }
     for (const m of members) {
@@ -1700,5 +1814,5 @@ export function cyclesForElapsedMs(elapsedMs, clockHz = 4000000, maxCycles = 500
 
 // Tiện cho debug trong console trình duyệt (không ảnh hưởng Node test)
 if (typeof globalThis !== 'undefined') {
-  globalThis.PIC16 = { assemble, disassemble, parseIntelHex, exportHex, createCPU, PIC16F877A, ProgramRunner, LCD, REGISTERS, applySolvedVoltages, parsePicPinId, ANALOG_PINS };
+  globalThis.PIC16 = { assemble, disassemble, parseIntelHex, exportHex, createCPU, PIC16F877A, ProgramRunner, LCD, REGISTERS, applySolvedVoltages, applyPowerState, parsePicPinId, ANALOG_PINS };
 }

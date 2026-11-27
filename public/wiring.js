@@ -178,8 +178,17 @@ export function buildNets(netlist) {
 
 // ---------------------------------------------------------------------------
 // Ánh xạ netlist -> cấu hình ngoại vi cho CPU
+// pressedKeypad (tùy chọn): phím bàn phím đang nhấn giữ {id, row, col}.
+// Phím nhấn nối hàng với cột thành 1 net (công tắc đóng) — chỉ tính cho
+// kiểm tra "có nguồn" (VCC/GND) của LED/còi/7 thanh/chiết áp (xem
+// hasTermClosed dưới), KHÔNG cho picPinInNet: mapping chân lấy từ
+// netlist chưa nhấn (phím nhấn không được làm CPU tưởng chân hàng là
+// chân cột, vd R1 lấy nhầm RD1). Netlist đưa vào CPU luôn là netlist
+// chưa nhấn (xem syncToCpu trong bench.js); phím nhấn chỉ truyền riêng
+// vào đây (và vào solver, xem circuit-solver.js) để 1 mạch chỉ có 1 đáp
+// án: vôn kế đọc 5V qua phím nhấn thì LED cũng sáng.
 // ---------------------------------------------------------------------------
-export function resolvePeripherals(netlist) {
+export function resolvePeripherals(netlist, pressedKeypad = null) {
   const { netOf, nets } = buildNets(netlist);
   // Điện áp danh định của nguồn (benchToNetlist mang theo netlist.psu.volts):
   // LED nối VCC chỉ sáng khi 0 < volts ≤ 10: 0V thì net VCC không có điện,
@@ -204,6 +213,22 @@ export function resolvePeripherals(netlist) {
     }
     return null;
   };
+  // Phím bàn phím đang nhấn nối hàng với cột thành 1 net: 1 đầu nối ở
+  // net hàng thì "thấy" VCC/GND của net cột và ngược lại. CHỈ dùng cho
+  // kiểm tra "có nguồn" (hasTermClosed) — KHÔNG dùng cho picPinInNet ở
+  // trên (mapping chân lấy từ netlist chưa nhấn).
+  const keyRowTerm = pressedKeypad && pressedKeypad.id
+    ? pressedKeypad.id + '.R' + pressedKeypad.row : null;
+  const keyColTerm = pressedKeypad && pressedKeypad.id
+    ? pressedKeypad.id + '.C' + pressedKeypad.col : null;
+  const hasTermClosed = (term, t) => {
+    if (hasTerm(term, t)) return true;
+    if (!keyRowTerm || !keyColTerm) return false;
+    const members = membersOf(term);
+    if (members.includes(keyRowTerm)) return hasTerm(keyColTerm, t);
+    if (members.includes(keyColTerm)) return hasTerm(keyRowTerm, t);
+    return false;
+  };
   // Màu cho từng net: VCC đỏ, GND đen, tín hiệu xoay vòng bảng màu
   let sigIdx = 0;
   const netColor = new Map();
@@ -221,11 +246,14 @@ export function resolvePeripherals(netlist) {
   const leds = netlist.components.filter((c) => c.kind === 'led').map((c) => ({
     id: c.id, label: c.label, hasResistor: c.hasResistor !== false,
     pin: picPinInNet(c.id + '.A'),
-    gnd: hasTerm(c.id + '.K', 'GND'),
+    // Cathode về GND và anode nối VCC: tính cả đường qua phím bàn phím
+    // đang nhấn (hasTermClosed) — VCC -> hàng phím, cột phím -> anode
+    // thì LED sáng khi nhấn phím, như solver (1 mạch, 1 đáp án).
+    gnd: hasTermClosed(c.id + '.K', 'GND'),
     // Anode nối net VCC chỉ tính là "có nguồn" khi 0 < psu.volts ≤ 10.
     // 0V thì net VCC không có điện, trên 10V thì LED tắt trong lúc điện
     // áp cao. Netlist không mang psu (vd defaultNetlist) thì mặc định 5V.
-    vccAnode: psuLedOn && hasTerm(c.id + '.A', 'VCC'),
+    vccAnode: psuLedOn && hasTermClosed(c.id + '.A', 'VCC'),
     cathPin: picPinInNet(c.id + '.K'),
   }));
   const buttons = netlist.components.filter((c) => c.kind === 'button').map((c) => {
@@ -234,37 +262,63 @@ export function resolvePeripherals(netlist) {
     const pin = pinT1 || pinT2;
     const otherTerm = pinT1 ? c.id + '.T2' : c.id + '.T1';
     const otherLevel = hasTerm(otherTerm, 'VCC') ? 1 : hasTerm(otherTerm, 'GND') ? 0 : null;
-    return { id: c.id, label: c.label, pin, otherLevel };
+    // Chân PIC ở đầu còn lại (nút nối 2 chân PIC với nhau): mức khi nhấn
+    // là mức live của chân đó (xem applyButtonToCpu), không phải hằng số.
+    const otherPin = pinT1 ? pinT2 : pinT1;
+    // Mức khi thả ra: đầu kia là VCC (active-high) thì chân thả nổi về 0
+    // (kéo xuống); GND (active-low, pull-up), chân PIC hay nổi thì về 1.
+    const idleLevel = otherLevel === 1 ? 0 : 1;
+    return { id: c.id, label: c.label, pin, otherLevel, otherPin, idleLevel };
   });
   const pots = netlist.components.filter((c) => c.kind === 'pot').map((c) => {
     const wiper = picPinInNet(c.id + '.W');
     return {
       id: c.id, label: c.label,
       wiper: wiper ? { ...wiper, analog: wiper.analog ?? null } : null,
-      vcc: hasTerm(c.id + '.VCC', 'VCC'),
-      gnd: hasTerm(c.id + '.GND', 'GND'),
+      vcc: hasTermClosed(c.id + '.VCC', 'VCC'),
+      gnd: hasTermClosed(c.id + '.GND', 'GND'),
     };
   });
   const lcdComp = netlist.components.find((c) => c.kind === 'lcd') || null;
-  let lcd = { id: null, rs: null, e: null, d: [null, null, null, null, null, null, null, null], complete: false, missing: [] };
+  // LCD đủ dây khi nối đủ RS + E + D0–D7 (8-bit) HOẶC RS + E + D4–D7
+  // (4-bit, chuẩn HD44780: D0–D3 không cần nối). mode cho pic16.js biết
+  // cách chốt dữ liệu (lcdTick: 4-bit chốt từng nibble trên D4–D7).
+  // Chưa đủ dây nào: missing liệt kê theo hướng gần đủ hơn (thiếu ít
+  // đầu hơn) để thông báo "thiếu: ..." chỉ đúng chỗ cần nối thêm.
+  let lcd = { id: null, rs: null, e: null, d: [null, null, null, null, null, null, null, null], complete: false, missing: [], mode: null };
   if (lcdComp) {
     const rs = picPinInNet(lcdComp.id + '.RS');
     const e = picPinInNet(lcdComp.id + '.E');
     const d = [];
     for (let i = 0; i < 8; i++) d.push(picPinInNet(lcdComp.id + '.D' + i));
-    const missing = [];
-    if (!rs) missing.push('RS');
-    if (!e) missing.push('E');
-    d.forEach((p, i) => { if (!p) missing.push('D' + i); });
-    lcd = { id: lcdComp.id, rs, e, d, complete: missing.length === 0, missing };
+    const missing8 = [];
+    if (!rs) missing8.push('RS');
+    if (!e) missing8.push('E');
+    d.forEach((p, i) => { if (!p) missing8.push('D' + i); });
+    const missing4 = [];
+    if (!rs) missing4.push('RS');
+    if (!e) missing4.push('E');
+    d.slice(4).forEach((p, i) => { if (!p) missing4.push('D' + (i + 4)); });
+    if (missing8.length === 0) {
+      lcd = { id: lcdComp.id, rs, e, d, complete: true, missing: [], mode: '8bit' };
+    } else if (missing4.length === 0) {
+      lcd = { id: lcdComp.id, rs, e, d, complete: true, missing: [], mode: '4bit' };
+    } else {
+      lcd = { id: lcdComp.id, rs, e, d, complete: false, missing: missing4.length < missing8.length ? missing4 : missing8, mode: null };
+    }
   }
   const buzzers = netlist.components.filter((c) => c.kind === 'buzzer').map((c) => ({
     id: c.id, label: c.label,
     pin: picPinInNet(c.id + '.P'),
-    gnd: hasTerm(c.id + '.N', 'GND'),
+    // Chân − cũng có thể là chân PIC (low-side drive, như cathPin của
+    // LED): P→VCC, N→RB0 ngõ ra mức 0 thì còi kêu.
+    nPin: picPinInNet(c.id + '.N'),
+    // Chân − về GND và chân + nối VCC: tính cả đường qua phím bàn phím
+    // đang nhấn (hasTermClosed), như LED ở trên.
+    gnd: hasTermClosed(c.id + '.N', 'GND'),
     // Chân + nối net VCC chỉ tính là "có nguồn" khi 0 < psu.volts ≤ 10
     // (cùng quy tắc LED nối VCC).
-    vccP: psuLedOn && hasTerm(c.id + '.P', 'VCC'),
+    vccP: psuLedOn && hasTermClosed(c.id + '.P', 'VCC'),
   }));
   // LED 7 thanh: mỗi đoạn ghi lại chân PIC trong net của nó (nếu có) và
   // net đó có VCC/GND không; chân chung COM cũng vậy. Trạng thái sáng/
@@ -272,8 +326,10 @@ export function resolvePeripherals(netlist) {
   const sevensegs = netlist.components.filter((c) => c.kind === 'sevenseg').map((c) => {
     const termInfo = (t) => ({
       pin: picPinInNet(c.id + '.' + t),
-      vcc: hasTerm(c.id + '.' + t, 'VCC'),
-      gnd: hasTerm(c.id + '.' + t, 'GND'),
+      // VCC/GND của từng đoạn và chân chung: tính cả đường qua phím bàn
+      // phím đang nhấn (hasTermClosed), như LED ở trên.
+      vcc: hasTermClosed(c.id + '.' + t, 'VCC'),
+      gnd: hasTermClosed(c.id + '.' + t, 'GND'),
     });
     const seg = {};
     for (const t of SEVEN_SEG_TERMS) seg[t] = termInfo(t);
@@ -345,7 +401,10 @@ function ledStatesLegacy(cpu, mapping) {
 function buzzerStatesLegacy(cpu, mapping) {
   return mapping.buzzers.map((bz) => {
     const vP = bz.vccP ? 5 : pinVoltsLegacy(cpu, bz.pin);
-    const vN = bz.gnd ? 0 : null;
+    // Như LED (cathPin): chân − cũng có thể là chân PIC ngõ ra — P→VCC,
+    // N→RB0=0 thì kêu; N→RB0=1 thì tắt; N nổi (không GND, không chân
+    // output) thì không kêu.
+    const vN = bz.gnd ? 0 : pinVoltsLegacy(cpu, bz.nPin);
     return { id: bz.id, on: vP !== null && vN !== null && (vP - vN) >= 2 };
   });
 }
@@ -431,11 +490,24 @@ export function buzzerStates(a, b) {
     .map((c) => ({ id: c.id, on: onMap ? onMap.get(c.id) === true : false }));
 }
 
-// Nhấn/thả nút: đóng mạch giữa chân PIC và đầu còn lại (GND=0, VCC=1)
+// Nhấn/thả nút: đóng mạch giữa chân PIC và đầu còn lại (GND=0, VCC=1,
+// chân PIC khác = mức live của chân đó lúc nhấn). Thả ra thì chân về
+// idleLevel của nút (đầu kia VCC -> 0, GND / chân PIC / nổi -> 1),
+// KHÔNG phải lúc nào cũng 1 như trước — nút active-high về VCC mà thả
+// vẫn 1 thì CPU không bao giờ thấy lần nhấn.
 export function applyButtonToCpu(cpu, mapping, buttonId, pressed) {
   const b = mapping.buttons.find((x) => x.id === buttonId);
   if (!b || !b.pin) return false;
-  const level = pressed ? (b.otherLevel ?? 1) : 1; // thả ra: pull-up kéo lên 1
+  let level;
+  if (pressed) {
+    // Đầu kia là chân PIC thì lấy mức live của nó (có thể đổi theo code,
+    // vd RB1 đang là ngõ ra mức 0); đầu kia là VCC/GND thì lấy otherLevel.
+    level = (b.otherPin && typeof cpu.pinLevel === 'function')
+      ? cpu.pinLevel(b.otherPin.port, b.otherPin.bit)
+      : (b.otherLevel ?? 1);
+  } else {
+    level = b.idleLevel ?? 1;
+  }
   cpu.setPinInput(b.pin.port, b.pin.bit, level);
   return true;
 }
@@ -599,16 +671,53 @@ export function checkWiring(netlist, tris = null) {
     }
   }
 
-  // 4. LCD thiếu dây
+  // 4. LCD thiếu dây (lcdMap dùng lại ở quy tắc 7: LCD 4-bit thì D0–D3
+  // không nối là đúng, không cảnh báo "chưa nối dây").
   const lcdComp = netlist.components.find((x) => x.kind === 'lcd');
+  let lcdMap = null;
   if (lcdComp) {
-    const map = resolvePeripherals(netlist);
-    if (!map.lcd.complete) {
+    lcdMap = resolvePeripherals(netlist);
+    if (!lcdMap.lcd.complete) {
       warnings.push({
         id: 'lcd-' + lcdComp.id, kind: 'warn',
-        message: `LCD ${lcdComp.label} chưa nối đủ dây — thiếu: ${map.lcd.missing.join(', ')}. LCD sẽ không hiện chữ cho tới khi nối đủ RS, E và D0–D7.`,
+        message: `LCD ${lcdComp.label} chưa nối đủ dây — thiếu: ${lcdMap.lcd.missing.join(', ')}. Nối đủ RS, E và D0–D7 (8-bit) hoặc RS, E và D4–D7 (4-bit) thì LCD hiện chữ.`,
         wireIds: [], compIds: [lcdComp.id],
-        terminalIds: map.lcd.missing.map((t) => lcdComp.id + '.' + t),
+        terminalIds: lcdMap.lcd.missing.map((t) => lcdComp.id + '.' + t),
+      });
+    }
+  }
+
+  // 8. Chip PIC mất nguồn / giữ reset (Issue 8). Chỉ netlist từ bàn 3D
+  // (có netlist.psu) mới xét: defaultNetlist() không có chip trên bàn
+  // nên mọi chân PIC trong đó đều là singleton, không phân biệt được
+  // "chưa nối" với "không có chip". Hạn chế đã biết: VDD có 2 chân
+  // (11, 32) nhưng netlist chỉ giữ 1 terminal 'PIC.VDD' (chân 32, xem
+  // buildBenchNets) — chỉ nối chân 11 mà không nối chân 32 thì cảnh báo
+  // này vẫn hiện dù chip đã có nguồn; solver (tính cả 2 chân) mới là
+  // chuẩn cho hành vi chạy. MCLR chỉ cảnh báo khi net chứa GND mà không
+  // chứa VCC (2 rail nối tắt nhau thì net chứa cả 2, không tính là
+  // MCLR thấp — mạch nối tắt đó đã có cảnh báo riêng).
+  if (netlist.psu) {
+    const vddNet = nets.find((n) => n.members.includes('PIC.VDD'));
+    const vddWired = !!(vddNet && vddNet.members.includes('VCC'));
+    const voltsOk = !Number.isFinite(psuVoltsRaw) || (psuVoltsRaw > 0 && psuVoltsRaw <= 5.5);
+    if (!vddWired || !voltsOk) {
+      let reason;
+      if (Number.isFinite(psuVoltsRaw) && psuVoltsRaw <= 0) reason = 'Nguồn đang ở 0V nên chip không có điện';
+      else if (Number.isFinite(psuVoltsRaw) && psuVoltsRaw > 5.5) reason = `Nguồn đang ở ${String(Math.round(psuVoltsRaw * 100) / 100)}V, vượt quá 5.5V nên chip không chạy được (quá áp có thể làm hỏng chip)`;
+      else reason = 'Chân VDD chưa nối về nguồn +5V nên chip không có điện';
+      warnings.push({
+        id: 'pic-nopower', kind: 'warn',
+        message: `${reason} — chương trình không chạy, chân PIC không ra mức. Nối VDD về thanh +5V và để nguồn trong khoảng trên 0 đến 5.5V.`,
+        wireIds: [], compIds: [], terminalIds: ['PIC.VDD'],
+      });
+    }
+    const mclrNet = nets.find((n) => n.members.includes('PIC.MCLR'));
+    if (mclrNet && mclrNet.members.includes('GND') && !mclrNet.members.includes('VCC')) {
+      warnings.push({
+        id: 'pic-mclr', kind: 'warn',
+        message: 'MCLR đang nối về GND — chip giữ ở reset, chương trình không chạy. Nối MCLR về +5V (hoặc để nổi) thì chip mới chạy.',
+        wireIds: [], compIds: [], terminalIds: ['PIC.MCLR'],
       });
     }
   }
@@ -616,6 +725,8 @@ export function checkWiring(netlist, tris = null) {
   // 7. Đầu nối linh kiện chưa nối dây nào
   for (const c of netlist.components) {
     for (const t of componentTerminals(c)) {
+      // LCD 4-bit: D0–D3 không nối là đúng (không phải "chưa nối dây").
+      if (c.kind === 'lcd' && lcdMap && lcdMap.lcd.mode === '4bit' && /^D[0-3]$/.test(t.split('.')[1] || '')) continue;
       const root = netOf.get(t);
       const net = nets.find((n) => n.id === root);
       if (net && net.members.length === 1) {

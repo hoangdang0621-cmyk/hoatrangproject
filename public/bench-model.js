@@ -913,18 +913,63 @@ export function defaultProps(type) {
 }
 
 // ---------------------------------------------------------------------------
-// Thạch anh: tần số dao động (Hz) của thạch anh đầu tiên trên bàn, hoặc
-// null nếu không có thạch anh. Đây là xung nhịp thật cho CPU — không có
-// thạch anh thì chip không có xung, chương trình không chạy (xem app.js
-// loadC). _XTAL_FREQ trong code C chỉ dùng để sinh vòng delay, không phải
-// xung nhịp.
+// Thạch anh: tần số dao động (Hz) của thạch anh trên bàn, hoặc null nếu
+// không có thạch anh nối đúng mạch dao động. Đây là xung nhịp thật cho
+// CPU — không có thạch anh thì chip không có xung, chương trình không
+// chạy (xem app.js loadC: noCrystal -> clockHz = 0). _XTAL_FREQ trong
+// code C chỉ dùng để sinh vòng delay, không phải xung nhịp.
+// Một thạch anh chỉ cấp xung khi CẢ 2 chân của nó CHUNG STRIP với 2 chân
+// OSC1 (chân 13) / OSC2 (chân 14) của PIC: chân thạch anh cắm vào cùng
+// đoạn 5 hàng, cùng cột với chân OSC (vd board 830: thạch anh a34/a35
+// chung strip với OSC1 b34 / OSC2 b35; board 100x20: f53/f54 chung strip
+// với g53/g54). Thạch anh đặt ở chỗ khác trên bàn — dù vẫn nằm trên
+// board — KHÔNG cấp xung. Thạch anh đối xứng nên 2 chân đổi cho nhau
+// vẫn được. Tụ nạp (load cap 22pF) KHÔNG bắt buộc để có xung (thạch anh
+// thật vẫn dao động khi thiếu tụ, chỉ kém ổn định). Thạch anh chỉ nối
+// tới strip OSC qua DÂY NHẢY (không cắm trực tiếp vào strip OSC) cũng
+// chưa được tính — phải cắm chân thạch anh vào đúng strip OSC.
+// Chế độ dao động RC (điện trở + tụ trên OSC1, không có thạch anh) KHÔNG
+// được mô phỏng (xem ghi chú FOSC ở pic16.js): không có thạch anh nối
+// đúng thì không có xung.
+// Ngoại lệ: state rút gọn chưa có anchor cho thạch anh (fixture test,
+// linh kiện chưa đặt lên board nên không xác định được chân) thì giữ
+// hành vi cũ — trả tần số của thạch anh đó. Trên bàn thật thạch anh
+// luôn có anchor nên nhánh này không chạy trong app.
 // ---------------------------------------------------------------------------
 export const CRYSTAL_FREQS = [4000000, 8000000, 20000000]; // 4 / 8 / 20 MHz
 export function crystalFreq(state) {
-  const x = (state.components || []).find((c) => c.type === 'crystal');
-  if (!x) return null;
-  const f = Number(x.props?.freq);
-  return Number.isFinite(f) && f > 0 ? f : null;
+  const size = state.size ?? DEFAULT_SIZE;
+  const comps = state.components || [];
+  // Strip của 2 chân OSC của PIC (null nếu không có chip, hoặc chân OSC
+  // treo ngoài board) — tính theo lỗ neo THẬT của chip trên bàn.
+  let osc1Strip = null, osc2Strip = null;
+  const pic = comps.find((c) => c.type === 'pic');
+  if (pic) {
+    const picLegs_ = legsFor(pic, size);
+    const o1 = picLegs_.find((l) => l.term === 'PIC.OSC1');
+    const o2 = picLegs_.find((l) => l.term === 'PIC.OSC2');
+    osc1Strip = o1 && o1.hole ? stripKey(o1.hole, size) : null;
+    osc2Strip = o2 && o2.hole ? stripKey(o2.hole, size) : null;
+  }
+  let unplacedFreq = null;
+  for (const x of comps) {
+    if (x.type !== 'crystal') continue;
+    const f = Number(x.props?.freq);
+    if (!Number.isFinite(f) || f <= 0) continue;
+    const legs = legsFor(x, size);
+    const l1 = legs.find((l) => l.term === 'OSC1');
+    const l2 = legs.find((l) => l.term === 'OSC2');
+    // Thạch anh chưa có anchor (không xác định được chân): để dành trả
+    // theo hành vi cũ ở cuối (chỉ dùng cho fixture rút gọn, xem trên).
+    if (!l1 || !l2) { if (unplacedFreq === null) unplacedFreq = f; continue; }
+    const s1 = l1.hole ? stripKey(l1.hole, size) : null;
+    const s2 = l2.hole ? stripKey(l2.hole, size) : null;
+    // Chân rơi ngoài board, không có chip, hoặc chân OSC treo ngoài
+    // board thì không thể nối thành mạch dao động.
+    if (!s1 || !s2 || !osc1Strip || !osc2Strip) continue;
+    if ((s1 === osc1Strip && s2 === osc2Strip) || (s1 === osc2Strip && s2 === osc1Strip)) return f;
+  }
+  return unplacedFreq;
 }
 // Chuẩn hóa props của 3 loại mới khi đọc state đã lưu: tụ phải là số
 // pF dương, thạch anh phải là 1 trong 3 tần số cho phép, LED 7 thanh
