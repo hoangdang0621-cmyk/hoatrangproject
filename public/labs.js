@@ -140,6 +140,87 @@ void main() {
       { id: 'LAB2-W17', a: 'o36', b: 'B-36', color: '#0F172A' }, // tụ C1 (strip n36) -> GND (rail -)
     ],
   },
+  {
+    id: 'count-2x7seg',
+    title: 'Đếm 00–99 trên 2 LED 7 thanh',
+    desc: 'LED 7 thanh hàng chục (chung cathode) nối RD0–RD7: a→RD0, b→RD1, c→RD2, d→RD3, e→RD4, f→RD5, g→RD6, dp→RD7; LED 7 thanh hàng đơn vị nối RB0–RB7: a→RB0, b→RB1, c→RB2, d→RB3, e→RB4, f→RB5, g→RB6, dp→RB7; chân chung cả 2 về GND. Thạch anh 4MHz nối OSC1 (chân 13) – OSC2 (chân 14), mỗi chân thạch anh có 1 tụ gốm 22pF về GND.',
+    code: `#include <xc.h>
+#define _XTAL_FREQ 4000000
+
+const unsigned char seg[10] = {0x3F, 0x06, 0x5B, 0x4F, 0x66, 0x6D, 0x7D, 0x07, 0x7F, 0x6F};
+
+void main() {
+  unsigned char chuc = 0, donvi = 0;
+  TRISB = 0;
+  TRISD = 0;
+  while (1) {
+    PORTD = seg[chuc];
+    PORTB = seg[donvi];
+    __delay_ms(500);
+    donvi++;
+    if (donvi >= 10) {
+      donvi = 0;
+      chuc++;
+      if (chuc >= 10) chuc = 0;
+    }
+  }
+}`,
+    size: { cols: 100, rows: 20, rails: true },
+    components: [
+      // 2 LED 7 thanh cạnh nhau, góc trên trái (cột 10–14 và 16–20,
+      // hàng a/f): hàng chục bên trái (SEG0, PORTD), hàng đơn vị bên
+      // phải (SEG1, PORTB) — đọc trái sang phải là chục rồi đơn vị.
+      // Mỗi đoạn là 1 nhánh LED trong solver (2V + 10Ω) nên không cần
+      // điện trở ngoài. Chân chung cathode về GND (qua dây).
+      { id: 'SEG0', type: 'sevenseg', anchor: 'a10', rot: 0, props: { common: 'cathode' } },
+      { id: 'SEG1', type: 'sevenseg', anchor: 'a16', rot: 0, props: { common: 'cathode' } },
+      // Mạch dao động thạch anh (y hệt Lab 2: cùng board 100×20, cùng
+      // neo PIC g41): thạch anh 4MHz nối 2 chân OSC (g53/g54, hàng f
+      // là hàng duy nhất còn trống trong 2 strip OSC vì thân chip phủ
+      // hàng g–m); 2 tụ gốm 22pF ở hàng n, CỘT 30–40 (ngoài cột chip
+      // 41–60). Mỗi tụ 1 chân về strip OSC (qua dây) và 1 chân về GND.
+      { id: 'X0', type: 'crystal', anchor: 'f53', rot: 0, props: { freq: 4000000 } },
+      { id: 'C0', type: 'capacitor', anchor: 'n30', rot: 0, props: { value: 22 } },
+      { id: 'C1', type: 'capacitor', anchor: 'n36', rot: 0, props: { value: 22 } },
+    ],
+    // Quy tắc dây lab: cắm vào lỗ kề trong cùng đoạn strip (5 hàng), KHÔNG cắm trùng lỗ chân linh kiện.
+    // Chân PIC (neo g41): RD0=g59, RD1=g60, RD2=m60, RD3=m59, RD4=m54,
+    // RD5=m53, RD6=m52, RD7=m51; RB0=m48, RB1=m47, RB2=m46, RB3=m45,
+    // RB4=m44, RB5=m43, RB6=m42, RB7=m41. Chân 7 thanh: SEG0 a–dp ở
+    // hàng a (a10–a14), e/f/g/COM ở hàng f (f10–f13); SEG1 a–dp ở hàng
+    // a (a16–a20), e/f/g/COM ở hàng f (f16–f19). Đầu dây phía 7 thanh
+    // lấy lỗ kề hàng b (cho chân hàng a) hoặc hàng g (cho chân hàng f);
+    // đầu dây phía PIC lấy lỗ kề hàng f (cho chân hàng g) hoặc hàng k
+    // (cho chân hàng m) — theo đúng tiền lệ Lab 2 (dây LCD/OSC cũng
+    // cắm lỗ dưới thân chip).
+    wires: [
+      // SEG0 (hàng chục) -> PORTD
+      { id: 'LAB3-W1', a: 'b10', b: 'f59', color: '#2563EB' }, // SEG0.a (strip a10) -> RD0 (strip g59)
+      { id: 'LAB3-W2', a: 'b11', b: 'f60', color: '#2563EB' }, // SEG0.b (strip a11) -> RD1 (strip g60)
+      { id: 'LAB3-W3', a: 'b12', b: 'k60', color: '#2563EB' }, // SEG0.c (strip a12) -> RD2 (strip m60)
+      { id: 'LAB3-W4', a: 'b13', b: 'k59', color: '#2563EB' }, // SEG0.d (strip a13) -> RD3 (strip m59)
+      { id: 'LAB3-W5', a: 'g10', b: 'k54', color: '#2563EB' }, // SEG0.e (strip f10) -> RD4 (strip m54)
+      { id: 'LAB3-W6', a: 'g11', b: 'k53', color: '#2563EB' }, // SEG0.f (strip f11) -> RD5 (strip m53)
+      { id: 'LAB3-W7', a: 'g12', b: 'k52', color: '#2563EB' }, // SEG0.g (strip f12) -> RD6 (strip m52)
+      { id: 'LAB3-W8', a: 'b14', b: 'k51', color: '#2563EB' }, // SEG0.dp (strip a14) -> RD7 (strip m51)
+      { id: 'LAB3-W9', a: 'g13', b: 'B-13', color: '#0F172A' }, // SEG0.COM (strip f13) -> GND (rail -)
+      // SEG1 (hàng đơn vị) -> PORTB
+      { id: 'LAB3-W10', a: 'b16', b: 'k48', color: '#2563EB' }, // SEG1.a (strip a16) -> RB0 (strip m48)
+      { id: 'LAB3-W11', a: 'b17', b: 'k47', color: '#2563EB' }, // SEG1.b (strip a17) -> RB1 (strip m47)
+      { id: 'LAB3-W12', a: 'b18', b: 'k46', color: '#2563EB' }, // SEG1.c (strip a18) -> RB2 (strip m46)
+      { id: 'LAB3-W13', a: 'b19', b: 'k45', color: '#2563EB' }, // SEG1.d (strip a19) -> RB3 (strip m45)
+      { id: 'LAB3-W14', a: 'g16', b: 'k44', color: '#2563EB' }, // SEG1.e (strip f16) -> RB4 (strip m44)
+      { id: 'LAB3-W15', a: 'g17', b: 'k43', color: '#2563EB' }, // SEG1.f (strip f17) -> RB5 (strip m43)
+      { id: 'LAB3-W16', a: 'g18', b: 'k42', color: '#2563EB' }, // SEG1.g (strip f18) -> RB6 (strip m42)
+      { id: 'LAB3-W17', a: 'b20', b: 'k41', color: '#2563EB' }, // SEG1.dp (strip a20) -> RB7 (strip m41)
+      { id: 'LAB3-W18', a: 'g19', b: 'B-19', color: '#0F172A' }, // SEG1.COM (strip f19) -> GND (rail -)
+      // Mạch dao động (y hệt Lab 2)
+      { id: 'LAB3-W19', a: 'o34', b: 'h53', color: '#059669' }, // tụ C0 (strip n34) -> OSC1 (strip f53/g53, lỗ h53 dưới thân chip)
+      { id: 'LAB3-W20', a: 'o30', b: 'B-30', color: '#0F172A' }, // tụ C0 (strip n30) -> GND (rail -)
+      { id: 'LAB3-W21', a: 'o40', b: 'h54', color: '#059669' }, // tụ C1 (strip n40) -> OSC2 (strip f54/g54, lỗ h54 dưới thân chip)
+      { id: 'LAB3-W22', a: 'o36', b: 'B-36', color: '#0F172A' }, // tụ C1 (strip n36) -> GND (rail -)
+    ],
+  },
 ];
 
 export function getLab(id) {

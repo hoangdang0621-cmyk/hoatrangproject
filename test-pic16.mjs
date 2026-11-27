@@ -2260,9 +2260,9 @@ const SLEEP_PROG = `    ORG 0
 // (q-a) Chỉ có đúng Lab 1, đủ dữ liệu: 1 điện trở 220Ω + 1 LED + 3 dây
 {
   const lab = LABS[0];
-  check('(q-a) LABS có đúng 2 lab: Lab 1 Điều khiển LED (LABS[0]) + Lab 2 Điều khiển LED + LCD (LABS[1])',
-    LABS.length === 2 && lab.id === 'led-blink' && lab.title === 'Điều khiển LED' && lab.size === 830
-    && LABS[1].id === 'led-lcd' && getLab('led-blink') === lab && getLab('khong-co') === null, JSON.stringify(LABS.map((l) => l.id)));
+  check('(q-a) LABS có đúng 3 lab: Lab 1 Điều khiển LED (LABS[0]) + Lab 2 Điều khiển LED + LCD (LABS[1]) + Lab 3 Đếm 00–99 (LABS[2])',
+    LABS.length === 3 && lab.id === 'led-blink' && lab.title === 'Điều khiển LED' && lab.size === 830
+    && LABS[1].id === 'led-lcd' && LABS[2].id === 'count-2x7seg' && getLab('led-blink') === lab && getLab('khong-co') === null, JSON.stringify(LABS.map((l) => l.id)));
   check('(q-a) Lab 1 có đúng 1 điện trở 220Ω (R0 @i45) + 1 LED đỏ (LED0 @i52) + thạch anh 4MHz (X0 @a34) + 2 tụ gốm 22pF (C0 @i10, C1 @i16)',
     lab.components.length === 5
     && lab.components[0].id === 'R0' && lab.components[0].type === 'resistor' && lab.components[0].anchor === 'i45' && lab.components[0].props.value === 220
@@ -3293,6 +3293,121 @@ D1: DECFSZ CNT,F
   check('(y-f) không linh kiện nào thò ra ngoài mép board (LCD/PIC/R/LED)',
     inside(lcdBox) && inside(picBox) && inside(rBox) && inside(ledBox),
     `board x ${bx0.toFixed(1)}..${bx1.toFixed(1)} z ±${bz.toFixed(1)}; LCD ${JSON.stringify(lcdBox)}`);
+}
+
+// Nhóm (bb): Lab 3 "Đếm 00–99 trên 2 LED 7 thanh" — 2 LED 7 thanh cạnh
+// nhau (hàng chục PORTD, hàng đơn vị PORTB, chung cathode về GND) +
+// thạch anh 4MHz + 2 tụ gốm 22pF (bắt buộc để chip có xung).
+// (bb-a) Lab 3 đủ dữ liệu: 2 LED 7 thanh + thạch anh + 2 tụ + 22 dây
+{
+  const lab = LABS[2];
+  check('(bb-a) Lab 3: Đếm 00–99 trên 2 LED 7 thanh, board 100×20 có rail',
+    lab && lab.id === 'count-2x7seg' && lab.title === 'Đếm 00–99 trên 2 LED 7 thanh'
+    && lab.size && lab.size.cols === 100 && lab.size.rows === 20 && lab.size.rails === true
+    && lab.desc.includes('RD0–RD7') && lab.desc.includes('RB0–RB7') && lab.desc.includes('thạch anh')
+    && !lab.desc.includes('100 cột') && !lab.desc.includes('Board lớn') && !lab.desc.includes('Trên bàn'),
+    lab ? lab.id : 'thieu LABS[2]');
+  check('(bb-a) Lab 3 có đúng 2 LED 7 thanh (SEG0 @a10, SEG1 @a16) + thạch anh 4MHz (X0 @f53) + 2 tụ gốm 22pF (C0 @n30, C1 @n36)',
+    lab.components.length === 5
+    && lab.components[0].id === 'SEG0' && lab.components[0].type === 'sevenseg' && lab.components[0].anchor === 'a10' && lab.components[0].props.common === 'cathode'
+    && lab.components[1].id === 'SEG1' && lab.components[1].type === 'sevenseg' && lab.components[1].anchor === 'a16' && lab.components[1].props.common === 'cathode'
+    && lab.components[2].id === 'X0' && lab.components[2].type === 'crystal' && lab.components[2].anchor === 'f53' && lab.components[2].props.freq === 4000000
+    && lab.components[3].id === 'C0' && lab.components[3].type === 'capacitor' && lab.components[3].anchor === 'n30' && lab.components[3].props.value === 22
+    && lab.components[4].id === 'C1' && lab.components[4].type === 'capacitor' && lab.components[4].anchor === 'n36' && lab.components[4].props.value === 22,
+    JSON.stringify(lab.components));
+  check('(bb-a) Lab 3 có đúng 22 dây: 8 đoạn + COM của SEG0, 8 đoạn + COM của SEG1, 4 dây dao động',
+    lab.wires.length === 22
+    && lab.wires[0].a === 'b10' && lab.wires[0].b === 'f59'   // SEG0.a -> RD0
+    && lab.wires[7].a === 'b14' && lab.wires[7].b === 'k51'   // SEG0.dp -> RD7
+    && lab.wires[8].a === 'g13' && lab.wires[8].b === 'B-13'  // SEG0.COM -> GND
+    && lab.wires[9].a === 'b16' && lab.wires[9].b === 'k48'   // SEG1.a -> RB0
+    && lab.wires[16].a === 'b20' && lab.wires[16].b === 'k41' // SEG1.dp -> RB7
+    && lab.wires[17].a === 'g19' && lab.wires[17].b === 'B-19' // SEG1.COM -> GND
+    && lab.wires[18].a === 'o34' && lab.wires[18].b === 'h53' // C0 -> OSC1
+    && lab.wires[19].a === 'o30' && lab.wires[19].b === 'B-30' // C0 -> GND
+    && lab.wires[20].a === 'o40' && lab.wires[20].b === 'h54' // C1 -> OSC2
+    && lab.wires[21].a === 'o36' && lab.wires[21].b === 'B-36', // C1 -> GND
+    JSON.stringify(lab.wires.map((w) => w.a + '->' + w.b)));
+}
+// (bb-b) buildLabState cho ra state hợp lệ + mỗi đầu dây cùng strip với chân nó nối
+{
+  const r = buildLabState(LABS[2]);
+  check('(bb-b) buildLabState Lab 3 ok: PIC1 + PSU1 + SEG0 + SEG1 + X0 + C0 + C1, dây W1-W7 + 22 dây lab',
+    r.ok && r.state.components.map((c) => c.id).join(',') === 'PIC1,PSU1,SEG0,SEG1,X0,C0,C1'
+    && r.state.wires.map((w) => w.id).join(',') === 'W1,W2,W3,W4,W5,W6,W7,LAB3-W1,LAB3-W2,LAB3-W3,LAB3-W4,LAB3-W5,LAB3-W6,LAB3-W7,LAB3-W8,LAB3-W9,LAB3-W10,LAB3-W11,LAB3-W12,LAB3-W13,LAB3-W14,LAB3-W15,LAB3-W16,LAB3-W17,LAB3-W18,LAB3-W19,LAB3-W20,LAB3-W21,LAB3-W22',
+    r.ok ? JSON.stringify({ comps: r.state.components.map((c) => c.id), wires: r.state.wires.map((w) => w.id) }) : r.reason);
+  check('(bb-b) không đầu dây lab nào cắm trùng lỗ chân linh kiện (chip/SEG0/SEG1/X0/C0/C1)',
+    r.ok && (() => {
+      const legHoles = new Set(r.state.components.flatMap((c) => legsFor(c, LABS[2].size).map((l) => l.hole).filter(Boolean)));
+      return LABS[2].wires.every((w) => [w.a, w.b].every((e) => !parseHole(e, LABS[2].size) || !legHoles.has(e)));
+    })(), '');
+  check('(bb-b) mỗi dây đoạn: đầu A cùng strip với chân 7 thanh, đầu B cùng strip với chân PIC tương ứng',
+    r.ok && (() => {
+      const segLegs = (id) => Object.fromEntries(legsFor({ type: 'sevenseg', anchor: id === 'SEG0' ? 'a10' : 'a16', rot: 0 }, LABS[2].size).map((l) => [l.term, l.hole]));
+      const picLeg = Object.fromEntries(picLegsForAnchor({ r: 6, c: 41 }, LABS[2].size).map((l) => [l.term.slice(4), l.hole]));
+      const terms = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'dp'];
+      const pinsD = ['RD0', 'RD1', 'RD2', 'RD3', 'RD4', 'RD5', 'RD6', 'RD7'];
+      const pinsB = ['RB0', 'RB1', 'RB2', 'RB3', 'RB4', 'RB5', 'RB6', 'RB7'];
+      const legs0 = segLegs('SEG0'), legs1 = segLegs('SEG1');
+      return LABS[2].wires.slice(0, 8).every((w, i) =>
+        stripKey(w.a, LABS[2].size) === stripKey(legs0[terms[i]], LABS[2].size)
+        && stripKey(w.b, LABS[2].size) === stripKey(picLeg[pinsD[i]], LABS[2].size))
+        && LABS[2].wires.slice(9, 17).every((w, i) =>
+          stripKey(w.a, LABS[2].size) === stripKey(legs1[terms[i]], LABS[2].size)
+          && stripKey(w.b, LABS[2].size) === stripKey(picLeg[pinsB[i]], LABS[2].size));
+    })(), '');
+}
+// (bb-c) Mạch hợp lệ qua netlist: SEG0 nối RD0–RD7, SEG1 nối RB0–RB7, COM về GND, 0 cảnh báo
+{
+  const { state } = buildLabState(LABS[2]);
+  const nl = benchToNetlist(state);
+  const mapping = resolvePeripherals(nl);
+  check('(bb-c) SEG0 (hàng chục) nối đúng RD0–RD7, COM về GND',
+    mapping.sevensegs.length === 2
+    && mapping.sevensegs[0].id === 'SEG0'
+    && JSON.stringify(['a', 'b', 'c', 'd', 'e', 'f', 'g', 'dp'].map((t) => mapping.sevensegs[0].seg[t] && mapping.sevensegs[0].seg[t].pin && mapping.sevensegs[0].seg[t].pin.id)) === JSON.stringify(['RD0', 'RD1', 'RD2', 'RD3', 'RD4', 'RD5', 'RD6', 'RD7'])
+    && mapping.sevensegs[0].com && mapping.sevensegs[0].com.gnd === true,
+    JSON.stringify(mapping.sevensegs[0]));
+  check('(bb-c) SEG1 (hàng đơn vị) nối đúng RB0–RB7, COM về GND',
+    mapping.sevensegs[1].id === 'SEG1'
+    && JSON.stringify(['a', 'b', 'c', 'd', 'e', 'f', 'g', 'dp'].map((t) => mapping.sevensegs[1].seg[t] && mapping.sevensegs[1].seg[t].pin && mapping.sevensegs[1].seg[t].pin.id)) === JSON.stringify(['RB0', 'RB1', 'RB2', 'RB3', 'RB4', 'RB5', 'RB6', 'RB7'])
+    && mapping.sevensegs[1].com && mapping.sevensegs[1].com.gnd === true,
+    JSON.stringify(mapping.sevensegs[1]));
+  check('(bb-c) Lab 3 có thạch anh 4MHz (crystalFreq), checkWiring 0 cảnh báo',
+    crystalFreq(state) === 4000000 && checkWiring(nl, null).length === 0,
+    `crystalFreq=${crystalFreq(state)} warns=${JSON.stringify(checkWiring(nl, null).map((w) => w.message))}`);
+}
+// (bb-d) Chạy code mẫu C: đếm 00 -> 01 -> 02 -> 10, đoạn sáng đúng số
+{
+  const { state } = buildLabState(LABS[2]);
+  const mapping = resolvePeripherals(benchToNetlist(state));
+  const c = compileC(LABS[2].code);
+  check('(bb-d) code Lab 3 biên dịch 0 lỗi (bảng tra const, 2 biến đếm, __delay_ms 500)',
+    c.ok && c.errors.length === 0 && c.xtalFreq === 4000000, JSON.stringify(c.errors || []));
+  const cpu = createCPU();
+  cpu.setWiring(mapping);
+  cpu.loadProgram(c.program);
+  const segs = () => sevenSegStates(cpu, mapping);
+  runUntil(cpu, 250000); // giữa khoảng 00
+  check('(bb-d) 00: PORTD=0x3F PORTB=0x3F, 2 LED đều hiện số 0',
+    cpu.readPort(3) === 0x3F && cpu.readPort(1) === 0x3F
+    && sevenSegDigit(segs()[0].on) === '0' && sevenSegDigit(segs()[1].on) === '0',
+    `PORTD=${cpu.readPort(3).toString(16)} PORTB=${cpu.readPort(1).toString(16)} SEG0=${sevenSegDigit(segs()[0].on)} SEG1=${sevenSegDigit(segs()[1].on)}`);
+  runUntil(cpu, 750000); // giữa khoảng 01
+  check('(bb-d) 01: PORTD=0x3F PORTB=0x06, SEG0 hiện 0, SEG1 hiện 1',
+    cpu.readPort(3) === 0x3F && cpu.readPort(1) === 0x06
+    && sevenSegDigit(segs()[0].on) === '0' && sevenSegDigit(segs()[1].on) === '1',
+    `PORTD=${cpu.readPort(3).toString(16)} PORTB=${cpu.readPort(1).toString(16)} SEG0=${sevenSegDigit(segs()[0].on)} SEG1=${sevenSegDigit(segs()[1].on)}`);
+  runUntil(cpu, 1250000); // giữa khoảng 02
+  check('(bb-d) 02: PORTD=0x3F PORTB=0x5B, SEG0 hiện 0, SEG1 hiện 2',
+    cpu.readPort(3) === 0x3F && cpu.readPort(1) === 0x5B
+    && sevenSegDigit(segs()[0].on) === '0' && sevenSegDigit(segs()[1].on) === '2',
+    `PORTD=${cpu.readPort(3).toString(16)} PORTB=${cpu.readPort(1).toString(16)} SEG0=${sevenSegDigit(segs()[0].on)} SEG1=${sevenSegDigit(segs()[1].on)}`);
+  runUntil(cpu, 5250000); // giữa khoảng 10
+  check('(bb-d) 10: PORTD=0x06 PORTB=0x3F, SEG0 hiện 1, SEG1 hiện 0 (chục tăng, đơn vị quay về 0)',
+    cpu.readPort(3) === 0x06 && cpu.readPort(1) === 0x3F
+    && sevenSegDigit(segs()[0].on) === '1' && sevenSegDigit(segs()[1].on) === '0',
+    `PORTD=${cpu.readPort(3).toString(16)} PORTB=${cpu.readPort(1).toString(16)} SEG0=${sevenSegDigit(segs()[0].on)} SEG1=${sevenSegDigit(segs()[1].on)} cycles=${cpu.cycles}`);
 }
 
 // Nhóm (z): gộp vôn kế + ampe kế thành 1 linh kiện "Đồng hồ đo"
