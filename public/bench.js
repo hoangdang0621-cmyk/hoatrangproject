@@ -15,11 +15,12 @@ import {
   normalizeSize, holeCount, sizeLabel, sameSize,
   psuVolts, validatePsuVolts, parsePsuPost, psuPostPos, PSU_SCALE, PSU_POST_DX, PSU_POST_Y, PSU_POST_DZ,
   parseScopePost, scopePostPos, SCOPE_POST_DX, SCOPE_POST_Y, SCOPE_POST_DZ, SCOPE_DEFAULT_TX, SCOPE_DEFAULT_TZ,
+  parseSerialPost, serialPostPos, SERIAL_POST_DX, SERIAL_POST_Y, SERIAL_POST_DZ, SERIAL_DEFAULT_TX, SERIAL_DEFAULT_TZ,
   clampCamTarget, zoomTowardPoint, panTarget, meterMode, crystalFreq,
-} from './bench-model.js?v=20261125ba';
-import { checkWiring, SIGNAL_COLORS, SEVEN_SEG_TERMS } from './wiring.js?v=20261125ba';
-import { formatVolts, formatAmps, formatCurrentDirection, sevenSegDigit } from './circuit-solver.js?v=20261125ba';
-import { LABS, getLab, buildLabState } from './labs.js?v=20261125bb';
+} from './bench-model.js?v=20261125be';
+import { checkWiring, SIGNAL_COLORS, SEVEN_SEG_TERMS, KEYPAD_KEYS } from './wiring.js?v=20261125be';
+import { formatVolts, formatAmps, formatCurrentDirection, sevenSegDigit } from './circuit-solver.js?v=20261125be';
+import { LABS, getLab, buildLabState } from './labs.js?v=20261125be';
 
 const $ = (id) => document.getElementById(id);
 const benchView = $('benchView');
@@ -63,6 +64,7 @@ function main() {
   let placementRot = 0;         // góc xoay khi đặt bằng bấm (0..3, R để xoay)
   let drag = null;              // {mode:'palette'|'move'|'move-psu'|'orbit'|'wire-end', ...}
   let pressedBtn = null;        // id nút đang nhấn giữ trên bàn
+  let pressedKeypad = null;     // phím bàn phím đang nhấn giữ {id, row, col} hoặc null
   let wireAddrError = '';       // lỗi nhập địa chỉ lỗ trong Inspector dây
   let inspAutoCloseTimer = null; // hẹn tự tắt popup Inspector sau 2s nếu không động vào
   let seq = 1, wireSeq = 100;
@@ -84,11 +86,15 @@ function main() {
   const wireHandleMeshes = [];    // núm tròn ở 2 đầu dây đang chọn (để kéo)
   const psuHitMeshes = [];        // núm bắt vô hình ở 2 cọc nguồn (để kéo đầu dây vào)
   const scopeHitMeshes = [];      // núm bắt vô hình ở 3 cọc hiện sóng (để kéo đầu dây vào)
+  const serialHitMeshes = [];     // núm bắt vô hình ở 3 cọc màn hình Serial (để kéo đầu dây vào)
   const ledMats = new Map();      // compId -> material phát sáng LED
   const segMats = new Map();      // compId -> {a,b,c,d,e,f,g,dp: material phát sáng từng đoạn LED 7 thanh}
   const lcdTexs = new Map();      // compId -> {canvas, ctx, tex, last}
   const meterTexs = new Map();    // compId -> {canvas, ctx, tex, last, kind}
   const scopeTexs = new Map();    // compId -> {canvas, ctx, tex, last}
+  const serialTexs = new Map();   // compId -> {canvas, ctx, tex, last}
+  const keypadKeyMeshes = new Map(); // compId -> {row, col: mesh phím} (để tô sáng phím đang nhấn)
+  const motorFans = new Map();    // compId -> {fan: mesh cánh quạt, angle, rpm} (để quay cánh quạt)
   const buzzerMats = new Map();   // compId -> material còi
   const btnTops = new Map();      // compId -> mesh nút bấm (để nhấn xuống)
   // Khoảng cách camera đóng khung vừa board (tỉ lệ theo chiều lớn nhất
@@ -115,13 +121,24 @@ function main() {
 
   // --- Đồng bộ netlist bench vào CPU + panel Kiểm tra ---
   // Nút đang nhấn giữ được truyền vào netlist (nối T1–T2 như công tắc đóng).
+  // Phím bàn phím đang nhấn giữ cũng vậy (nối hàng với cột) — NHƯNG chỉ
+  // cho panel Kiểm tra (checkWiring phát hiện chập khi nhấn phím) và cho
+  // solver (tham số thứ 4). Netlist đưa vào CPU (resolvePeripherals) phải
+  // là netlist KHÔNG nhấn phím: phím nhấn nối hàng với cột thành 1 net
+  // chứa 2 chân PIC (chân hàng + chân cột), picPinInNet sẽ lấy nhầm chân
+  // cột làm chân hàng (vd R1 lấy RD1 thay vì RB1) — dây nối thì cố định,
+  // chỉ trạng thái đóng/mở đổi khi nhấn, nên mapping chân phải lấy từ
+  // netlist chưa nhấn. CPU phát hiện phím qua pinLevel (keypadPressed),
+  // không qua netlist.
   const pressedIds = () => (pressedBtn ? [pressedBtn] : []);
   function syncToCpu() {
     const b = bridge();
     if (b && typeof b.applyBenchNetlist === 'function') {
-      // Truyền cả state + nút đang nhấn để bridge tính số đo đồng hồ
-      // (vôn kế/ampe kế bị lược khỏi netlist CPU nên solver cần state gốc).
-      b.applyBenchNetlist(benchToNetlist(state, pressedIds()), state, pressedIds());
+      // Truyền cả state + nút đang nhấn + phím đang nhấn để bridge tính
+      // số đo đồng hồ (vôn kế/ampe kế bị lược khỏi netlist CPU nên solver
+      // cần state gốc) và đồng bộ phím đang nhấn vào CPU (pinLevel).
+      // Netlist vào CPU KHÔNG có phím đang nhấn (xem chú thích trên).
+      b.applyBenchNetlist(benchToNetlist(state, pressedIds()), state, pressedIds(), pressedKeypad);
       for (const c of state.components) {
         if (c.type === 'pot') b.setPot(c.id, ((c.props?.pct ?? 0) / 100) * 5);
       }
@@ -130,7 +147,7 @@ function main() {
   }
   function renderChecks() {
     if (!checksEl) return;
-    const netlist = benchToNetlist(state, pressedIds());
+    const netlist = benchToNetlist(state, pressedIds(), pressedKeypad);
     const b = bridge();
     const warns = checkWiring(netlist, b && typeof b.getTris === 'function' ? b.getTris() : null);
     // Cảnh báo thạch anh (đứng trước các cảnh báo đấu nối): không có
@@ -172,7 +189,7 @@ function main() {
   function compIdFromWarning(w) {
     for (const id of [...(w.compIds || []), ...(w.terminalIds || [])]) {
       if (id.startsWith('PIC.')) return 'PIC1';
-      const m = id.match(/^(LED\d+|BTN\d+|POT\d+|LCD\d+|BUZ\d+|VM\d+|AM\d+|MM\d+|OSC\d+|SEG\d+)/);
+      const m = id.match(/^(LED\d+|BTN\d+|POT\d+|LCD\d+|BUZ\d+|VM\d+|AM\d+|MM\d+|OSC\d+|SEG\d+|KP\d+|M\d+|SER\d+)/);
       if (m && state.components.some((c) => c.id === m[1])) return m[1];
     }
     return null;
@@ -185,8 +202,11 @@ function main() {
     { type: 'capacitor', name: 'Tụ gốm', hint: 'Kéo vào lỗ breadboard — tụ nạp cho thạch anh (22pF)', svg: '<svg viewBox="0 0 48 56"><circle cx="24" cy="18" r="13" fill="#D9A066" stroke="#92400E" stroke-width="2"/><circle cx="24" cy="18" r="5" fill="#B45309"/><line x1="14" y1="29" x2="14" y2="54" stroke="#94A3B8" stroke-width="3"/><line x1="34" y1="29" x2="34" y2="54" stroke="#94A3B8" stroke-width="3"/></svg>' },
     { type: 'crystal', name: 'Thạch anh', hint: 'Kéo vào lỗ breadboard — nối 2 chân OSC1/OSC2 của PIC', svg: '<svg viewBox="0 0 76 30"><rect x="14" y="7" width="48" height="16" rx="8" fill="#CBD5E1" stroke="#64748B" stroke-width="1.5"/><line x1="24" y1="15" x2="52" y2="15" stroke="#64748B" stroke-width="1.5"/><line x1="30" y1="23" x2="30" y2="30" stroke="#94A3B8" stroke-width="3"/><line x1="46" y1="23" x2="46" y2="30" stroke="#94A3B8" stroke-width="3"/></svg>' },
     { type: 'sevenseg', name: 'LED 7 thanh', hint: 'Kéo vào lỗ breadboard — nối các đoạn tới chân PORT, chân chung về VCC/GND', svg: '<svg viewBox="0 0 48 64"><rect x="6" y="6" width="36" height="52" rx="4" fill="#1F2937" stroke="#0F172A" stroke-width="2"/><g stroke="#EF4444" stroke-width="3" stroke-linecap="round"><line x1="14" y1="14" x2="34" y2="14"/><line x1="14" y1="32" x2="34" y2="32"/><line x1="14" y1="50" x2="34" y2="50"/><line x1="14" y1="18" x2="14" y2="28"/><line x1="34" y1="18" x2="34" y2="28"/><line x1="14" y1="36" x2="14" y2="46"/><line x1="34" y1="36" x2="34" y2="46"/></g><circle cx="40" cy="50" r="2" fill="#EF4444"/></svg>' },
+    { type: 'keypad', name: 'Bàn phím 4x4', hint: 'Kéo vào lỗ breadboard — nối 4 hàng R0–R3 tới chân PORT (lái xuống 0 để quét), 4 cột C0–C3 tới chân PORT (đọc, pull-up)', svg: '<svg viewBox="0 0 64 64"><rect x="4" y="4" width="56" height="56" rx="4" fill="#1F2937" stroke="#0F172A" stroke-width="2"/><g fill="#334155" stroke="#64748B" stroke-width="1"><rect x="6" y="6" width="10" height="10" rx="2"/><rect x="20" y="6" width="10" height="10" rx="2"/><rect x="34" y="6" width="10" height="10" rx="2"/><rect x="48" y="6" width="10" height="10" rx="2"/><rect x="6" y="20" width="10" height="10" rx="2"/><rect x="20" y="20" width="10" height="10" rx="2"/><rect x="34" y="20" width="10" height="10" rx="2"/><rect x="48" y="20" width="10" height="10" rx="2"/><rect x="6" y="34" width="10" height="10" rx="2"/><rect x="20" y="34" width="10" height="10" rx="2"/><rect x="34" y="34" width="10" height="10" rx="2"/><rect x="48" y="34" width="10" height="10" rx="2"/><rect x="6" y="48" width="10" height="10" rx="2"/><rect x="20" y="48" width="10" height="10" rx="2"/><rect x="34" y="48" width="10" height="10" rx="2"/><rect x="48" y="48" width="10" height="10" rx="2"/></g></svg>' },
+    { type: 'motor', name: 'Động cơ DC', hint: 'Kéo vào lỗ breadboard — nối 2 chân +/− tới nguồn hoặc chân PIC (qua điện trở hạn dòng nếu cần); tốc độ theo điện áp', svg: '<svg viewBox="0 0 64 64"><circle cx="32" cy="28" r="18" fill="#64748B" stroke="#334155" stroke-width="2"/><circle cx="32" cy="28" r="7" fill="#94A3B8" stroke="#334155" stroke-width="1.5"/><g stroke="#1E3A5F" stroke-width="3" stroke-linecap="round"><line x1="32" y1="28" x2="32" y2="12"/><line x1="32" y1="28" x2="46" y2="36"/><line x1="32" y1="28" x2="18" y2="36"/></g><line x1="24" y1="44" x2="24" y2="60" stroke="#94A3B8" stroke-width="3"/><line x1="40" y1="44" x2="40" y2="60" stroke="#94A3B8" stroke-width="3"/></svg>' },
     { type: 'multimeter', name: 'Đồng hồ đo', hint: 'Kéo vào lỗ breadboard — chọn đo áp (V) hay đo dòng (A) trong popup', svg: '<svg viewBox="0 0 76 44"><rect x="6" y="4" width="64" height="28" rx="4" fill="#1E3A5F" stroke="#0F172A" stroke-width="2"/><rect x="12" y="10" width="52" height="16" rx="2" fill="#0F172A"/><text x="38" y="22" text-anchor="middle" font-family="Fira Code, monospace" font-size="10" fill="#7DD3FC">5.00 V</text><line x1="22" y1="32" x2="22" y2="42" stroke="#94A3B8" stroke-width="3"/><line x1="54" y1="32" x2="54" y2="42" stroke="#94A3B8" stroke-width="3"/></svg>' },
     { type: 'oscilloscope', name: 'Đồng hồ hiện sóng', hint: 'Kéo thả lên mặt bàn — nối dây vào cọc CH1/CH2/GND', svg: '<svg viewBox="0 0 76 44"><rect x="6" y="4" width="64" height="28" rx="4" fill="#1E3A5F" stroke="#0F172A" stroke-width="2"/><rect x="12" y="10" width="52" height="16" rx="2" fill="#0F172A"/><path d="M14 21 V15 H22 V21 H30 V15 H38 V21 H46 V15 H54 V21" fill="none" stroke="#7DD3FC" stroke-width="1.5"/><path d="M14 24 L20 19 L26 24 L32 19 L38 24 L44 19 L50 24" fill="none" stroke="#FBBF24" stroke-width="1.5"/><circle cx="22" cy="30" r="2" fill="#7DD3FC"/><circle cx="38" cy="30" r="2" fill="#FBBF24"/><circle cx="54" cy="30" r="2" fill="#0F172A" stroke="#94A3B8" stroke-width="1"/><line x1="22" y1="32" x2="22" y2="42" stroke="#94A3B8" stroke-width="3"/><line x1="38" y1="32" x2="38" y2="42" stroke="#94A3B8" stroke-width="3"/><line x1="54" y1="32" x2="54" y2="42" stroke="#94A3B8" stroke-width="3"/></svg>' },
+    { type: 'serial', name: 'Màn hình Serial', hint: 'Kéo thả lên mặt bàn — nối dây TX→RC6, RX→RC7, GND→GND (dây chỉ để mạch đầy đủ; dữ liệu chạy qua CPU)', svg: '<svg viewBox="0 0 76 44"><rect x="6" y="4" width="64" height="28" rx="4" fill="#1E3A5F" stroke="#0F172A" stroke-width="2"/><rect x="12" y="10" width="52" height="16" rx="2" fill="#0F172A"/><text x="16" y="22" font-family="Fira Code, monospace" font-size="9" fill="#4ADE80">Hi</text><line x1="28" y1="21" x2="34" y2="21" stroke="#4ADE80" stroke-width="1.5"/><circle cx="22" cy="30" r="2" fill="#4ADE80"/><circle cx="38" cy="30" r="2" fill="#FBBF24"/><circle cx="54" cy="30" r="2" fill="#0F172A" stroke="#94A3B8" stroke-width="1"/><line x1="22" y1="32" x2="22" y2="42" stroke="#94A3B8" stroke-width="3"/><line x1="38" y1="32" x2="38" y2="42" stroke="#94A3B8" stroke-width="3"/><line x1="54" y1="32" x2="54" y2="42" stroke="#94A3B8" stroke-width="3"/></svg>' },
     { type: 'button', name: 'Nút nhấn', hint: 'Kéo vào lỗ breadboard', svg: '<svg viewBox="0 0 56 56"><rect x="6" y="6" width="44" height="44" rx="6" fill="#FFFFFF" stroke="#1E3A5F" stroke-width="2"/><circle cx="28" cy="28" r="11" fill="#F1F3F5" stroke="#1E3A5F" stroke-width="2"/></svg>' },
     { type: 'pot', name: 'Chiết áp', hint: 'Kéo vào lỗ breadboard', svg: '<svg viewBox="0 0 64 64"><rect x="4" y="4" width="56" height="56" rx="8" fill="#FFFFFF" stroke="#1E3A5F" stroke-width="2"/><circle cx="32" cy="32" r="16" fill="#F1F3F5" stroke="#1E3A5F" stroke-width="2"/><line x1="32" y1="32" x2="32" y2="19" stroke="#DC2626" stroke-width="3"/></svg>' },
     { type: 'lcd', name: 'LCD 16x2', hint: 'Kéo vào lỗ breadboard', svg: '<svg viewBox="0 0 210 84"><rect x="2" y="6" width="206" height="72" rx="6" fill="#123524" stroke="#0F172A" stroke-width="2"/><rect x="16" y="20" width="16" height="16" rx="1" fill="#2E7D4F"/><rect x="38" y="20" width="16" height="16" rx="1" fill="#2E7D4F"/><rect x="60" y="20" width="16" height="16" rx="1" fill="#2E7D4F"/><rect x="16" y="46" width="16" height="16" rx="1" fill="#2E7D4F"/><rect x="38" y="46" width="16" height="16" rx="1" fill="#2E7D4F"/><text x="200" y="14" text-anchor="end" font-family="Fira Code, monospace" font-size="8" fill="#7CFFB2">16x2</text></svg>' },
@@ -325,19 +345,25 @@ void main() {
     if (e.target.closest('button')) setCodeWide(true);
   });
 
-  // --- Tab "Bài Lab": list bài lab mẫu, bấm "Mở lab" để nạp mạch + code mẫu lên bàn ---
+  // --- Tab "Bài Lab": các lab là card, bấm card thì nạp mạch + code mẫu
+  // rồi nhảy thẳng sang tab "Nạp viết code" (bàn mạch đã nạp sẵn ở nền,
+  // tab Labs chỉ để chọn lab, không cần thao tác bàn thực hành ở đây).
   // Nạp cả mạch (linh kiện + dây) lẫn code C mẫu của lab vào editor
   // (chưa nạp vào CPU — user vẫn bấm Nạp & chạy để chạy).
   function renderLabList() {
     if (!labListEl) return;
     labListEl.innerHTML = LABS.map((lab) => `
-      <div class="bench-lab">
+      <div class="bench-lab" data-lab="${esc(lab.id)}" role="button" tabindex="0" aria-label="Mở lab ${esc(lab.title)}">
         <strong>${esc(lab.title)}</strong>
         <p class="sub">${esc(lab.desc)}</p>
-        <button type="button" class="btn btn-small" data-lab="${esc(lab.id)}">Mở lab</button>
+        <span class="bench-lab-go">Mở lab → viết code</span>
       </div>`).join('') || '<p class="sub">Chưa có bài lab nào.</p>';
-    labListEl.querySelectorAll('[data-lab]').forEach((btn) =>
-      btn.addEventListener('click', () => openLab(btn.dataset.lab)));
+    labListEl.querySelectorAll('[data-lab]').forEach((card) => {
+      card.addEventListener('click', () => openLab(card.dataset.lab));
+      card.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openLab(card.dataset.lab); }
+      });
+    });
   }
   function openLab(labId) {
     const lab = getLab(labId);
@@ -370,6 +396,9 @@ void main() {
       codeLoaded = false;
     }
     setStatus(`Đã mở lab ${lab.title} — mạch + code mẫu đã lên. Bấm Nạp & chạy để chạy chương trình.`);
+    // Chọn card lab thì nhảy thẳng sang tab viết code (mạch đã nạp sẵn
+    // ở nền; initCodeTab giữ code lab vì editor đã có code, không ghi đè).
+    setSideTab('code');
   }
 
   // Code KHÔNG lưu localStorage nữa: refresh trang thì code về lại chương
@@ -605,7 +634,7 @@ void main() {
     if (!sceneReady) return;
     const selComp = selected && selected.kind === 'comp'
       ? state.components.find((c) => c.id === selected.id) : null;
-    if (selComp && selComp.type !== 'psu' && selComp.type !== 'oscilloscope' && selComp.type !== 'pic') showHighlightForComp(selComp.id);
+    if (selComp && selComp.type !== 'psu' && selComp.type !== 'oscilloscope' && selComp.type !== 'serial' && selComp.type !== 'pic') showHighlightForComp(selComp.id);
     else hideHighlight();
   }
   // Chuỗi đoạn đang sáng của 1 LED 7 thanh ('a, b, c' / 'Không đoạn nào sáng')
@@ -713,7 +742,7 @@ void main() {
     } else {
       const comp = state.components.find((c) => c.id === selected.id);
       if (!comp) { select(null); return; }
-      const pos = (comp.type === 'psu' || comp.type === 'oscilloscope') ? `Trên bàn (${Math.round(comp.tx)}, ${Math.round(comp.tz)})` : 'BB: ' + comp.anchor;
+      const pos = (comp.type === 'psu' || comp.type === 'oscilloscope' || comp.type === 'serial') ? `Trên bàn (${Math.round(comp.tx)}, ${Math.round(comp.tz)})` : 'BB: ' + comp.anchor;
       let body = '';
       if (comp.type === 'resistor') {
         body = `<label class="bench-insp-label" for="inspResVal">Giá trị điện trở (Ω)</label>
@@ -747,6 +776,34 @@ void main() {
             <div class="bench-conn"><span>Hiện số</span><span id="inspSegDigit">${digit === null ? '—' : esc(digit)}</span></div>
           </div>
           <p class="sub">Mỗi đoạn là 1 LED nối về chân chung: đoạn sáng khi đoạn và chân chung ở mức ngược nhau (xem chế độ chân chung ở trên). Số cập nhật live khi mạch hoặc chân PIC đổi trạng thái.</p>`;
+      } else if (comp.type === 'keypad') {
+        // Bàn phím 4x4: phím đang nhấn (live, vòng poll cập nhật ô này),
+        // cách quét + ghi chú nối dây. Phím nhấn giữ trên panel 3D (bấm
+        // vào phím vuông) thì hàng của nó nối với cột của nó.
+        const b = bridge();
+        const kps = b && typeof b.getKeypadState === 'function' ? b.getKeypadState() : null;
+        const s = kps ? kps.find((x) => x.id === comp.id) : null;
+        body = `<label class="bench-insp-label">Đang nhấn</label>
+          <div class="bench-conns">
+            <div class="bench-conn"><span>Phím</span><span id="inspKeypadPressed">${s ? 'Phím "' + esc(s.key) + '" (hàng ' + s.row + ', cột ' + s.col + ')' : 'Không nhấn phím nào'}</span></div>
+          </div>
+          <p class="sub">Bấm giữ 1 phím vuông trên panel 3D để nhấn phím đó (nhả chuột thì nhả phím). Phím đang nhấn nối hàng của nó với cột của nó — CPU quét bằng cách lái từng hàng R0–R3 xuống 0 rồi đọc cột C0–C3 (cột có pull-up nên đọc 0 khi phím nhấn, 1 khi không nhấn). Nối 4 hàng tới chân PORT làm đầu ra, 4 cột tới chân PORT làm đầu vào.</p>`;
+      } else if (comp.type === 'motor') {
+        // Động cơ DC: điện áp/dòng/tốc độ live (vòng poll cập nhật 3 ô
+        // này) + điện trở cuộn dây (đổi được). Tốc độ tỷ lệ với điện áp:
+        // 5V = 6000 vòng/phút, 0V = 0, điện áp âm = quay ngược.
+        const b = bridge();
+        const motors = b && typeof b.getMotorState === 'function' ? b.getMotorState() : null;
+        const m = motors ? motors.find((x) => x.id === comp.id) : null;
+        body = `<label class="bench-insp-label">Số đo (live)</label>
+          <div class="bench-conns">
+            <div class="bench-conn"><span>Điện áp</span><span id="inspMotorVolts">${m ? formatVolts(m.volts) : '—'}</span></div>
+            <div class="bench-conn"><span>Dòng</span><span id="inspMotorAmps">${m ? formatAmps(m.amps) : '—'}</span></div>
+            <div class="bench-conn"><span>Tốc độ</span><span id="inspMotorRpm">${m && m.rpm !== null && m.rpm !== undefined ? Math.round(m.rpm) + ' vòng/phút' : '—'}</span></div>
+          </div>
+          <label class="bench-insp-label" for="inspMotorVal">Điện trở cuộn dây (Ω)</label>
+          <input class="input" id="inspMotorVal" type="number" min="1" max="10000" step="1" value="${comp.props?.value ?? 100}">
+          <p class="sub">Động cơ là tải trở: dòng = điện áp / điện trở cuộn dây (mặc định 100Ω, 5V → 50mA). Tốc độ tỷ lệ với điện áp (5V = 6000 vòng/phút). Đấu qua chân PIC thì tốc độ theo mức chân; PWM (CCP) thì tốc độ theo điện áp trung bình (duty cycle). Nối 2 chân +/− tới nguồn hoặc chân PIC; đảo cực thì quay ngược.</p>`;
       } else if (comp.type === 'led') {
         // Ô chọn màu luôn hiện đúng màu thật của LED: nếu màu hiện tại
         // không nằm trong bảng màu (vd LED Lab 2 cũ màu #16A34A, hoặc
@@ -823,6 +880,22 @@ void main() {
           </div>
           <button type="button" class="btn btn-small" data-act="scope-clear">Xóa sóng</button>
           <p class="sub">Màn hình vẽ sóng CH1 (cyan) và CH2 (vàng) so với GND, thang −0,5..5,5V, cửa sổ 12 giây. Lấy mẫu 20 lần/giây nên tín hiệu nhanh hơn ~10Hz sẽ bị méo (giới hạn lấy mẫu, không phải lỗi mạch). Cọc nào chưa nối dây thì kênh đó hiện "—".</p>`;
+      } else if (comp.type === 'serial') {
+        // Màn hình Serial: gõ ký tự + Gửi (vào RCREG, đặt RCIF), log đã
+        // nhận (live, vòng poll cập nhật), nút Xóa. Dữ liệu chạy qua CPU
+        // (onTx/receiveChar) — dây TX/RX/GND chỉ để mạch trông đầy đủ,
+        // không cần nối dây vẫn nhận/gửi được.
+        const b = bridge();
+        const text = b && typeof b.getSerialText === 'function' ? (b.getSerialText(comp.id) || '') : '';
+        body = `<label class="bench-insp-label" for="inspSerialInput">Gửi tới PIC (nhập rồi bấm Gửi hoặc Enter)</label>
+          <div class="bench-serial-send">
+            <input class="input" id="inspSerialInput" type="text" autocomplete="off" spellcheck="false" placeholder="vd: A">
+            <button type="button" class="btn btn-accent btn-small" data-act="serial-send">Gửi</button>
+          </div>
+          <label class="bench-insp-label">Đã nhận từ PIC</label>
+          <pre class="bench-serial-log" id="inspSerialLog">${esc(text)}</pre>
+          <button type="button" class="btn btn-small" data-act="serial-clear">Xóa</button>
+          <p class="sub">CPU phát ký tự qua TXREG (TXEN=1, SPEN=1) thì hiện ở đây (tối đa 4000 ký tự, hiện 8 dòng cuối trên màn hình 3D). Gõ rồi bấm Gửi thì từng ký tự vào RCREG (đặt cờ RCIF, ngắt nếu bật). Dây/cọc TX→RC6, RX→RC7, GND→GND chỉ để mạch trông đầy đủ như đấu nối thật — không nối dây vẫn nhận/gửi được vì dữ liệu chạy qua CPU, không qua dây.</p>`;
       } else if (comp.type === 'pic') {
         const conns = legsFor(comp, state.size).map((l) => {
           const d = describeTerminal(state, l.term, pressedIds());
@@ -845,14 +918,14 @@ void main() {
           <button type="button" class="btn btn-accent btn-small" data-act="apply-psu">Áp dụng</button>
           <p class="sub">Nguồn chung, điều chỉnh được 0–24V (mặc định 5V). Cọc + (đỏ) và − (đen) nối vào rail trên/dưới của breadboard. Điện áp chỉ là giá trị danh định, không mô phỏng analog.</p>`;
       }
-      // Mục nối: đồng hồ đo / hiện sóng không đưa chân vào netlist CPU
-      // (describeTerminal không thấy chân của nó) nên bỏ qua — thông tin
-      // nối đã nằm trong mục số đo ở trên (áp từng chân / chiều dòng /
-      // CH1/CH2 live). Không đưa chân scope vào netlist: vừa tránh
-      // wiring.js thiếu định nghĩa loại này, vừa tránh làm đứt chuỗi dây
-      // nối trong benchToNetlist (dây nối các terminal liên tiếp trong
-      // cùng net, terminal lạ ở giữa sẽ chặn mạch).
-      const skipConns = comp.type === 'multimeter' || comp.type === 'oscilloscope';
+      // Mục nối: đồng hồ đo / hiện sóng / màn hình Serial không đưa chân
+      // vào netlist CPU (describeTerminal không thấy chân của nó) nên bỏ
+      // qua — thông tin nối đã nằm trong mục số đo ở trên (áp từng chân /
+      // chiều dòng / CH1/CH2 live / cọc TX/RX/GND). Không đưa chân scope/
+      // Serial vào netlist: vừa tránh wiring.js thiếu định nghĩa loại này,
+      // vừa tránh làm đứt chuỗi dây nối trong benchToNetlist (dây nối các
+      // terminal liên tiếp trong cùng net, terminal lạ ở giữa sẽ chặn mạch).
+      const skipConns = comp.type === 'multimeter' || comp.type === 'oscilloscope' || comp.type === 'serial';
       const conns = comp.type !== 'pic' && comp.type !== 'psu' && !skipConns
         ? `<div class="bench-conns">${legsFor(comp, state.size).map((l) => {
           const term = comp.id + '.' + l.term;
@@ -863,10 +936,11 @@ void main() {
             : 'chưa nối';
           return `<div class="bench-conn"><span>${l.term}</span><span>${esc(txt)}</span></div>`;
         }).join('')}</div>` : '';
-      // Mục "Chân": từng chân cắm vào lỗ nào (chỉ đọc). PSU và hiện sóng
-      // không có chân dạng lỗ nên bỏ qua. Chân treo ngoài board (hole
-      // null) thì hiện "ngoài board". Tên chân bỏ tiền tố 'PIC.' (PIC.RA0 -> RA0).
-      const legs = (comp.type === 'psu' || comp.type === 'oscilloscope') ? [] : legsFor(comp, state.size);
+      // Mục "Chân": từng chân cắm vào lỗ nào (chỉ đọc). PSU, hiện sóng và
+      // màn hình Serial không có chân dạng lỗ nên bỏ qua. Chân treo ngoài
+      // board (hole null) thì hiện "ngoài board". Tên chân bỏ tiền tố
+      // 'PIC.' (PIC.RA0 -> RA0).
+      const legs = (comp.type === 'psu' || comp.type === 'oscilloscope' || comp.type === 'serial') ? [] : legsFor(comp, state.size);
       const pins = legs.length ? `<label class="bench-insp-label">Chân</label><div class="bench-conns">${legs.map((l) => {
         const term = l.term.startsWith('PIC.') ? l.term.slice(4) : l.term;
         return `<div class="bench-conn"><span>${esc(term)}</span><span>${l.hole ? esc(holeName(l.hole)) : 'ngoài board'}</span></div>`;
@@ -874,6 +948,11 @@ void main() {
       // Mục "Cọc" (chỉ hiện sóng ngoài bàn): 3 cọc CH1/CH2/GND + trạng
       // thái nối dây của từng cọc (đầu dây kia, hoặc 'chưa nối dây').
       const posts = comp.type === 'oscilloscope' ? `<label class="bench-insp-label">Cọc</label><div class="bench-conns">${['CH1', 'CH2', 'GND'].map((term) => {
+        const postId = comp.id + '.' + term;
+        const w = state.wires.find((x) => x.a === postId || x.b === postId);
+        const other = w ? (w.a === postId ? w.b : w.a) : null;
+        return `<div class="bench-conn"><span>${term}</span><span>${other ? esc(holeName(other)) : 'chưa nối dây'}</span></div>`;
+      }).join('')}</div>` : comp.type === 'serial' ? `<label class="bench-insp-label">Cọc</label><div class="bench-conns">${['TX', 'RX', 'GND'].map((term) => {
         const postId = comp.id + '.' + term;
         const w = state.wires.find((x) => x.a === postId || x.b === postId);
         const other = w ? (w.a === postId ? w.b : w.a) : null;
@@ -965,6 +1044,51 @@ void main() {
         renderInspector();
         setStatus('Đã xóa sóng ' + compLabel(comp) + '.');
       });
+      // Động cơ DC: đổi điện trở cuộn dây trong popup (1–10000Ω). Đổi
+      // xong thì đồng bộ lại solver (dòng/tốc độ đổi theo) + vẽ lại
+      // Inspector (3 ô live về giá trị mới).
+      const motorInput = inspectorEl.querySelector('#inspMotorVal');
+      if (motorInput) motorInput.addEventListener('change', () => {
+        const v = Math.round(Number(motorInput.value));
+        if (v >= 1 && v <= 10000) {
+          comp.props = { ...(comp.props || {}), value: v };
+          save(); syncToCpu(); renderInspector();
+          setStatus('Đã đổi ' + compLabel(comp) + ' thành ' + v + 'Ω.');
+        } else { motorInput.value = comp.props?.value ?? 100; }
+      });
+      // Màn hình Serial: bấm "Gửi" (hoặc Enter trong ô nhập) thì gửi
+      // từng ký tự vào CPU qua receiveChar (vào RCREG, đặt RCIF). Gửi
+      // xong thì xóa ô nhập (log đã nhận vẫn giữ). Bấm "Xóa" thì xóa log
+      // đã nhận + vẽ lại màn hình 3D rỗng ngay.
+      const serialSend = () => {
+        const inp = inspectorEl.querySelector('#inspSerialInput');
+        if (!inp) return;
+        const text = inp.value;
+        if (!text) return;
+        const b = bridge();
+        let sent = 0;
+        if (b && typeof b.sendSerial === 'function') sent = b.sendSerial(comp.id, text) || 0;
+        if (sent > 0) {
+          inp.value = '';
+          setStatus('Đã gửi ' + sent + ' ký tự tới PIC.');
+        } else {
+          setStatus('Không gửi được (chỉ gửi ký tự ASCII).');
+        }
+      };
+      inspectorEl.querySelector('[data-act="serial-send"]')?.addEventListener('click', serialSend);
+      const serialInput = inspectorEl.querySelector('#inspSerialInput');
+      if (serialInput) serialInput.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') { e.preventDefault(); serialSend(); }
+        e.stopPropagation();
+      });
+      inspectorEl.querySelector('[data-act="serial-clear"]')?.addEventListener('click', () => {
+        const b = bridge();
+        if (b && typeof b.clearSerial === 'function') b.clearSerial(comp.id);
+        const t = serialTexs.get(comp.id);
+        if (t) { t.last = ''; drawSerialScreen(t, ''); }
+        renderInspector();
+        setStatus('Đã xóa log ' + compLabel(comp) + '.');
+      });
       const psuApply = () => {
         const inp = inspectorEl.querySelector('#inspPsuVolts');
         const errEl = inspectorEl.querySelector('#inspPsuErr');
@@ -993,6 +1117,8 @@ void main() {
       if (pp) return 'cọc ' + pp.sign + ' nguồn ' + pp.psuId;
       const sp = parseScopePost(e);
       if (sp) return 'cọc ' + sp.term + ' của ' + sp.scopeId;
+      const sr = parseSerialPost(e);
+      if (sr) return 'cọc ' + sr.term + ' của ' + sr.serialId;
       return e;
     }
     if (e && typeof e.x === 'number') return 'cọc nguồn';
@@ -1001,7 +1127,8 @@ void main() {
   // Thường hoá địa chỉ người dùng gõ: trim, chữ hàng về thường
   // ('C12' -> 'c12', 'AA12' -> 'aa12'), chữ rail về hoa ('t+5' -> 'T+5'),
   // cọc nguồn về dạng chuẩn ('psu1.+' -> 'PSU1.+'), cọc hiện sóng về dạng
-  // chuẩn ('osc1.ch1' -> 'OSC1.CH1').
+  // chuẩn ('osc1.ch1' -> 'OSC1.CH1'), cọc Serial về dạng chuẩn
+  // ('ser0.tx' -> 'SER0.TX').
   function normalizeHoleInput(v) {
     const s = String(v || '').trim();
     let m = s.match(/^([a-zA-Z]+)(\d+)$/);
@@ -1012,6 +1139,8 @@ void main() {
     if (m) return 'PSU' + m[1] + '.' + m[2];
     m = s.match(/^osc(\d+)\.(ch1|ch2|gnd)$/i);
     if (m) return 'OSC' + m[1] + '.' + m[2].toUpperCase();
+    m = s.match(/^ser(\d+)\.(tx|rx|gnd)$/i);
+    if (m) return 'SER' + m[1] + '.' + m[2].toUpperCase();
     return s;
   }
   function deleteSelected() {
@@ -1473,6 +1602,50 @@ void main() {
       }
       return g;
     }
+    if (comp.type === 'serial') {
+      // Màn hình Serial NGOÀI BÀN (như đồng hồ hiện sóng): ngồi trên mặt
+      // bàn, không anchor, không chân lỗ. Thân máy 100×60×50 (mm), màn
+      // hình ĐỨNG ở mặt trước (plane 80×42, canvas 512×288), 3 cọc
+      // TX/RX/GND ở mặt trước dưới màn hình. Màn hình vẽ bằng cùng tọa
+      // độ 256×144 cũ (ctx đã scale(2,2) ngay khi tạo nên drawSerialScreen
+      // không cần đổi logic vẽ). Dữ liệu chạy qua CPU (onTx/receiveChar),
+      // dây/cọc chỉ để mạch trông đầy đủ (TX->RC6, RX->RC7, GND->GND).
+      g.position.set(comp.tx, 0, comp.tz);
+      const body = new THREE.Mesh(new THREE.BoxGeometry(100, 60, 50), stdMat(0x1E3A5F, { roughness: 0.5 }));
+      body.position.y = 30;
+      body.castShadow = true;
+      body.receiveShadow = true;
+      g.add(body);
+      const cv = document.createElement('canvas');
+      cv.width = 512; cv.height = 288;
+      const ctx = cv.getContext('2d');
+      ctx.setTransform(2, 0, 0, 2, 0, 0);
+      const tex = new THREE.CanvasTexture(cv);
+      const screen = new THREE.Mesh(
+        new THREE.PlaneGeometry(80, 42),
+        new THREE.MeshBasicMaterial({ map: tex }));
+      screen.position.set(0, 34, 25.2);
+      g.add(screen);
+      const t = { canvas: cv, ctx, tex, last: '' };
+      serialTexs.set(comp.id, t);
+      drawSerialScreen(t, '');
+      // 3 cọc ở mặt trước dưới màn hình (TX xanh lá, RX vàng, GND tối),
+      // mỗi cọc có núm bắt vô hình (sphere r=8) để bấm nối dây (pickSerialPost).
+      for (const [term, dx, col] of [['TX', -SERIAL_POST_DX, 0x4ADE80], ['RX', 0, 0xFBBF24], ['GND', SERIAL_POST_DX, 0x0F172A]]) {
+        const post = new THREE.Mesh(new THREE.CylinderGeometry(3, 3, 8, 16), stdMat(col));
+        post.rotation.x = Math.PI / 2;
+        post.position.set(dx, SERIAL_POST_Y, SERIAL_POST_DZ);
+        g.add(post);
+        const hit = new THREE.Mesh(
+          new THREE.SphereGeometry(8, 10, 10),
+          new THREE.MeshBasicMaterial({ transparent: true, opacity: 0, depthWrite: false }));
+        hit.position.set(dx, SERIAL_POST_Y, SERIAL_POST_DZ);
+        hit.userData = { serialPostId: comp.id + '.' + term };
+        g.add(hit);
+        serialHitMeshes.push(hit);
+      }
+      return g;
+    }
     // Linh kiện cắm lỗ: gốc nhóm ở lỗ neo, chân theo legOffsets.
     // Chân kim loại phải rơi đúng lỗ: khoảng cách Z theo hàng dùng rowZ
     // (linh kiện xoay mà chân qua ranh giới đoạn thì 2 chân cách 5.08mm,
@@ -1675,6 +1848,73 @@ void main() {
       g.add(dp);
       mats.dp = dpMat;
       segMats.set(comp.id, mats);
+    } else if (comp.type === 'keypad') {
+      // Bàn phím ma trận 4x4: panel tối phẳng ôm 2 hàng chân (R0–R3 ở
+      // hàng trên, C0–C3 ở hàng dưới, cách nhau 5 hàng), trên mặt panel
+      // có 16 phím vuông 4×4, mỗi phím là 1 mesh riêng (để tô sáng /
+      // nhấn xuống khi bấm). Vị trí panel + phím tính từ chính offs của
+      // chân (cùng khung local với vòng legOffsets phía trên) nên panel
+      // luôn ôm đúng 2 hàng chân ở mọi góc xoay.
+      const zOf = (dr) => rowZ(anchorR + dr, compRows) - rowZ(anchorR, compRows);
+      const xs = offs.map((o) => o.dc * PITCH), zs = offs.map((o) => zOf(o.dr));
+      const minX = Math.min(...xs), maxX = Math.max(...xs);
+      const minZ = Math.min(...zs), maxZ = Math.max(...zs);
+      const body = new THREE.Mesh(
+        new THREE.BoxGeometry(maxX - minX + 4, 3, maxZ - minZ + 4),
+        stdMat(0x1F2937, { roughness: 0.5 }));
+      body.position.set((minX + maxX) / 2, 7.5, (minZ + maxZ) / 2);
+      body.castShadow = true;
+      g.add(body);
+      // 16 phím: hàng 0..3 (R0–R3) từ trên xuống, cột 0..3 (C0–C3) từ
+      // trái sang. Mỗi phím 1.8×1×1.8mm, cách nhau đều trên mặt panel
+      // (y=9.5). userData ghi {keypadId, row, col} để bấm phím trong 3D
+      // (xem pickKeypadKey) và để vòng poll tô sáng phím đang nhấn.
+      const keyMeshes = {};
+      const keyMat = (row, col) => new THREE.MeshStandardMaterial({
+        color: 0x334155, emissive: new THREE.Color(0x059669), emissiveIntensity: 0, roughness: 0.4,
+      });
+      for (let row = 0; row < 4; row++) {
+        for (let col = 0; col < 4; col++) {
+          const mat = keyMat(row, col);
+          const key = new THREE.Mesh(new THREE.BoxGeometry(1.8, 1, 1.8), mat);
+          const fx = minX + 1 + ((maxX - minX - 2) * col) / 3;
+          const fz = minZ + 1 + ((maxZ - minZ - 2) * row) / 3;
+          key.position.set(fx, 9.5, fz);
+          key.castShadow = true;
+          key.userData = { keypadId: comp.id, row, col, key: KEYPAD_KEYS[row][col], baseY: 9.5 };
+          g.add(key);
+          keyMeshes[row + ',' + col] = { mesh: key, mat };
+        }
+      }
+      keypadKeyMeshes.set(comp.id, keyMeshes);
+    } else if (comp.type === 'motor') {
+      // Động cơ DC: thân trụ đứng (bán kính 6mm, cao 10mm) + trục + cánh
+      // quạt 3 cánh trên đỉnh. Trục quay quanh trục Y (quạt nằm ngang
+      // trên đỉnh, quay như cánh quạt thật). Cánh quạt là 1 group riêng
+      // (motorFans) để vòng poll xoay theo rpm. Thân nằm giữa 2 chân
+      // (x=1.27mm, z=0), chân cao 7mm, đáy thân ở y=6.
+      const body = new THREE.Mesh(new THREE.CylinderGeometry(6, 6, 10, 20), stdMat(0x64748B, { metalness: 0.4, roughness: 0.5 }));
+      body.position.set(1.27, 11, 0);
+      body.castShadow = true;
+      g.add(body);
+      const shaft = new THREE.Mesh(new THREE.CylinderGeometry(1, 1, 4, 12), stdMat(0xCBD5E1, { metalness: 0.7, roughness: 0.35 }));
+      shaft.position.set(1.27, 17.5, 0);
+      g.add(shaft);
+      const fan = new THREE.Group();
+      fan.position.set(1.27, 19.5, 0);
+      for (let i = 0; i < 3; i++) {
+        const blade = new THREE.Mesh(new THREE.BoxGeometry(9, 0.5, 2.2), stdMat(0xDC2626, { roughness: 0.4 }));
+        blade.position.x = 3.2;
+        blade.castShadow = true;
+        const arm = new THREE.Group();
+        arm.rotation.y = (i * 2 * Math.PI) / 3;
+        arm.add(blade);
+        fan.add(arm);
+      }
+      const hub = new THREE.Mesh(new THREE.CylinderGeometry(1.4, 1.4, 1.2, 12), stdMat(0x0F172A));
+      fan.add(hub);
+      g.add(fan);
+      motorFans.set(comp.id, { fan, angle: 0, rpm: 0 });
     }
     return g;
   }
@@ -1800,6 +2040,32 @@ void main() {
       }
     }
   }
+  // Vẽ văn bản đã nhận lên màn hình Serial (canvas 256×144, chữ xanh lá
+  // monospace trên nền tối, như terminal). Chỉ hiện 8 dòng cuối, mỗi dòng
+  // tối đa 32 ký tự (màn hình 80×42mm, canvas 512×288, ctx đã scale(2,2)).
+  // Ký tự không in được (ngoài 32..126, trừ \t) hiện thành '·'. Chỉ gọi
+  // khi chuỗi văn bản đổi (vòng poll so sánh với t.last).
+  function drawSerialScreen(t, text) {
+    const ctx = t.ctx;
+    ctx.fillStyle = '#0F172A';
+    ctx.fillRect(0, 0, 256, 144);
+    const lines = String(text || '').replace(/\r\n/g, '\n').replace(/\r/g, '\n').split('\n');
+    const visible = lines.slice(-8);
+    const cleanLine = (line) => [...line].map((ch) => {
+      const c = ch.charCodeAt(0);
+      return (c >= 32 && c <= 126) || c === 9 ? ch : '·';
+    }).join('').slice(0, 32);
+    ctx.fillStyle = '#4ADE80';
+    ctx.font = '400 13px "Fira Code", monospace';
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'top';
+    visible.forEach((line, i) => ctx.fillText(cleanLine(line), 6, 6 + i * 16));
+    // Con trỏ ở cuối dòng cuối (vạch đứng sau ký tự cuối).
+    const lastLine = visible.length ? cleanLine(visible[visible.length - 1]) : '';
+    const cursorX = 6 + ctx.measureText(lastLine).width;
+    ctx.fillRect(Math.min(cursorX, 248), 6 + (visible.length - 1) * 16, 2, 13);
+    t.tex.needsUpdate = true;
+  }
   function resistorBands(value) {
     const v = Math.max(1, Math.round(value));
     const digits = String(v);
@@ -1863,6 +2129,9 @@ void main() {
       // Cọc hiện sóng (OSC1.CH1/CH2/GND) lấy vị trí từ thân máy trên bàn.
       const sp = parseScopePost(e);
       if (sp) return scopePostPos(state, e);
+      // Cọc màn hình Serial (SER0.TX/RX/GND) lấy vị trí từ thân máy trên bàn.
+      const sr = parseSerialPost(e);
+      if (sr) return serialPostPos(state, e);
       const p = holePos(e, state.size);
       return p ? { x: p.x, y: BOARD_TOP, z: p.z } : null;
     }
@@ -1875,7 +2144,8 @@ void main() {
     compMeshes.clear();
     psuHitMeshes.length = 0;
     scopeHitMeshes.length = 0;
-    ledMats.clear(); lcdTexs.clear(); meterTexs.clear(); scopeTexs.clear(); buzzerMats.clear(); btnTops.clear(); segMats.clear();
+    serialHitMeshes.length = 0;
+    ledMats.clear(); lcdTexs.clear(); meterTexs.clear(); scopeTexs.clear(); serialTexs.clear(); keypadKeyMeshes.clear(); motorFans.clear(); buzzerMats.clear(); btnTops.clear(); segMats.clear();
     for (const comp of state.components) {
       const g = buildComponentMesh(comp);
       compRoot.add(g);
@@ -1919,6 +2189,24 @@ void main() {
         tx: (tx === 0 && tz === 0) ? SCOPE_DEFAULT_TX : tx,
         tz: (tx === 0 && tz === 0) ? SCOPE_DEFAULT_TZ : tz,
         fixed: false, props: defaultProps('oscilloscope'),
+      };
+      state.components.push(comp);
+      save(); rebuildAll(); syncToCpu();
+      select({ kind: 'comp', id });
+      setStatus('Đã đặt ' + compLabel(comp) + ' lên bàn.');
+      return id;
+    }
+    if (type === 'serial') {
+      // Màn hình Serial ngoài bàn: đặt bằng tx/tz như nguồn/hiện sóng,
+      // xóa được (không fixed). Không truyền tọa độ (tx=tz=0) thì về vị
+      // trí mặc định cạnh TRÁI nguồn (tx=-130, tz=-150), đối xứng với
+      // hiện sóng ở cạnh phải.
+      const id = nextComponentId(state, 'serial');
+      const comp = {
+        id, type: 'serial',
+        tx: (tx === 0 && tz === 0) ? SERIAL_DEFAULT_TX : tx,
+        tz: (tx === 0 && tz === 0) ? SERIAL_DEFAULT_TZ : tz,
+        fixed: false, props: defaultProps('serial'),
       };
       state.components.push(comp);
       save(); rebuildAll(); syncToCpu();
@@ -2047,6 +2335,34 @@ void main() {
     const u = hits[0].object.userData;
     return u && u.scopePostId ? u.scopePostId : null;
   }
+  // Cọc màn hình Serial (TX/RX/GND): điểm thả hợp lệ cho đầu dây, mirror
+  // pickScopePost.
+  function pickSerialPost(e) {
+    const ndc = pointerNdc(e);
+    if (!ndc.inside || !serialHitMeshes.length) return null;
+    raycaster.setFromCamera(ndc, camera);
+    const hits = raycaster.intersectObjects(serialHitMeshes, false);
+    if (!hits.length) return null;
+    const u = hits[0].object.userData;
+    return u && u.serialPostId ? u.serialPostId : null;
+  }
+  // Phím của bàn phím 4x4: bấm vào 1 phím vuông trên panel thì trả
+  // {keypadId, row, col, key} (để nhấn giữ phím, như nút bấm). Raycast
+  // vào mesh phím của mọi bàn phím đang có trên bàn.
+  function pickKeypadKey(e) {
+    const ndc = pointerNdc(e);
+    if (!ndc.inside || !keypadKeyMeshes.size) return null;
+    raycaster.setFromCamera(ndc, camera);
+    const meshes = [];
+    for (const [, keys] of keypadKeyMeshes) {
+      for (const [, k] of Object.entries(keys)) meshes.push(k.mesh);
+    }
+    if (!meshes.length) return null;
+    const hits = raycaster.intersectObjects(meshes, false);
+    if (!hits.length) return null;
+    const u = hits[0].object.userData;
+    return u && u.keypadId ? { keypadId: u.keypadId, row: u.row, col: u.col, key: u.key } : null;
+  }
   function pickObject(e) {
     const ndc = pointerNdc(e);
     if (!ndc.inside) return null;
@@ -2094,7 +2410,7 @@ void main() {
   }
   function showHighlightForComp(id) {
     const comp = state.components.find((c) => c.id === id);
-    if (!comp || comp.type === 'psu' || comp.type === 'oscilloscope' || !sceneReady) { hideHighlight(); return; }
+    if (!comp || comp.type === 'psu' || comp.type === 'oscilloscope' || comp.type === 'serial' || !sceneReady) { hideHighlight(); return; }
     showHighlight(comp.anchor, comp.type, comp.rot || 0, true);
     highlightBox.material.color.set(0x059669);
   }
@@ -2138,13 +2454,14 @@ void main() {
     if (!drag || drag.mode !== 'palette') return;
     moveGhost(e);
     if (Math.hypot(e.clientX - drag.startX, e.clientY - drag.startY) > 4) drag.moved = true;
-    if (drag.type === 'psu' || drag.type === 'oscilloscope') {
+    if (drag.type === 'psu' || drag.type === 'oscilloscope' || drag.type === 'serial') {
       const pt = pickTablePoint(e);
       if (!pt) { drag.valid = false; hideHighlight(); return; }
       drag.tx = pt.x; drag.tz = pt.z;
       const blocked = Math.abs(pt.x) < 145 && Math.abs(pt.z) < 64;
       drag.valid = !blocked;
-      // Ô sáng theo cỡ thân máy: nguồn 60×40 -> 124×84, hiện sóng 100×50 -> 112×62.
+      // Ô sáng theo cỡ thân máy: nguồn 60×40 -> 124×84, hiện sóng 100×50
+      // -> 112×62, màn hình Serial 100×50 -> 112×62 (cùng cỡ hiện sóng).
       if (drag.type === 'psu') showTableHighlight(pt.x, pt.z, !blocked);
       else showTableHighlight(pt.x, pt.z, !blocked, 112, 62);
       return;
@@ -2168,9 +2485,9 @@ void main() {
       setPlacementMode(d.type);
       return;
     }
-    if (d.type === 'psu' || d.type === 'oscilloscope') {
+    if (d.type === 'psu' || d.type === 'oscilloscope' || d.type === 'serial') {
       if (d.valid) placeComponent(d.type, null, 0, d.tx, d.tz);
-      else setStatus('Không đặt được ' + (d.type === 'psu' ? 'nguồn' : 'hiện sóng') + ' ở đây (đè lên breadboard).');
+      else setStatus('Không đặt được ' + (d.type === 'psu' ? 'nguồn' : d.type === 'oscilloscope' ? 'hiện sóng' : 'màn hình Serial') + ' ở đây (đè lên breadboard).');
       return;
     }
     if (d.valid && d.anchor) placeComponent(d.type, d.anchor, d.rot);
@@ -2202,7 +2519,7 @@ void main() {
       }
     }
     if (wiringMode) {
-      const hole = pickHole(e) || pickPsuPost(e) || pickScopePost(e);
+      const hole = pickHole(e) || pickPsuPost(e) || pickScopePost(e) || pickSerialPost(e);
       if (!hole) { wireStart = null; startMarker.visible = false; return; }
       if (!wireStart) {
         wireStart = hole;
@@ -2221,12 +2538,12 @@ void main() {
       return;
     }
     if (placementMode) {
-      if (placementMode === 'psu' || placementMode === 'oscilloscope') {
+      if (placementMode === 'psu' || placementMode === 'oscilloscope' || placementMode === 'serial') {
         const pt = pickTablePoint(e);
         if (pt && !(Math.abs(pt.x) < 145 && Math.abs(pt.z) < 64)) {
           const id = placeComponent(placementMode, null, 0, pt.x, pt.z);
           if (id) setPlacementMode(null); // đặt 1 lần thì thoát chế độ đặt
-        } else setStatus('Không đặt được ' + (placementMode === 'psu' ? 'nguồn' : 'hiện sóng') + ' ở đây (đè lên breadboard).');
+        } else setStatus('Không đặt được ' + (placementMode === 'psu' ? 'nguồn' : placementMode === 'oscilloscope' ? 'hiện sóng' : 'màn hình Serial') + ' ở đây (đè lên breadboard).');
         return;
       }
       const hole = pickHole(e);
@@ -2240,12 +2557,24 @@ void main() {
     if (hit && hit.kind === 'comp') {
       const comp = state.components.find((c) => c.id === hit.id);
       if (!comp) return;
+      // Bấm vào 1 phím của bàn phím 4x4 thì nhấn giữ phím đó (như nút
+      // bấm), không kéo di chuyển bàn phím. Nhả chuột thì phím nhả ra
+      // (xem onCanvasPointerUp).
+      const kpKey = comp.type === 'keypad' ? pickKeypadKey(e) : null;
+      if (kpKey) {
+        select({ kind: 'comp', id: comp.id });
+        pressBenchKeypad(comp.id, { row: kpKey.row, col: kpKey.col });
+        drag = { mode: 'keypad', id: comp.id, startX: e.clientX, startY: e.clientY };
+        renderer.domElement.setPointerCapture(e.pointerId);
+        e.preventDefault();
+        return;
+      }
       select({ kind: 'comp', id: comp.id });
       if (comp.type === 'button') {
         pressBenchButton(comp.id, true);
       }
       if (comp.type === 'pic') return; // chip cố định, chỉ chọn để xem
-      if (comp.type === 'psu' || comp.type === 'oscilloscope') {
+      if (comp.type === 'psu' || comp.type === 'oscilloscope' || comp.type === 'serial') {
         drag = { mode: 'move-psu', id: comp.id, startX: e.clientX, startY: e.clientY, origTx: comp.tx, origTz: comp.tz, moved: false };
       } else {
         drag = { mode: 'move', id: comp.id, startX: e.clientX, startY: e.clientY, origAnchor: comp.anchor, origRot: comp.rot || 0, rot: comp.rot || 0, anchor: comp.anchor, valid: true, moved: false };
@@ -2269,7 +2598,7 @@ void main() {
     // Hover ở chế độ đặt: hiện ô sáng báo vị trí sắp đặt (lỗ cho linh
     // kiện cắm lỗ, mặt bàn cho nguồn/hiện sóng) + góc xoay hiện tại.
     if (!drag && placementMode) {
-      if (placementMode === 'psu' || placementMode === 'oscilloscope') {
+      if (placementMode === 'psu' || placementMode === 'oscilloscope' || placementMode === 'serial') {
         const pt = pickTablePoint(e);
         if (!pt) { hideHighlight(); return; }
         const blocked = Math.abs(pt.x) < 145 && Math.abs(pt.z) < 64;
@@ -2291,9 +2620,10 @@ void main() {
       const fixedEnd = drag.end === 'a' ? w.b : w.a;
       const fixedPos = endpointPos(fixedEnd);
       if (!fixedPos) return;
-      // Đích thả: lỗ breadboard/rail, cọc nguồn (+/−) hoặc cọc hiện sóng.
+      // Đích thả: lỗ breadboard/rail, cọc nguồn (+/−), cọc hiện sóng hoặc
+      // cọc màn hình Serial.
       const hole = pickHole(e);
-      const post = hole ? null : (pickPsuPost(e) || pickScopePost(e));
+      const post = hole ? null : (pickPsuPost(e) || pickScopePost(e) || pickSerialPost(e));
       const targetId = hole || post;
       drag.hoverHole = targetId;
       // Đường dây tạm từ đầu cố định tới chuột.
@@ -2365,13 +2695,14 @@ void main() {
       drag.valid = !blocked;
       drag.tx = pt.x; drag.tz = pt.z;
       g.position.set(pt.x, 0, pt.z);
-      const isScope = state.components.find((c) => c.id === drag.id)?.type === 'oscilloscope';
-      if (isScope) showTableHighlight(pt.x, pt.z, !blocked, 112, 62);
+      const t = state.components.find((c) => c.id === drag.id)?.type;
+      if (t === 'oscilloscope' || t === 'serial') showTableHighlight(pt.x, pt.z, !blocked, 112, 62);
       else showTableHighlight(pt.x, pt.z, !blocked);
     }
   }
   function onCanvasPointerUp(e) {
     if (pressedBtn) { pressBenchButton(pressedBtn, false); pressedBtn = null; }
+    if (pressedKeypad) { pressBenchKeypad(pressedKeypad.id, null); }
     wrap.classList.remove('rotating');
     if (!drag) return;
     const d = drag;
@@ -2446,6 +2777,29 @@ void main() {
     const top = btnTops.get(id);
     if (top) top.position.y = pressed ? 8.2 : 9;
   }
+  // Nhấn/nhả 1 phím bàn phím 4x4 (nhấn giữ): key = {row, col} hoặc null
+  // (nhả). Phím là công tắc đóng hàng với cột trong netlist (như nút bấm)
+  // + mức cột tính ở CPU khi quét (pinLevel). Đồng bộ netlist + panel
+  // Kiểm tra, rồi báo bridge để CPU biết phím đang nhấn; phím nhấn xuống
+  // 0.4mm + tô sáng xanh lá, nhả thì về lại.
+  function pressBenchKeypad(id, key) {
+    const b = bridge();
+    pressedKeypad = key ? { id, row: key.row, col: key.col } : null;
+    syncToCpu();
+    if (b && typeof b.pressKeypad === 'function') b.pressKeypad(id, key || null);
+    highlightKeypadKey(id, key);
+  }
+  // Tô sáng phím đang nhấn trên panel 3D (xanh lá + nhấn xuống 0.4mm),
+  // phím khác về lại màu tối. key = {row, col} hoặc null (không phím nào).
+  function highlightKeypadKey(id, key) {
+    const keys = keypadKeyMeshes.get(id);
+    if (!keys) return;
+    for (const [rc, k] of Object.entries(keys)) {
+      const isPressed = key && rc === key.row + ',' + key.col;
+      k.mat.emissiveIntensity = isPressed ? 1.5 : 0;
+      k.mesh.position.y = (k.mesh.userData.baseY ?? 9.5) - (isPressed ? 0.4 : 0);
+    }
+  }
 
   // --- Vòng lặp render + cập nhật sống (LED/LCD/còi theo CPU) ---
   function startLoop() {
@@ -2463,6 +2817,17 @@ void main() {
       camera.lookAt(camTarget.x, camTarget.y, camTarget.z);
       const deg = Math.round((((az * 180) / Math.PI) % 360 + 360) % 360);
       if (angleEl) angleEl.textContent = 'Góc xoay: ' + deg + '°';
+      // Cánh quạt động cơ DC quay theo rpm (đã làm mượt bằng EMA trong
+      // live poll): góc quay += rpm/60 vòng/giây × 2π × dt. dt tính từ
+      // thời gian thực giữa 2 frame (kẹp 0,1s để tab ẩn lâu không nhảy vọt).
+      const now = performance.now();
+      const dt = Math.min(0.1, Math.max(0, (now - (tick._last || now)) / 1000));
+      tick._last = now;
+      for (const [, m] of motorFans) {
+        if (!m.fan) continue;
+        m.angle = (m.angle || 0) + ((m.rpm || 0) / 60) * 2 * Math.PI * dt;
+        m.fan.rotation.y = m.angle;
+      }
       renderer.render(scene, camera);
     };
     tick();
@@ -2608,6 +2973,50 @@ void main() {
             updateInspectorSeg(segStates);
           }
         }
+        // Bàn phím 4x4: tô sáng phím đang nhấn trên panel 3D (đồng bộ với
+        // trạng thái CPU — phím nhấn từ 3D đã tô sáng ngay khi bấm, ở đây
+        // chỉ để chắc chắn khi phím đổi từ nơi khác).
+        if (typeof b.getKeypadState === 'function') {
+          let kpStates = null;
+          try { kpStates = b.getKeypadState(); } catch { kpStates = null; }
+          if (kpStates) {
+            const pressedById = new Map(kpStates.map((s) => [s.id, s]));
+            for (const [id] of keypadKeyMeshes) {
+              const s = pressedById.get(id);
+              highlightKeypadKey(id, s ? { row: s.row, col: s.col } : null);
+            }
+            updateInspectorKeypad(kpStates);
+          }
+        }
+        // Động cơ DC: tốc độ quay theo điện áp (làm mượt bằng EMA để PWM
+        // không làm quạt giật — solver đọc điện áp tức thời nên PWM 50%
+        // sẽ nhảy 0V/5V theo từng lần poll; EMA 0,3 làm tốc độ ổn định
+        // quanh giá trị trung bình theo duty cycle).
+        if (typeof b.getMotorState === 'function') {
+          let motors = null;
+          try { motors = b.getMotorState(); } catch { motors = null; }
+          if (motors) {
+            for (const m of motors) {
+              const f = motorFans.get(m.id);
+              if (!f) continue;
+              const target = m.rpm ?? 0;
+              f.rpm = (f.rpm || 0) + (target - (f.rpm || 0)) * 0.3;
+            }
+            updateInspectorMotor(motors);
+          }
+        }
+        // Màn hình Serial: vẽ lại khi văn bản đã nhận đổi (chỉ so sánh
+        // chuỗi, không vẽ lại mỗi lần hẹn giờ).
+        if (typeof b.getSerialText === 'function') {
+          for (const [id, t] of serialTexs) {
+            let text = '';
+            try { text = b.getSerialText(id) || ''; } catch { text = ''; }
+            if (text === t.last) continue;
+            t.last = text;
+            drawSerialScreen(t, text);
+          }
+          updateInspectorSerial();
+        }
       } catch { /* bridge chưa sẵn: bỏ qua lần này */ }
     }, 150);
   }
@@ -2659,6 +3068,50 @@ void main() {
     if (digitEl) {
       const digit = s ? sevenSegDigit(s.on) : null;
       digitEl.textContent = digit === null ? '—' : digit;
+    }
+  }
+  // Inspector đang mở trên 1 bàn phím 4x4 thì cập nhật phím đang nhấn live
+  // (chỉ đổi text ô "Đang nhấn" đã có, không render lại Inspector).
+  function updateInspectorKeypad(kpStates) {
+    if (!selected || selected.kind !== 'comp') return;
+    const comp = state.components.find((c) => c.id === selected.id);
+    if (!comp || comp.type !== 'keypad') return;
+    const s = (kpStates || []).find((x) => x.id === comp.id);
+    const el = inspectorEl.querySelector('#inspKeypadPressed');
+    if (el) el.textContent = s ? ('Phím "' + s.key + '" (hàng ' + s.row + ', cột ' + s.col + ')') : 'Không nhấn phím nào';
+  }
+  // Inspector đang mở trên 1 động cơ DC thì cập nhật V/A/RPM live (chỉ đổi
+  // text 3 ô đã có, không render lại Inspector). RPM hiện theo EMA (đã làm
+  // mượt trong live poll) nên PWM hiện tốc độ trung bình theo duty cycle.
+  function updateInspectorMotor(motors) {
+    if (!selected || selected.kind !== 'comp') return;
+    const comp = state.components.find((c) => c.id === selected.id);
+    if (!comp || comp.type !== 'motor') return;
+    const m = (motors || []).find((x) => x.id === comp.id);
+    const f = motorFans.get(comp.id);
+    const vEl = inspectorEl.querySelector('#inspMotorVolts');
+    const aEl = inspectorEl.querySelector('#inspMotorAmps');
+    const rEl = inspectorEl.querySelector('#inspMotorRpm');
+    if (vEl) vEl.textContent = m ? formatVolts(m.volts) : '—';
+    if (aEl) aEl.textContent = m ? formatAmps(m.amps) : '—';
+    if (rEl) rEl.textContent = m && m.rpm !== null && m.rpm !== undefined ? Math.round(f ? (f.rpm || 0) : m.rpm) + ' vòng/phút' : '—';
+  }
+  // Inspector đang mở trên 1 màn hình Serial thì cập nhật log đã nhận live
+  // (chỉ đổi text ô log đã có, không render lại Inspector). Cuộn xuống
+  // cuối log sau mỗi lần đổi (nếu người dùng chưa cuộn lên xem lại).
+  function updateInspectorSerial() {
+    if (!selected || selected.kind !== 'comp') return;
+    const comp = state.components.find((c) => c.id === selected.id);
+    if (!comp || comp.type !== 'serial') return;
+    const b = bridge();
+    if (!b || typeof b.getSerialText !== 'function') return;
+    const logEl = inspectorEl.querySelector('#inspSerialLog');
+    if (!logEl) return;
+    let text = '';
+    try { text = b.getSerialText(comp.id) || ''; } catch { text = ''; }
+    if (logEl.textContent !== text) {
+      logEl.textContent = text;
+      logEl.scrollTop = logEl.scrollHeight;
     }
   }
 

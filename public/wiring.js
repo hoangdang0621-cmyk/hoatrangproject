@@ -73,14 +73,27 @@ export const COMPONENT_DEFS = {
   // e/f/g/COM). Chân chung loại 'cathode' (chung về GND, đoạn sáng khi
   // mức 1) hoặc 'anode' (chung về VCC, đoạn sáng khi mức 0).
   sevenseg: { name: 'LED 7 thanh', terms: ['a', 'b', 'c', 'd', 'dp', 'e', 'f', 'g', 'COM'], termLabels: { a: 'Đoạn a', b: 'Đoạn b', c: 'Đoạn c', d: 'Đoạn d', dp: 'Chấm thập phân', e: 'Đoạn e', f: 'Đoạn f', g: 'Đoạn g', COM: 'Chân chung' } },
+  // Bàn phím ma trận 4x4: 4 hàng R0–R3 (PIC lái xuống mức 0 để quét) +
+  // 4 cột C0–C3 (PIC đọc, pull-up). Thứ tự khớp LEG_LAYOUTS trong
+  // bench-model.js (hàng trên R0–R3, hàng dưới C0–C3, cách nhau 5 hàng).
+  keypad: { name: 'Bàn phím 4x4', terms: ['R0', 'R1', 'R2', 'R3', 'C0', 'C1', 'C2', 'C3'], termLabels: { R0: 'Hàng 0', R1: 'Hàng 1', R2: 'Hàng 2', R3: 'Hàng 3', C0: 'Cột 0', C1: 'Cột 1', C2: 'Cột 2', C3: 'Cột 3' } },
+  // Động cơ DC: 2 chân +/−, tải trở trong solver (xem circuit-solver.js).
+  motor: { name: 'Động cơ DC', terms: ['+', '-'], termLabels: { '+': 'Chân +', '-': 'Chân −' } },
 };
+// Nhãn phím của bàn phím 4x4 theo hàng/cột: hàng 0 = 1,2,3,A ...
+export const KEYPAD_KEYS = [
+  ['1', '2', '3', 'A'],
+  ['4', '5', '6', 'B'],
+  ['7', '8', '9', 'C'],
+  ['*', '0', '#', 'D'],
+];
 
 export function componentTerminals(comp) {
   return COMPONENT_DEFS[comp.kind].terms.map((t) => `${comp.id}.${t}`);
 }
 
-const KIND_PREFIX = { led: 'LED', button: 'BTN', pot: 'POT', lcd: 'LCD', buzzer: 'BUZ' };
-const KIND_LABEL = { led: 'LED', button: 'Nút', pot: 'Chiết áp', lcd: 'LCD', buzzer: 'Còi' };
+const KIND_PREFIX = { led: 'LED', button: 'BTN', pot: 'POT', lcd: 'LCD', buzzer: 'BUZ', keypad: 'KP', motor: 'M' };
+const KIND_LABEL = { led: 'LED', button: 'Nút', pot: 'Chiết áp', lcd: 'LCD', buzzer: 'Còi', keypad: 'Bàn phím 4x4', motor: 'Động cơ DC' };
 
 export function nextComponentId(netlist, kind) {
   const pre = KIND_PREFIX[kind];
@@ -270,7 +283,16 @@ export function resolvePeripherals(netlist) {
       seg, com: termInfo('COM'),
     };
   });
-  return { leds, buttons, pots, lcd, buzzers, sevensegs, nets: netsOut, netOf, psuLedOn };
+  // Bàn phím ma trận 4x4: 4 hàng R0–R3 và 4 cột C0–C3, mỗi đầu nối ghi
+  // lại chân PIC trong net của nó (nếu có). Mức cột khi quét tính ở
+  // CPU (pinLevel, xem pic16.js) theo phím đang nhấn + mức hàng, không
+  // tính ở đây.
+  const keypads = netlist.components.filter((c) => c.kind === 'keypad').map((c) => ({
+    id: c.id, label: c.label,
+    rows: ['R0', 'R1', 'R2', 'R3'].map((t) => picPinInNet(c.id + '.' + t)),
+    cols: ['C0', 'C1', 'C2', 'C3'].map((t) => picPinInNet(c.id + '.' + t)),
+  }));
+  return { leds, buttons, pots, lcd, buzzers, sevensegs, keypads, nets: netsOut, netOf, psuLedOn };
 }
 
 // Mức logic của một net (dùng cho LED/còi): VCC=1, GND=0, chân PIC -> mức chân đó
@@ -376,6 +398,18 @@ export function applyPotToCpu(cpu, mapping, potId, volts) {
   const p = mapping.pots.find((x) => x.id === potId);
   if (!p || !p.wiper || p.wiper.analog === null || p.wiper.analog === undefined) return false;
   cpu.setAnalog(p.wiper.analog, volts);
+  return true;
+}
+
+// Bàn phím ma trận: phím đang nhấn (nhấn giữ) của 1 bàn phím. key =
+// {row, col} (0..3) hoặc null (không nhấn phím nào). Chỉ ghi lại phím
+// đang nhấn vào CPU (cpu.setKeypadPressed); mức cột tính ngay lúc CPU
+// đọc chân (pinLevel) nên không cần cập nhật portInput ở đây. Trả false
+// nếu không có bàn phím đó trong mapping.
+export function applyKeypadToCpu(cpu, mapping, keypadId, key) {
+  if (!mapping.keypads || !mapping.keypads.some((x) => x.id === keypadId)) return false;
+  if (typeof cpu.setKeypadPressed !== 'function') return false;
+  cpu.setKeypadPressed(keypadId, key || null);
   return true;
 }
 

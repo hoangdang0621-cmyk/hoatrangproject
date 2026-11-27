@@ -3,18 +3,35 @@
 // chưa nạp chương trình nào; code mẫu nằm sẵn trong tab "Nạp viết code",
 // người dùng bấm "Nạp & chạy" thì chip mới chạy. ProgramRunner điều khiển
 // chạy/tạm dừng/chạy từng lệnh/breakpoint.
-import { createCPU, ProgramRunner, cyclesForElapsedMs } from './pic16.js?v=20261125ax';
+import { createCPU, ProgramRunner, cyclesForElapsedMs } from './pic16.js?v=20261125be';
 import {
   resolvePeripherals, ledStates, buzzerStates, sevenSegStates,
-  applyButtonToCpu, applyPotToCpu,
-} from './wiring.js?v=20261125ba';
-import { defaultBenchState, benchToNetlist, crystalFreq } from './bench-model.js?v=20261125ba';
-import { meterReadings, scopeVoltages, pushScopeSample, SCOPE_MAX_SAMPLES } from './circuit-solver.js?v=20261125ba';
-import { compileC } from './c-compiler.js?v=20261125ax';
+  applyButtonToCpu, applyPotToCpu, applyKeypadToCpu,
+} from './wiring.js?v=20261125be';
+import { defaultBenchState, benchToNetlist, crystalFreq } from './bench-model.js?v=20261125be';
+import { meterReadings, motorReadings, scopeVoltages, pushScopeSample, SCOPE_MAX_SAMPLES } from './circuit-solver.js?v=20261125be';
+import { compileC } from './c-compiler.js?v=20261125be';
 
 const cpu = createCPU();
 cpu.clockHz = 4000000;
 const runner = new ProgramRunner(cpu);
+
+// Màn hình Serial: bộ đệm văn bản đã nhận của từng màn hình (id -> chuỗi
+// ký tự). CPU phát ký tự qua TX (onTx) thì nối vào bộ đệm của MỌI màn
+// hình đang có trên bàn (thường chỉ 1 cái). Giới hạn 4000 ký tự/màn hình
+// (cắt bớt đầu khi vượt). Ghi chú: dữ liệu KHÔNG đi qua dây/cọc — dây
+// TX/RX/GND chỉ để mạch trông đầy đủ (xem bench-model.js).
+const SERIAL_BUFFER_MAX = 4000;
+const serialBuffers = new Map();
+cpu.onTx = (code) => {
+  if (typeof code !== 'number' || code < 0 || code > 255) return;
+  const ch = String.fromCharCode(code);
+  for (const [id, buf] of serialBuffers) {
+    let next = buf + ch;
+    if (next.length > SERIAL_BUFFER_MAX) next = next.slice(next.length - SERIAL_BUFFER_MAX);
+    serialBuffers.set(id, next);
+  }
+};
 
 // Netlist ban đầu = bàn mặc định (chip PIC + nguồn + dây nguồn về rail).
 let mapping = resolvePeripherals(benchToNetlist(defaultBenchState()));
@@ -72,6 +89,11 @@ setInterval(() => {
 // gọi solver được; bench.js truyền 2 tham số này ở syncToCpu().
 let benchStateForMeters = null;
 let pressedIdsForMeters = [];
+// Phím bàn phím đang nhấn giữ ({id, row, col} hoặc null) — để
+// getMeterReadings/getScopeData/getMotorState gọi solver với đúng mạch
+// (phím nhấn nối hàng với cột). bench.js truyền vào applyBenchNetlist
+// (tham số thứ 4) mỗi lần đồng bộ, như pressedIds của nút bấm.
+let pressedKeypadForMeters = null;
 // Tần số thạch anh trên bàn (Hz) — xung nhịp thật cho CPU. null khi
 // chưa có thạch anh (xem applyBenchNetlist + loadC).
 let benchCrystalFreq = null;
@@ -89,7 +111,7 @@ function sampleScopes() {
     if (!scopes.some((c) => c.id === id)) scopeBuffers.delete(id);
   }
   let readings;
-  try { readings = scopeVoltages(benchStateForMeters, cpu, pressedIdsForMeters); } catch { return; }
+  try { readings = scopeVoltages(benchStateForMeters, cpu, pressedIdsForMeters, pressedKeypadForMeters); } catch { return; }
   for (const r of readings) {
     const buf = scopeBuffers.get(r.id) || [];
     pushScopeSample(buf, [r.ch1, r.ch2]);
@@ -97,12 +119,30 @@ function sampleScopes() {
   }
 }
 window.HoaTrangBenchBridge = {
-  applyBenchNetlist(nl, st, pressed) {
+  applyBenchNetlist(nl, st, pressed, pressedKeypad) {
     mapping = resolvePeripherals(nl);
     cpu.setWiring(mapping);
     applyAllPots();
     if (st) {
       benchStateForMeters = st; pressedIdsForMeters = pressed || [];
+      pressedKeypadForMeters = pressedKeypad || null;
+      // Đồng bộ phím bàn phím đang nhấn vào CPU (để pinLevel tính mức
+      // cột khi quét). bench.js cũng gọi pressKeypad riêng khi bấm phím;
+      // gọi lại ở đây cho chắc (vd khi nạp state đã lưu).
+      if (pressedKeypadForMeters && pressedKeypadForMeters.id) {
+        applyKeypadToCpu(cpu, mapping, pressedKeypadForMeters.id, { row: pressedKeypadForMeters.row, col: pressedKeypadForMeters.col });
+      } else {
+        for (const kp of mapping.keypads || []) applyKeypadToCpu(cpu, mapping, kp.id, null);
+      }
+      // Đồng bộ bộ đệm Serial với màn hình đang có trên bàn: màn hình mới
+      // thì tạo bộ đệm rỗng, màn hình đã xóa thì bỏ bộ đệm của nó.
+      const serialIds = new Set(st.components.filter((c) => c.type === 'serial').map((c) => c.id));
+      for (const id of [...serialBuffers.keys()]) {
+        if (!serialIds.has(id)) serialBuffers.delete(id);
+      }
+      for (const id of serialIds) {
+        if (!serialBuffers.has(id)) serialBuffers.set(id, '');
+      }
       // Xung nhịp lấy từ thạch anh trên bàn (tần số của thạch anh đầu
       // tiên, null nếu chưa có). Đổi/thêm/bớt thạch anh thì lần nạp
       // chương trình sau mới áp dụng tần số mới.
@@ -118,13 +158,54 @@ window.HoaTrangBenchBridge = {
   getCrystalFreq: () => benchCrystalFreq,
   getMeterReadings: () => {
     if (!benchStateForMeters) return { voltmeters: [], ammeters: [] };
-    try { return meterReadings(benchStateForMeters, cpu, pressedIdsForMeters); }
+    try { return meterReadings(benchStateForMeters, cpu, pressedIdsForMeters, pressedKeypadForMeters); }
     catch { return { voltmeters: [], ammeters: [] }; }
+  },
+  // Động cơ DC: điện áp, dòng, tốc độ quay (để bench.js vẽ cánh quạt
+  // quay và Inspector hiện V/A/RPM). Trả [{id, volts, amps, rpm}].
+  getMotorState: () => {
+    if (!benchStateForMeters) return [];
+    try { return motorReadings(benchStateForMeters, cpu, pressedIdsForMeters, pressedKeypadForMeters); }
+    catch { return []; }
+  },
+  // Bàn phím ma trận: phím đang nhấn giữ của từng bàn phím (để bench.js
+  // tô sáng phím đang nhấn trên panel 3D và Inspector hiện "Đang nhấn:
+  // 5"). Trả [{id, row, col, key}] (key = nhãn phím vd '5', 'A', '*').
+  getKeypadState: () => [...cpu.keypadPressed.entries()].map(([id, k]) => ({
+    id, row: k.row, col: k.col,
+    key: ['1', '2', '3', 'A', '4', '5', '6', 'B', '7', '8', '9', 'C', '*', '0', '#', 'D'][k.row * 4 + k.col] || '?',
+  })),
+  // Bấm/nhả 1 phím bàn phím (nhấn giữ): key = {row, col} (0..3) hoặc
+  // null (nhả phím). Đặt vào CPU (pinLevel tính mức cột khi quét) và
+  // lưu lại cho solver (applyBenchNetlist sẽ đồng bộ lại khi bench.js
+  // gọi syncToCpu). Trả true nếu có bàn phím đó.
+  pressKeypad: (id, key) => {
+    const ok = applyKeypadToCpu(cpu, mapping, id, key || null);
+    if (ok) pressedKeypadForMeters = key ? { id, row: key.row, col: key.col } : null;
+    return ok;
   },
   // Đồng hồ hiện sóng: toàn bộ bộ nhớ vòng (để bench.js vẽ sóng), và xóa
   // sóng 1 scope (nút "Xóa sóng" trong Inspector).
   getScopeData: () => [...scopeBuffers.entries()].map(([id, samples]) => ({ id, samples })),
   clearScope: (id) => { scopeBuffers.delete(id); },
+  // Màn hình Serial: văn bản đã nhận (để bench.js vẽ màn hình 3D và
+  // Inspector hiện log). Trả chuỗi ký tự của màn hình id ('' nếu không
+  // có). sendSerial gửi từng ký tự người dùng gõ vào CPU qua receiveChar
+  // (vào RCREG, đặt RCIF, ngắt nếu bật); chỉ gửi ký tự ASCII 0..255.
+  // clearSerial xóa log 1 màn hình (nút "Xóa" trong Inspector).
+  getSerialText: (id) => serialBuffers.get(id) || '',
+  sendSerial: (id, text) => {
+    if (typeof text !== 'string' || !text.length) return 0;
+    let sent = 0;
+    for (const ch of text) {
+      const code = ch.charCodeAt(0);
+      if (code < 0 || code > 255) continue;
+      cpu.receiveChar(code);
+      sent++;
+    }
+    return sent;
+  },
+  clearSerial: (id) => { serialBuffers.set(id, ''); },
   getLcd: () => ({ lines: cpu.lcd.getLines(), cells: cpu.lcd.getDisplayCells(), complete: !mapping.lcd.id || mapping.lcd.complete }),
   getPin: (port, bit) => ({ dir: cpu.pinDirection(port, bit), level: cpu.pinLevel(port, bit) }),
   getTris: () => cpu.tris,

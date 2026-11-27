@@ -352,11 +352,26 @@ export const LEG_LAYOUTS = {
     { term: 'e', dc: 0, dr: 5 }, { term: 'f', dc: 1, dr: 5 },
     { term: 'g', dc: 2, dr: 5 }, { term: 'COM', dc: 3, dr: 5 },
   ],
+  // Bàn phím ma trận 4x4: 2 hàng chân như LED 7 thanh (hàng trên R0–R3,
+  // hàng dưới C0–C3, cách nhau 5 hàng để không nối tắt qua strip).
+  // Phím đang nhấn nối hàng của nó với cột của nó (công tắc đóng, xem
+  // buildBenchNets); CPU quét bằng cách lái từng hàng xuống 0 rồi đọc cột.
+  keypad: [
+    { term: 'R0', dc: 0, dr: 0 }, { term: 'R1', dc: 1, dr: 0 },
+    { term: 'R2', dc: 2, dr: 0 }, { term: 'R3', dc: 3, dr: 0 },
+    { term: 'C0', dc: 0, dr: 5 }, { term: 'C1', dc: 1, dr: 5 },
+    { term: 'C2', dc: 2, dr: 5 }, { term: 'C3', dc: 3, dr: 5 },
+  ],
+  // Động cơ DC: 2 chân +/− cách nhau 1 cột như còi. Tải trở trong
+  // solver (điện trở cuộn dây, mặc định 100Ω) — không nối 2 strip như
+  // dây, mà là nhánh dẫn giữa 2 node (xem circuit-solver.js).
+  motor: [{ term: '+', dc: 0, dr: 0 }, { term: '-', dc: 1, dr: 0 }],
   // Đồng hồ hiện sóng KHÔNG còn trong bảng chân: nó là linh kiện NGOÀI
   // BÀN (như khối nguồn), ngồi trên mặt bàn, nối dây vào 3 cọc CH1/CH2/GND
   // ở mặt trước thân máy (xem parseScopePost/scopePostPos ở dưới). Trở
   // kháng vô cùng như multimeter chế độ V: chỉ đọc điện áp, không ảnh
   // hưởng mạch (không thêm terminal vào netlist CPU, xem buildBenchNets).
+  // Màn hình Serial cũng vậy (xem parseSerialPost/serialPostPos).
 };
 
 // Chế độ của đồng hồ đo: 'A' (đo dòng) hoặc 'V' (đo áp, mặc định khi
@@ -442,7 +457,7 @@ export function legsFor(comp, size = DEFAULT_SIZE) {
     const a = parseHole(comp.anchor, size);
     return (a ? picLegsForAnchor(a, size) : picLegs(size)).map((l) => ({ term: l.term, hole: l.hole }));
   }
-  if (comp.type === 'psu' || comp.type === 'oscilloscope') return [];
+  if (comp.type === 'psu' || comp.type === 'oscilloscope' || comp.type === 'serial') return [];
   const anchor = parseHole(comp.anchor, size);
   if (!anchor) return [];
   return legOffsets(comp.type, comp.rot || 0).map((l) => ({
@@ -468,7 +483,7 @@ export function occupancy(state, ignoreId = null) {
 // và chân nằm dưới thân chip PIC (hàng b..h, cột picCol..picCol+19).
 export function canPlace(state, type, anchor, rot = 0, ignoreId = null) {
   const size = state.size ?? DEFAULT_SIZE;
-  if (type === 'psu' || type === 'oscilloscope') return { ok: true, legs: [] }; // nguồn / hiện sóng đặt trên mặt bàn, không cần lỗ
+  if (type === 'psu' || type === 'oscilloscope' || type === 'serial') return { ok: true, legs: [] }; // nguồn / hiện sóng / màn hình Serial đặt trên mặt bàn, không cần lỗ
   const legs = legsFor({ type, anchor, rot }, size);
   if (!legs.length) return { ok: false, reason: 'Không đặt được linh kiện này lên lỗ.' };
   for (const leg of legs) {
@@ -526,8 +541,10 @@ function makeUnionFind() {
 // - điện trở nối 2 strip của nó (như 1 dây); dây nối 2 strip của 2 đầu.
 // - nút bấm đang nhấn giữ (pressedIds) = công tắc đóng: nối 2 strip của
 //   2 chân T1–T2 lại với nhau; nhả ra thì 2 chân tách ra như cũ.
+// - phím bàn phím đang nhấn giữ (pressedKeypad = {id, row, col}) = công
+//   tắc đóng: nối strip của hàng đó với strip của cột đó lại với nhau.
 // - nhóm chạm RAIL+ là +5V, chạm RAIL- là GND.
-export function buildBenchNets(state, pressedIds = []) {
+export function buildBenchNets(state, pressedIds = [], pressedKeypad = null) {
   const size = state.size ?? DEFAULT_SIZE;
   const { find, union, ensure } = makeUnionFind();
   ensure('RAIL+');
@@ -583,16 +600,32 @@ export function buildBenchNets(state, pressedIds = []) {
     keys.forEach((k) => ensure(k));
     for (let i = 1; i < keys.length; i++) union(keys[0], keys[i]);
   }
+  // Phím bàn phím đang nhấn giữ = công tắc đóng: nối strip của hàng đó
+  // với strip của cột đó (như nút bấm). Chỉ nối đúng 1 cặp hàng/cột của
+  // phím đang nhấn; các hàng/cột khác vẫn tách nhau.
+  if (pressedKeypad && pressedKeypad.id) {
+    const kp = state.components.find((c) => c.id === pressedKeypad.id && c.type === 'keypad');
+    if (kp) {
+      const legs = legsFor(kp, size);
+      const rowLeg = legs.find((l) => l.term === 'R' + pressedKeypad.row);
+      const colLeg = legs.find((l) => l.term === 'C' + pressedKeypad.col);
+      const kRow = rowLeg && rowLeg.hole ? stripKey(rowLeg.hole, size) : null;
+      const kCol = colLeg && colLeg.hole ? stripKey(colLeg.hole, size) : null;
+      if (kRow && kCol) { ensure(kRow); ensure(kCol); union(kRow, kCol); }
+    }
+  }
   // Strip của 1 đầu dây: lỗ -> strip của lỗ đó; cọc nguồn -> RAIL+/RAIL-;
-  // cọc hiện sóng -> null (chỉ quan sát, không nối gì trong netlist CPU);
-  // đầu {x,y,z} cũ -> cọc nguồn/cọc hiện sóng nếu khớp vị trí cọc, còn
-  // không thì bỏ qua. Dây 1 đầu lỗ + 1 đầu cọc scope bị bỏ qua ở vòng
-  // union dưới (kiểm ka && kb) nên strip của lỗ đó không đổi.
+  // cọc hiện sóng / cọc màn hình Serial -> null (chỉ quan sát, không nối
+  // gì trong netlist CPU); đầu {x,y,z} cũ -> cọc nguồn/cọc hiện sóng/cọc
+  // Serial nếu khớp vị trí cọc, còn không thì bỏ qua. Dây 1 đầu lỗ + 1
+  // đầu cọc scope/Serial bị bỏ qua ở vòng union dưới (kiểm ka && kb) nên
+  // strip của lỗ đó không đổi.
   const endStripKey = (e) => {
     if (typeof e === 'string') {
       const pp = parsePsuPost(e);
       if (pp) return pp.sign === '+' ? 'RAIL+' : 'RAIL-';
       if (parseScopePost(e)) return null;
+      if (parseSerialPost(e)) return null;
       return stripKey(e, size);
     }
     const norm = normalizeWireEnd(state, e);
@@ -600,6 +633,7 @@ export function buildBenchNets(state, pressedIds = []) {
       const pp = parsePsuPost(norm);
       if (pp) return pp.sign === '+' ? 'RAIL+' : 'RAIL-';
       if (parseScopePost(norm)) return null;
+      if (parseSerialPost(norm)) return null;
     }
     return null;
   };
@@ -706,6 +740,13 @@ export function normalizeWireEnd(state, e) {
         if (Math.abs(e.x - (c.tx + dx)) < 6 && Math.abs(e.z - (c.tz + SCOPE_POST_DZ)) < 6) return c.id + '.' + term;
       }
     }
+    // Đầu {x,y,z} cũ khớp cọc màn hình Serial thì đổi thành id cọc ('SER0.TX'...).
+    for (const c of state.components) {
+      if (c.type !== 'serial') continue;
+      for (const [term, dx] of [['TX', -SERIAL_POST_DX], ['RX', 0], ['GND', SERIAL_POST_DX]]) {
+        if (Math.abs(e.x - (c.tx + dx)) < 6 && Math.abs(e.z - (c.tz + SERIAL_POST_DZ)) < 6) return c.id + '.' + term;
+      }
+    }
   }
   return e;
 }
@@ -745,7 +786,39 @@ export function scopePostPos(state, id) {
 // hardcode ở đây, không lấy từ bảng chân nữa).
 export const SCOPE_LEG_DC_OLD = { CH1: 0, CH2: 2, GND: 4 };
 
-const KIND_LABEL = { led: 'LED', button: 'Nút', pot: 'Chiết áp', lcd: 'LCD', buzzer: 'Còi', multimeter: 'Đồng hồ đo', oscilloscope: 'Đồng hồ hiện sóng', capacitor: 'Tụ gốm', crystal: 'Thạch anh', sevenseg: 'LED 7 thanh' };
+// ---------------------------------------------------------------------------
+// Cọc của màn hình Serial: linh kiện NGOÀI BÀN (như đồng hồ hiện sóng),
+// ngồi trên mặt bàn, nối dây từ lỗ breadboard vào 3 cọc TX/RX/GND ở mặt
+// trước thân máy (id 'SER0.TX' / 'SER0.RX' / 'SER0.GND').
+// Thân máy 100 rộng × 60 cao × 50 sâu (mm) như scope; cọc ở mặt trước
+// (z = tz+26), cao y = 10, TX x = tx−28, RX x = tx, GND x = tx+28.
+// Vị trí mặc định khi đặt mới: tx=-130, tz=-150 (cạnh TRÁI nguồn, đối
+// xứng với scope ở cạnh phải tx=130; nguồn rộng 60 ở tx=0 trải −30..30;
+// màn hình Serial rộng 100 ở tx=-130 trải −180..−80, không chồng nguồn).
+// Dữ liệu KHÔNG đi qua dây/cọc: CPU phát qua onTx, nhận qua receiveChar
+// (xem pic16.js + app.js). Dây/cọc chỉ để mạch trông đầy đủ/thật như
+// đấu nối thật (TX->RC6, RX->RC7, GND->GND).
+// ---------------------------------------------------------------------------
+export const SERIAL_POST_DX = 28; // |x| cọc TX/GND so với tx (RX ở giữa)
+export const SERIAL_POST_Y = 10;  // cao cọc
+export const SERIAL_POST_DZ = 26; // z cọc so với tz (mặt trước hộp sâu 50 ở +25, cọc nhô +1)
+export const SERIAL_DEFAULT_TX = -130;
+export const SERIAL_DEFAULT_TZ = -150;
+export function parseSerialPost(id) {
+  const m = typeof id === 'string' ? id.match(/^SER(\d+)\.(TX|RX|GND)$/) : null;
+  return m ? { serialId: 'SER' + m[1], term: m[2] } : null;
+}
+// Vị trí 3D của cọc màn hình Serial trên bàn (mm).
+export function serialPostPos(state, id) {
+  const sp = parseSerialPost(id);
+  if (!sp) return null;
+  const comp = state.components.find((c) => c.id === sp.serialId && c.type === 'serial');
+  if (!comp) return null;
+  const dx = sp.term === 'TX' ? -SERIAL_POST_DX : sp.term === 'GND' ? SERIAL_POST_DX : 0;
+  return { x: comp.tx + dx, y: SERIAL_POST_Y, z: comp.tz + SERIAL_POST_DZ };
+}
+
+const KIND_LABEL = { led: 'LED', button: 'Nút', pot: 'Chiết áp', lcd: 'LCD', buzzer: 'Còi', multimeter: 'Đồng hồ đo', oscilloscope: 'Đồng hồ hiện sóng', capacitor: 'Tụ gốm', crystal: 'Thạch anh', sevenseg: 'LED 7 thanh', keypad: 'Bàn phím 4x4', motor: 'Động cơ DC', serial: 'Màn hình Serial' };
 export function compLabel(comp) {
   const n = comp.id.replace(/^[A-Z]+/, '');
   if (comp.type === 'pic') return 'PIC16F877A';
@@ -754,8 +827,8 @@ export function compLabel(comp) {
   return (KIND_LABEL[comp.type] || comp.type) + ' ' + n;
 }
 
-export function benchToNetlist(state, pressedIds = []) {
-  const { groups, termRoot, resistorRoots, find } = buildBenchNets(state, pressedIds);
+export function benchToNetlist(state, pressedIds = [], pressedKeypad = null) {
+  const { groups, termRoot, resistorRoots, find } = buildBenchNets(state, pressedIds, pressedKeypad);
   const components = [];
   for (const comp of state.components) {
     // Đồng hồ đo và đồng hồ hiện sóng không phải ngoại vi cho CPU nên
@@ -764,7 +837,10 @@ export function benchToNetlist(state, pressedIds = []) {
     // qua buildBenchNets (nối 2 strip như dây); chế độ V và hiện sóng
     // không nối gì. Tụ gốm và thạch anh cũng không đưa vào netlist (hở
     // mạch với DC); xung nhịp lấy từ crystalFreq(state), không qua netlist.
-    if (comp.type === 'pic' || comp.type === 'psu' || comp.type === 'resistor' || comp.type === 'multimeter' || comp.type === 'oscilloscope' || comp.type === 'capacitor' || comp.type === 'crystal') continue;
+    // Động cơ DC cũng không đưa vào netlist (tải trở trong solver, không
+    // phải ngoại vi CPU). Màn hình Serial cũng vậy (giao tiếp qua CPU
+    // onTx/receiveChar, không qua netlist).
+    if (comp.type === 'pic' || comp.type === 'psu' || comp.type === 'resistor' || comp.type === 'multimeter' || comp.type === 'oscilloscope' || comp.type === 'capacitor' || comp.type === 'crystal' || comp.type === 'motor' || comp.type === 'serial') continue;
     const c = {
       id: comp.id, kind: comp.type, label: compLabel(comp),
       x: 0, y: 0, fixed: !!comp.fixed,
@@ -812,7 +888,7 @@ export function benchToNetlist(state, pressedIds = []) {
 // ---------------------------------------------------------------------------
 // Id linh kiện mới (khớp mẫu wiring.js: LED0, BTN0, POT0, LCD0, BUZ0, R0).
 // ---------------------------------------------------------------------------
-const ID_PREFIX = { led: 'LED', resistor: 'R', button: 'BTN', pot: 'POT', lcd: 'LCD', buzzer: 'BUZ', psu: 'PSU', multimeter: 'MM', oscilloscope: 'OSC', capacitor: 'C', crystal: 'X', sevenseg: 'SEG' };
+const ID_PREFIX = { led: 'LED', resistor: 'R', button: 'BTN', pot: 'POT', lcd: 'LCD', buzzer: 'BUZ', psu: 'PSU', multimeter: 'MM', oscilloscope: 'OSC', capacitor: 'C', crystal: 'X', sevenseg: 'SEG', keypad: 'KP', motor: 'M', serial: 'SER' };
 export function nextComponentId(state, type) {
   const pre = ID_PREFIX[type] || 'C';
   let n = -1;
@@ -832,6 +908,7 @@ export function defaultProps(type) {
   if (type === 'capacitor') return { value: 22 }; // pF (tụ nạp thạch anh)
   if (type === 'crystal') return { freq: 4000000 }; // Hz
   if (type === 'sevenseg') return { common: 'cathode' }; // 'cathode' | 'anode'
+  if (type === 'motor') return { value: 100 }; // Ω (điện trở cuộn dây động cơ DC)
   return {};
 }
 
@@ -851,7 +928,8 @@ export function crystalFreq(state) {
 }
 // Chuẩn hóa props của 3 loại mới khi đọc state đã lưu: tụ phải là số
 // pF dương, thạch anh phải là 1 trong 3 tần số cho phép, LED 7 thanh
-// common chỉ nhận 'cathode'/'anode'. Loại khác giữ nguyên props.
+// common chỉ nhận 'cathode'/'anode', động cơ DC điện trở cuộn dây phải
+// là số Ω dương. Loại khác giữ nguyên props.
 export function cleanNewProps(type, props) {
   const p = { ...defaultProps(type), ...(props || {}) };
   if (type === 'capacitor') {
@@ -862,6 +940,9 @@ export function cleanNewProps(type, props) {
     p.freq = CRYSTAL_FREQS.includes(f) ? f : 4000000;
   } else if (type === 'sevenseg') {
     p.common = p.common === 'anode' ? 'anode' : 'cathode';
+  } else if (type === 'motor') {
+    const v = Number(p.value);
+    p.value = Number.isFinite(v) && v > 0 ? v : 100;
   }
   return p;
 }
@@ -972,6 +1053,17 @@ export function sanitizeState(raw) {
       }
       continue;
     }
+    if (c.type === 'serial') {
+      // Màn hình Serial ngoài bàn (có tx/tz): giữ nguyên vị trí. Serial
+      // không có bản cắm lỗ cũ nên thiếu tx/tz thì về vị trí mặc định
+      // cạnh trái nguồn (tx=-130, tz=-150).
+      if (typeof c.tx === 'number' && typeof c.tz === 'number') {
+        components.push({ id: c.id, type: 'serial', tx: c.tx, tz: c.tz, fixed: false, props: {} });
+      } else {
+        components.push({ id: c.id, type: 'serial', tx: SERIAL_DEFAULT_TX, tz: SERIAL_DEFAULT_TZ, fixed: false, props: {} });
+      }
+      continue;
+    }
     // Đồng hồ cũ (vôn kế/ampe kế) -> multimeter, GIỮ NGUYÊN id để dây
     // và mạch đã lưu không vỡ; mode theo loại cũ (V cho vôn kế, A cho
     // ampe kế). Phải chuyển TRƯỚC khi kiểm tra LEG_LAYOUTS (2 loại cũ
@@ -985,10 +1077,11 @@ export function sanitizeState(raw) {
     if (!LEG_LAYOUTS[type] || !parseHole(anchor, size)) continue;
     const chk = canPlace({ size, components }, type, anchor, c.rot || 0);
     if (!chk.ok) continue;
-    // Tụ/thạch anh/LED 7 thanh: chuẩn hóa props (tụ pF dương, thạch
-    // anh đúng 1 trong 3 tần số, common chỉ cathode/anode); loại khác
-    // giữ nguyên props đã lưu (thiếu thì lấy mặc định).
-    const finalProps = (type === 'capacitor' || type === 'crystal' || type === 'sevenseg')
+    // Tụ/thạch anh/LED 7 thanh/động cơ DC: chuẩn hóa props (tụ pF dương,
+    // thạch anh đúng 1 trong 3 tần số, common chỉ cathode/anode, động cơ
+    // điện trở cuộn dây Ω dương); loại khác giữ nguyên props đã lưu
+    // (thiếu thì lấy mặc định).
+    const finalProps = (type === 'capacitor' || type === 'crystal' || type === 'sevenseg' || type === 'motor')
       ? cleanNewProps(type, props)
       : (Object.keys(props).length ? props : defaultProps(type));
     components.push({ id: c.id, type, anchor, rot: c.rot || 0, props: finalProps });
@@ -1003,14 +1096,17 @@ export function sanitizeState(raw) {
   for (const w of raw.wires) {
     if (!w || typeof w.id !== 'string' || typeof w.color !== 'string') continue;
     // Đầu dây hợp lệ: lỗ trên board, cọc nguồn (PSU1.+/PSU1.-), cọc hiện
-    // sóng (OSC1.CH1/CH2/GND), hoặc điểm 3D cũ.
+    // sóng (OSC1.CH1/CH2/GND), cọc màn hình Serial (SER0.TX/RX/GND),
+    // hoặc điểm 3D cũ.
     const okEnd = (e) => {
       if (typeof e === 'string') {
         if (parseHole(e, size)) return true;
         const pp = parsePsuPost(e);
         if (pp) return components.some((c) => c.id === pp.psuId);
         const sp = parseScopePost(e);
-        return !!sp && components.some((c) => c.id === sp.scopeId && c.type === 'oscilloscope');
+        if (sp) return components.some((c) => c.id === sp.scopeId && c.type === 'oscilloscope');
+        const sr = parseSerialPost(e);
+        return !!sr && components.some((c) => c.id === sr.serialId && c.type === 'serial');
       }
       return e && typeof e.x === 'number' && typeof e.y === 'number' && typeof e.z === 'number';
     };
@@ -1077,6 +1173,15 @@ export function pruneStateForSize(state, newSize) {
       }
       continue;
     }
+    if (comp.type === 'serial') {
+      // Màn hình Serial ngoài bàn: giữ nguyên vị trí (không theo size board).
+      if (typeof comp.tx === 'number' && typeof comp.tz === 'number') {
+        keptComponents.push({ id: comp.id, type: 'serial', tx: comp.tx, tz: comp.tz, fixed: false, props: {} });
+      } else {
+        removed.components.push(comp.id);
+      }
+      continue;
+    }
     // Đồng hồ cũ (vôn kế/ampe kế) -> multimeter, giữ nguyên id (như
     // sanitizeState). State trong bộ nhớ thường đã qua sanitizeState nên
     // đây chỉ là phòng thủ khi prune được gọi trên state chưa migrate.
@@ -1088,7 +1193,7 @@ export function pruneStateForSize(state, newSize) {
     if (!LEG_LAYOUTS[type] || !parseHole(comp.anchor, size)) { removed.components.push(comp.id); continue; }
     const chk = canPlace(probe, type, comp.anchor, comp.rot || 0);
     if (!chk.ok) { removed.components.push(comp.id); continue; }
-    const finalProps = (type === 'capacitor' || type === 'crystal' || type === 'sevenseg')
+    const finalProps = (type === 'capacitor' || type === 'crystal' || type === 'sevenseg' || type === 'motor')
       ? cleanNewProps(type, props)
       : (Object.keys(props).length ? props : defaultProps(type));
     keptComponents.push({ id: comp.id, type, anchor: comp.anchor, rot: comp.rot || 0, props: finalProps });
@@ -1117,14 +1222,17 @@ export function pruneStateForSize(state, newSize) {
       if (rb === null) { removed.wires.push(w.id); continue; }
       b = rb;
     } else {
-      // Đầu dây hợp lệ: lỗ trên board, cọc nguồn, cọc hiện sóng, hoặc điểm 3D cũ.
+      // Đầu dây hợp lệ: lỗ trên board, cọc nguồn, cọc hiện sóng, cọc màn
+      // hình Serial, hoặc điểm 3D cũ.
       const okEnd = (e) => {
         if (typeof e === 'string') {
           if (parseHole(e, size)) return true;
           const pp = parsePsuPost(e);
           if (pp) return keptComponents.some((c) => c.id === pp.psuId);
           const sp = parseScopePost(e);
-          return !!sp && keptComponents.some((c) => c.id === sp.scopeId && c.type === 'oscilloscope');
+          if (sp) return keptComponents.some((c) => c.id === sp.scopeId && c.type === 'oscilloscope');
+          const sr = parseSerialPost(e);
+          return !!sr && keptComponents.some((c) => c.id === sr.serialId && c.type === 'serial');
         }
         return e && typeof e.x === 'number' && typeof e.y === 'number' && typeof e.z === 'number';
       };
@@ -1148,10 +1256,12 @@ export function validateWireEnd(state, wireId, end, newHole) {
   if (!w) return { ok: false, reason: 'Không tìm thấy dây.' };
   if (end !== 'a' && end !== 'b') return { ok: false, reason: 'Đầu dây không hợp lệ.' };
   // Đích hợp lệ: lỗ trên board, cọc nguồn (PSU1.+/PSU1.-) của nguồn đang
-  // có trên bàn, hoặc cọc hiện sóng (OSC1.CH1/CH2/GND) của hiện sóng
-  // đang có trên bàn.
+  // có trên bàn, cọc hiện sóng (OSC1.CH1/CH2/GND) của hiện sóng đang có
+  // trên bàn, hoặc cọc màn hình Serial (SER0.TX/RX/GND) của màn hình
+  // Serial đang có trên bàn.
   const pp = parsePsuPost(newHole);
   const sp = parseScopePost(newHole);
+  const sr = parseSerialPost(newHole);
   if (pp) {
     if (!state.components.some((c) => c.id === pp.psuId && c.type === 'psu')) {
       return { ok: false, reason: 'Không có nguồn ' + pp.psuId + ' trên bàn.' };
@@ -1160,8 +1270,12 @@ export function validateWireEnd(state, wireId, end, newHole) {
     if (!state.components.some((c) => c.id === sp.scopeId && c.type === 'oscilloscope')) {
       return { ok: false, reason: 'Không có hiện sóng ' + sp.scopeId + ' trên bàn.' };
     }
+  } else if (sr) {
+    if (!state.components.some((c) => c.id === sr.serialId && c.type === 'serial')) {
+      return { ok: false, reason: 'Không có màn hình Serial ' + sr.serialId + ' trên bàn.' };
+    }
   } else if (!parseHole(newHole, size)) {
-    return { ok: false, reason: 'Địa chỉ "' + newHole + '" không hợp lệ trên board ' + sizeLabel(size) + ' (lỗ vd c12, cọc nguồn PSU1.+/PSU1.-, hoặc cọc hiện sóng OSC1.CH1).' };
+    return { ok: false, reason: 'Địa chỉ "' + newHole + '" không hợp lệ trên board ' + sizeLabel(size) + ' (lỗ vd c12, cọc nguồn PSU1.+/PSU1.-, cọc hiện sóng OSC1.CH1, hoặc cọc Serial SER0.TX).' };
   }
   const other = end === 'a' ? w.b : w.a;
   if (other === newHole) return { ok: false, reason: 'Hai đầu dây trùng nhau.' };

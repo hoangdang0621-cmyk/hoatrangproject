@@ -775,6 +775,10 @@ export class PIC16F877A {
     this.txLog = [];        // mã ký tự đã phát qua TX
     this.onTx = null;       // callback(code) khi CPU phát 1 ký tự
     this.onLcd = null;
+    // Bàn phím ma trận đang nhấn: id bàn phím -> {row, col} (0..3) hoặc
+    // null (không nhấn phím nào). Đặt bằng setKeypadPressed (xem dưới);
+    // pinLevel dùng nó để tính mức cột khi CPU đọc (xem pinLevel).
+    this.keypadPressed = new Map();
     // EEPROM dữ liệu (256 byte): KHÔNG xoá khi reset (như phần cứng thật,
     // dữ liệu ghi rồi vẫn còn sau khi nạp lại code). Xoá tay bằng loadEeprom([]).
     this.eeprom = new Uint8Array(256);
@@ -864,12 +868,32 @@ export class PIC16F877A {
   }
   // Mức chân thật (kể cả input): dùng cho GPIO Inspector / Logic analyzer.
   // PWM của CCP chiếm chân (bất chấp TRISC): CCP1 -> RC2, CCP2 -> RC1.
+  // Bàn phím ma trận: cột là input có pull-up (mức 1) trừ khi phím đang
+  // nhấn nối cột đó với 1 hàng đang là output mức 0 thì cột đọc 0. Tính
+  // ngay lúc đọc (không qua portInput) để luôn đồng bộ với vòng quét hàng
+  // của CPU — quét hàng đổi liên tục theo từng lệnh nên không thể cập nhật
+  // trước bằng setPinInput như nút nhấn.
   pinLevel(portIdx, bit) {
     if (portIdx === 2 && bit === 2 && (this.sfr.CCP1CON & 0x0f) === 0x0c) return this.ccp1Pwm;
     if (portIdx === 2 && bit === 1 && (this.sfr.CCP2CON & 0x0f) === 0x0c) return this.ccp2Pwm;
-    return (this.tris[portIdx] >> bit) & 1
-      ? (this.portInput[portIdx] >> bit) & 1
-      : (this.portLatch[portIdx] >> bit) & 1;
+    if (((this.tris[portIdx] >> bit) & 1) === 1) {
+      const kps = this.wiring && this.wiring.keypads;
+      if (kps) {
+        for (const kp of kps) {
+          const c = kp.cols.findIndex((p) => p && p.port === portIdx && p.bit === bit);
+          if (c < 0) continue;
+          const pressed = this.keypadPressed.get(kp.id);
+          if (pressed && pressed.col === c) {
+            const rowPin = kp.rows[pressed.row];
+            if (rowPin && ((this.tris[rowPin.port] >> rowPin.bit) & 1) === 0
+              && ((this.portLatch[rowPin.port] >> rowPin.bit) & 1) === 0) return 0;
+          }
+          return 1; // cột có pull-up
+        }
+      }
+      return (this.portInput[portIdx] >> bit) & 1;
+    }
+    return (this.portLatch[portIdx] >> bit) & 1;
   }
   pinDirection(portIdx, bit) {
     if (portIdx === 2 && bit === 2 && (this.sfr.CCP1CON & 0x0f) === 0x0c) return 'out';
@@ -1037,6 +1061,17 @@ export class PIC16F877A {
     this.eeprom.fill(0);
     const arr = bytes || [];
     for (let i = 0; i < arr.length && i < 256; i++) this.eeprom[i] = arr[i] & 0xff;
+  }
+
+  // Bàn phím ma trận: phím đang nhấn (nhấn giữ) của 1 bàn phím, key =
+  // {row, col} (0..3) hoặc null (không nhấn phím nào). Chỉ ghi lại phím
+  // đang nhấn; mức cột tính ngay lúc CPU đọc (xem pinLevel) nên không
+  // cần cập nhật portInput ở đây.
+  setKeypadPressed(id, key) {
+    if (!key) { this.keypadPressed.delete(id); return; }
+    const r = Number(key.row), c = Number(key.col);
+    if (!Number.isInteger(r) || !Number.isInteger(c) || r < 0 || r > 3 || c < 0 || c > 3) return;
+    this.keypadPressed.set(id, { row: r, col: c });
   }
 
   setAnalog(channel, volts) { this.analogVolts[channel & 7] = Math.max(0, Math.min(5, volts)); }

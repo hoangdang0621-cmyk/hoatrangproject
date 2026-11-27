@@ -13,10 +13,10 @@
 // - Net không nối tới nguồn áp nào và không có đường về GND thì floating
 //   (điện áp null, không gán 0V bừa); nhánh trong mạch floating thì dòng 0.
 import {
-  DEFAULT_SIZE, legsFor, stripKey, parseHole, parsePsuPost, parseScopePost, psuVolts,
+  DEFAULT_SIZE, legsFor, stripKey, parseHole, parsePsuPost, parseScopePost, parseSerialPost, psuVolts,
   benchToNetlist, normalizeWireEnd, meterMode,
-} from './bench-model.js?v=20261125ba';
-import { resolvePeripherals, ledStates, sevenSegStates, SEVEN_SEG_TERMS, PIC_PINS } from './wiring.js?v=20261125ba';
+} from './bench-model.js?v=20261125be';
+import { resolvePeripherals, ledStates, sevenSegStates, SEVEN_SEG_TERMS, PIC_PINS } from './wiring.js?v=20261125be';
 
 export const LED_FORWARD_VOLTS = 2.0;  // sụt áp thuận LED khi sáng
 export const LED_SERIES_OHMS = 10;     // điện trở nối tiếp trong mô hình LED
@@ -45,7 +45,7 @@ function makeUnionFind() {
   return { find, union, ensure };
 }
 
-export function buildSolverNets(state, pressedIds = []) {
+export function buildSolverNets(state, pressedIds = [], pressedKeypad = null) {
   const size = state.size ?? DEFAULT_SIZE;
   const { find, union, ensure } = makeUnionFind();
   ensure('RAIL+');
@@ -72,13 +72,16 @@ export function buildSolverNets(state, pressedIds = []) {
   }
   // Đầu dây -> strip: lỗ -> strip của lỗ; cọc nguồn -> RAIL+/RAIL-;
   // cọc hiện sóng -> node riêng 'SCOPE:OSC1.CH1' (để union-find nối strip
-  // với cọc; scope chỉ quan sát, không phải nhánh mạch); đầu {x,y,z} cũ
-  // -> cọc nguồn/cọc hiện sóng nếu khớp vị trí cọc (normalizeWireEnd).
+  // với cọc; scope chỉ quan sát, không phải nhánh mạch); cọc màn hình
+  // Serial -> node riêng 'SERIAL:SER0.TX' (cũng chỉ quan sát, không nối
+  // mạch); đầu {x,y,z} cũ -> cọc nguồn/cọc hiện sóng/cọc Serial nếu khớp
+  // vị trí cọc (normalizeWireEnd).
   const endStripKey = (e) => {
     if (typeof e === 'string') {
       const pp = parsePsuPost(e);
       if (pp) return pp.sign === '+' ? 'RAIL+' : 'RAIL-';
       if (parseScopePost(e)) return 'SCOPE:' + e;
+      if (parseSerialPost(e)) return 'SERIAL:' + e;
       return stripKey(e, size);
     }
     const norm = normalizeWireEnd(state, e);
@@ -86,6 +89,7 @@ export function buildSolverNets(state, pressedIds = []) {
       const pp = parsePsuPost(norm);
       if (pp) return pp.sign === '+' ? 'RAIL+' : 'RAIL-';
       if (parseScopePost(norm)) return 'SCOPE:' + norm;
+      if (parseSerialPost(norm)) return 'SERIAL:' + norm;
     }
     return null;
   };
@@ -101,6 +105,20 @@ export function buildSolverNets(state, pressedIds = []) {
     keys.forEach((k) => ensure(k));
     for (let i = 1; i < keys.length; i++) union(keys[0], keys[i]);
   }
+  // Phím bàn phím đang nhấn giữ = công tắc đóng: nối strip của hàng đó
+  // với strip của cột đó (như nút bấm). Chỉ nối đúng 1 cặp hàng/cột của
+  // phím đang nhấn; các hàng/cột khác vẫn tách nhau.
+  if (pressedKeypad && pressedKeypad.id) {
+    const kp = state.components.find((c) => c.id === pressedKeypad.id && c.type === 'keypad');
+    if (kp) {
+      const legs = legsFor(kp, size);
+      const rowLeg = legs.find((l) => l.term === 'R' + pressedKeypad.row);
+      const colLeg = legs.find((l) => l.term === 'C' + pressedKeypad.col);
+      const kRow = rowLeg && rowLeg.hole ? stripKey(rowLeg.hole, size) : null;
+      const kCol = colLeg && colLeg.hole ? stripKey(colLeg.hole, size) : null;
+      if (kRow && kCol) { ensure(kRow); ensure(kCol); union(kRow, kCol); }
+    }
+  }
   const nodeOfStrip = (key) => (key ? find(key) : null);
   return {
     nodeOfStrip,
@@ -110,6 +128,11 @@ export function buildSolverNets(state, pressedIds = []) {
     // để find đúng root sau union (cọc nối strip nào thì cùng root đó);
     // cọc chưa nối dây thì không có node (undefined -> coi như null).
     nodeOfScopeTerm: (compId, term) => nodeOfStrip('SCOPE:' + compId + '.' + term),
+    // Node của 1 cọc màn hình Serial ('SERIAL:SER0.TX'): như scope
+    // (chỉ quan sát, không nối mạch). Serial không đọc điện áp qua solver
+    // (dữ liệu đi qua CPU onTx/receiveChar) nhưng giữ hàm này để
+    // Inspector "Cọc" tra được node của cọc khi cần.
+    nodeOfSerialTerm: (compId, term) => nodeOfStrip('SERIAL:' + compId + '.' + term),
     railPlus: find('RAIL+'),
     railMinus: find('RAIL-'),
   };
@@ -161,13 +184,13 @@ export function solveLinear(A, b) {
 // biến dòng của nguồn áp tương ứng trong MNA (chiều từ chân +/P sang
 // chân −/N).
 // ---------------------------------------------------------------------------
-export function solveCircuit(state, cpu, pressedIds = []) {
+export function solveCircuit(state, cpu, pressedIds = [], pressedKeypad = null) {
   const size = state.size ?? DEFAULT_SIZE;
-  const nets = buildSolverNets(state, pressedIds);
+  const nets = buildSolverNets(state, pressedIds, pressedKeypad);
   const ref = nets.railMinus;
   // LED nào đang sáng (theo ledStates có sẵn): chỉ LED sáng mới là nhánh
   // (2V + 10Ω); LED tắt là hở mạch.
-  const mapping = resolvePeripherals(benchToNetlist(state, pressedIds));
+  const mapping = resolvePeripherals(benchToNetlist(state, pressedIds, pressedKeypad));
   const ledOn = new Map(ledStates(cpu, mapping).map((s) => [s.id, s.on]));
   // Đoạn nào của LED 7 thanh đang sáng (theo sevenSegStates): mỗi đoạn
   // sáng là 1 nhánh LED (2V + 10Ω) giữa node của đoạn và node chân chung.
@@ -256,6 +279,16 @@ export function solveCircuit(state, cpu, pressedIds = []) {
         conductances.push({ nodeA: nodeP, nodeB: aux, g: 1 / LED_SERIES_OHMS, key: comp.id + '.' + t, kind: 'led' });
         addVSource(aux, nodeN, LED_FORWARD_VOLTS, comp.id + '.' + t, 'led');
       }
+    } else if (comp.type === 'motor') {
+      // Động cơ DC: tải trở (điện trở cuộn dây, mặc định 100Ω) giữa 2
+      // chân +/−. Dòng qua động cơ = (V+ − V−)/R; tốc độ quay tỷ lệ với
+      // điện áp (xem motorReadings). Không phải nguồn áp, chỉ là 1 nhánh
+      // dẫn như điện trở (không nối 2 strip như dây).
+      const nP = nets.nodeOfTerm(comp.id, '+');
+      const nN = nets.nodeOfTerm(comp.id, '-');
+      const R = Number(comp.props?.value);
+      if (!nP || !nN || nP === nN || !(R > 0) || !Number.isFinite(R)) continue;
+      conductances.push({ nodeA: nP, nodeB: nN, g: 1 / R, key: comp.id, kind: 'motor' });
     } else if (comp.type === 'multimeter' && meterMode(comp) === 'A') {
       // Chế độ A: nguồn áp 0V giữa 2 chân P/N (dòng đo P -> N). Chế độ V
       // không có nhánh (trở kháng vô cùng). kind 'ammeter' giữ nguyên để
@@ -334,11 +367,11 @@ export function solveCircuit(state, cpu, pressedIds = []) {
   for (const id of shorted) branchCurrent.set(id, Infinity);
   if (x === null) return { ok: false, nodeVoltage, branchCurrent, nets };
   for (const [node, i] of nodeIndex) nodeVoltage.set(node, x[i]);
-  // Dòng qua điện trở = (V_A − V_B) × g (0 nếu 1 đầu floating).
-  // Dòng qua LED lấy từ biến dòng của nguồn áp 2V ở dưới (không tính
-  // bằng điện trở 10Ω vì nút phụ không phải node strip).
+  // Dòng qua điện trở / động cơ DC = (V_A − V_B) × g (0 nếu 1 đầu
+  // floating). Dòng qua LED lấy từ biến dòng của nguồn áp 2V ở dưới
+  // (không tính bằng điện trở 10Ω vì nút phụ không phải node strip).
   for (const c of conductances) {
-    if (c.kind !== 'resistor') continue;
+    if (c.kind !== 'resistor' && c.kind !== 'motor') continue;
     const vA = nodeVoltage.get(c.nodeA);
     const vB = nodeVoltage.get(c.nodeB);
     if (vA === null || vA === undefined || vB === null || vB === undefined) {
@@ -395,8 +428,8 @@ export function formatCurrentDirection(amps) {
 //   Infinity nếu chập nguồn (dòng không xác định, vd đấu tắt qua PSU).
 // pressedIds: id các nút đang nhấn giữ (nút nhấn = công tắc đóng).
 // ---------------------------------------------------------------------------
-export function meterReadings(state, cpu, pressedIds = []) {
-  const { nodeVoltage, branchCurrent, nets } = solveCircuit(state, cpu, pressedIds);
+export function meterReadings(state, cpu, pressedIds = [], pressedKeypad = null) {
+  const { nodeVoltage, branchCurrent, nets } = solveCircuit(state, cpu, pressedIds, pressedKeypad);
   const voltmeters = [];
   const ammeters = [];
   for (const comp of state.components) {
@@ -445,8 +478,8 @@ export function pushScopeSample(buf, sample) {
   if (buf.length > SCOPE_MAX_SAMPLES) buf.splice(0, buf.length - SCOPE_MAX_SAMPLES);
   return buf;
 }
-export function scopeVoltages(state, cpu, pressedIds = []) {
-  const { nodeVoltage, nets } = solveCircuit(state, cpu, pressedIds);
+export function scopeVoltages(state, cpu, pressedIds = [], pressedKeypad = null) {
+  const { nodeVoltage, nets } = solveCircuit(state, cpu, pressedIds, pressedKeypad);
   const out = [];
   for (const comp of state.components) {
     if (comp.type !== 'oscilloscope') continue;
@@ -470,14 +503,55 @@ export function scopeVoltages(state, cpu, pressedIds = []) {
 }
 
 // ---------------------------------------------------------------------------
+// Điện áp, dòng và tốc độ quay của mọi động cơ DC trên bàn. Trả [{id,
+// volts, amps, rpm}] (mỗi giá trị là số hoặc null nếu 1 đầu floating).
+// - volts: V(chân +) − V(chân −); null nếu 1 trong 2 chân floating
+//   (không nối tới nguồn áp nào, không có đường về GND). 2 chân cùng 1
+//   net -> 0V (kể cả net đó floating, vì 2 đầu là cùng 1 điểm).
+// - amps: dòng qua động cơ = volts/R (R = điện trở cuộn dây, mặc định
+//   100Ω); 0 nếu floating.
+// - rpm: tốc độ quay, tỷ lệ với điện áp: 5V = tốc độ tối đa
+//   MOTOR_MAX_RPM (6000 vòng/phút, động cơ DC đồ chơi 5V), 0V = 0,
+//   điện áp âm = quay ngược (rpm âm). PWM: tốc độ theo điện áp trung
+//   bình theo chu kỳ (duty cycle) — vì solver đọc điện áp tức thời nên
+//   bench.js làm mượt rpm bằng trung bình trượt (EMA) trong live poll;
+//   test Node thì lấy trung bình nhiều mẫu.
+// pressedIds: id các nút đang nhấn giữ; pressedKeypad: phím đang nhấn.
+// ---------------------------------------------------------------------------
+export const MOTOR_MAX_RPM = 6000; // tốc độ tối đa ở 5V (động cơ DC đồ chơi)
+export function motorReadings(state, cpu, pressedIds = [], pressedKeypad = null) {
+  const { nodeVoltage, branchCurrent, nets } = solveCircuit(state, cpu, pressedIds, pressedKeypad);
+  const out = [];
+  for (const comp of state.components) {
+    if (comp.type !== 'motor') continue;
+    const nP = nets.nodeOfTerm(comp.id, '+');
+    const nN = nets.nodeOfTerm(comp.id, '-');
+    let volts, amps;
+    if (!nP || !nN) {
+      volts = null; amps = null; // chân rơi ngoài board
+    } else if (nP === nN) {
+      volts = 0; amps = 0; // 2 chân cùng 1 net
+    } else {
+      const p = nodeVoltage.get(nP);
+      const n = nodeVoltage.get(nN);
+      volts = (p === null || p === undefined || n === null || n === undefined) ? null : p - n;
+      amps = volts === null ? null : (branchCurrent.get(comp.id) ?? 0);
+    }
+    const rpm = volts === null ? null : (volts / 5) * MOTOR_MAX_RPM;
+    out.push({ id: comp.id, volts, amps, rpm });
+  }
+  return out;
+}
+
+// ---------------------------------------------------------------------------
 // Trạng thái đoạn của mọi LED 7 thanh trên bàn: [{id, common, on: {a, b,
 // c, d, e, f, g, dp}}] (xem sevenSegStates trong wiring.js). Dùng cho
 // màn hình 3D (đoạn nào sáng thì phát sáng) và Inspector (hiện "Đang
 // sáng: a, b, c" / số đang hiện). Không cần solver MNA: trạng thái đoạn
 // tính từ mức logic của net (chân PIC output / VCC / GND), như ledStates.
 // ---------------------------------------------------------------------------
-export function sevenSegReadings(state, cpu, pressedIds = []) {
-  const mapping = resolvePeripherals(benchToNetlist(state, pressedIds));
+export function sevenSegReadings(state, cpu, pressedIds = [], pressedKeypad = null) {
+  const mapping = resolvePeripherals(benchToNetlist(state, pressedIds, pressedKeypad));
   return sevenSegStates(cpu, mapping);
 }
 

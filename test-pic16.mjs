@@ -2,10 +2,10 @@
 // Chạy: node test-pic16.mjs   (exit 0 = tất cả pass)
 import { readFileSync } from 'node:fs';
 import { assemble, createCPU, parseIntelHex, exportHex, disassemble, ProgramRunner, cyclesForElapsedMs, LCD } from './public/pic16.js';
-import { defaultNetlist, resolvePeripherals, checkWiring, ledStates, buzzerStates, sevenSegStates, SEVEN_SEG_TERMS, applyButtonToCpu, applyPotToCpu, PIC_PINS } from './public/wiring.js';
-import { PITCH, SEGMENT_GAP_MM, rowZ, HOLE_RADIUS, HOLE_HEIGHT, HOLE_TOP_ABOVE_BOARD, holeCenterY, depthPrecisionAt, MAX_CAMERA_DISTANCE, SEGMENT_LINE_WIDTH_MM, segmentBoundaries, allHoles, stripKey, parseHole, holePos, holeId, rowLabel, rowIndexFromLabel, migrateOldHoleId, picLegs, picLegsForAnchor, picAnchor, legsFor, canPlace, buildBenchNets, benchToNetlist, defaultBenchState, sanitizeState, boardSize, picCol, picRows, picBodyDepth, picBodyDepthForRows, bodyDepth, pruneStateForSize, validateWireEnd, retargetWireEnd, togglePlacement, normalizeSize, holeCount, sizeLabel, sameSize, compLabel, nextComponentId, defaultProps, psuVolts, validatePsuVolts, parsePsuPost, psuPostPos, PSU_SCALE, PSU_POST_DX, PSU_POST_Y, PSU_POST_DZ, parseScopePost, scopePostPos, SCOPE_POST_DX, SCOPE_POST_Y, SCOPE_POST_DZ, SCOPE_DEFAULT_TX, SCOPE_DEFAULT_TZ, normalizeWireEnd, clampCamTarget, zoomTowardPoint, panTarget, meterMode, crystalFreq, CRYSTAL_FREQS, cleanNewProps } from './public/bench-model.js';
+import { defaultNetlist, resolvePeripherals, checkWiring, ledStates, buzzerStates, sevenSegStates, SEVEN_SEG_TERMS, applyButtonToCpu, applyPotToCpu, applyKeypadToCpu, KEYPAD_KEYS, PIC_PINS } from './public/wiring.js';
+import { PITCH, SEGMENT_GAP_MM, rowZ, HOLE_RADIUS, HOLE_HEIGHT, HOLE_TOP_ABOVE_BOARD, holeCenterY, depthPrecisionAt, MAX_CAMERA_DISTANCE, SEGMENT_LINE_WIDTH_MM, segmentBoundaries, allHoles, stripKey, parseHole, holePos, holeId, rowLabel, rowIndexFromLabel, migrateOldHoleId, picLegs, picLegsForAnchor, picAnchor, legsFor, canPlace, buildBenchNets, benchToNetlist, defaultBenchState, sanitizeState, boardSize, picCol, picRows, picBodyDepth, picBodyDepthForRows, bodyDepth, pruneStateForSize, validateWireEnd, retargetWireEnd, togglePlacement, normalizeSize, holeCount, sizeLabel, sameSize, compLabel, nextComponentId, defaultProps, psuVolts, validatePsuVolts, parsePsuPost, psuPostPos, PSU_SCALE, PSU_POST_DX, PSU_POST_Y, PSU_POST_DZ, parseScopePost, scopePostPos, SCOPE_POST_DX, SCOPE_POST_Y, SCOPE_POST_DZ, SCOPE_DEFAULT_TX, SCOPE_DEFAULT_TZ, parseSerialPost, serialPostPos, SERIAL_POST_DX, SERIAL_POST_Y, SERIAL_POST_DZ, SERIAL_DEFAULT_TX, SERIAL_DEFAULT_TZ, normalizeWireEnd, clampCamTarget, zoomTowardPoint, panTarget, meterMode, crystalFreq, CRYSTAL_FREQS, cleanNewProps } from './public/bench-model.js';
 import { LABS, getLab, buildLabState } from './public/labs.js';
-import { buildSolverNets, solveLinear, solveCircuit, meterReadings, scopeVoltages, pushScopeSample, SCOPE_MAX_SAMPLES, formatVolts, formatAmps, formatCurrentDirection, LED_FORWARD_VOLTS, LED_SERIES_OHMS, PIC_OUTPUT_VOLTS, sevenSegReadings, sevenSegDigit } from './public/circuit-solver.js';
+import { buildSolverNets, solveLinear, solveCircuit, meterReadings, motorReadings, MOTOR_MAX_RPM, scopeVoltages, pushScopeSample, SCOPE_MAX_SAMPLES, formatVolts, formatAmps, formatCurrentDirection, LED_FORWARD_VOLTS, LED_SERIES_OHMS, PIC_OUTPUT_VOLTS, sevenSegReadings, sevenSegDigit } from './public/circuit-solver.js';
 import { compileC, C_VERSION } from './public/c-compiler.js';
 
 // Fixture C thật của Điệp (khôi phục từ chat, lưu bền trong repo thay vì
@@ -5154,6 +5154,283 @@ function cpuWithPortB(state, portB) {
     && LABS[1].desc.includes('Thạch anh') && LABS[1].desc.includes('tụ gốm 22pF')
     && !LABS[0].desc.includes('100 cột') && !LABS[1].desc.includes('100 cột'),
     LABS[0].desc);
+}
+
+// Nhóm (be): 3 linh kiện mới — bàn phím 4x4 (keypad), động cơ DC (motor),
+// màn hình Serial (serial). Version be (2026-11-27).
+// - Keypad: 2 hàng chân (R0–R3 ở dr 0, C0–C3 ở dr 5, cách nhau 5 hàng để
+//   không nối tắt qua strip). Phím nhấn nối hàng với cột (công tắc đóng)
+//   trong netlist/solver; CPU phát hiện qua pinLevel (keypadPressed) —
+//   quét hàng: lái hàng xuống 0, cột đọc 0 khi phím nhấn, 1 khi không
+//   (pull-up). Mapping chân lấy từ netlist KHÔNG nhấn phím (phím nhấn nối
+//   hàng+cột thành 1 net chứa 2 chân PIC, picPinInNet sẽ lấy nhầm).
+// - Motor: tải trở (điện trở cuộn dây mặc định 100Ω) giữa 2 chân +/−;
+//   RPM = volts/5 × 6000. PWM: tốc độ theo điện áp trung bình (duty).
+// - Serial: linh kiện ngoài bàn (như scope), 3 cọc TX/RX/GND; dữ liệu
+//   chạy qua CPU onTx/receiveChar, dây/cọc chỉ để mạch đầy đủ.
+{
+  const approx = (v, target, tol) => typeof v === 'number' && Number.isFinite(v) && Math.abs(v - target) <= tol;
+  // Bàn phím KP0 neo a10, nối hàng R0–R3 -> RB0–RB3 (h29/h28/h27/h26),
+  // cột C0–C3 -> RD0–RD3 (b40/b41/h41/h40).
+  const keypadState = () => {
+    const st = defaultBenchState(830);
+    st.components.push({ id: 'KP0', type: 'keypad', anchor: 'a10', rot: 0, props: {} });
+    st.wires.push({ id: 'T-R0', a: 'a10', b: 'h29', color: '#DC2626' });
+    st.wires.push({ id: 'T-R1', a: 'a11', b: 'h28', color: '#DC2626' });
+    st.wires.push({ id: 'T-R2', a: 'a12', b: 'h27', color: '#DC2626' });
+    st.wires.push({ id: 'T-R3', a: 'a13', b: 'h26', color: '#DC2626' });
+    st.wires.push({ id: 'T-C0', a: 'f10', b: 'b40', color: '#2563EB' });
+    st.wires.push({ id: 'T-C1', a: 'f11', b: 'b41', color: '#2563EB' });
+    st.wires.push({ id: 'T-C2', a: 'f12', b: 'h41', color: '#2563EB' });
+    st.wires.push({ id: 'T-C3', a: 'f13', b: 'h40', color: '#2563EB' });
+    return st;
+  };
+  // (be-a) Keypad: chân, đặt được, id/nhãn, bảng phím.
+  check('(be-a) keypad chân R0–R3 a10–a13, C0–C3 f10–f13; đặt được, id KP0, nhãn "Bàn phím 4x4 0", KEYPAD_KEYS đúng',
+    JSON.stringify(legsFor({ type: 'keypad', anchor: 'a10', rot: 0 }, 830)) === JSON.stringify([
+      { term: 'R0', hole: 'a10' }, { term: 'R1', hole: 'a11' }, { term: 'R2', hole: 'a12' }, { term: 'R3', hole: 'a13' },
+      { term: 'C0', hole: 'f10' }, { term: 'C1', hole: 'f11' }, { term: 'C2', hole: 'f12' }, { term: 'C3', hole: 'f13' },
+    ])
+    && canPlace(defaultBenchState(830), 'keypad', 'a10').ok
+    && nextComponentId(defaultBenchState(830), 'keypad') === 'KP0'
+    && compLabel({ id: 'KP0', type: 'keypad' }) === 'Bàn phím 4x4 0'
+    && KEYPAD_KEYS[0].join('') === '123A' && KEYPAD_KEYS[1].join('') === '456B'
+    && KEYPAD_KEYS[2].join('') === '789C' && KEYPAD_KEYS[3].join('') === '*0#D', '');
+  // (be-b) Keypad: phím nhấn nối hàng với cột trong netlist, không nhấn thì tách.
+  check('(be-b) keypad netlist: nhấn phím 5 (hàng 1, cột 1) -> R1 và C1 cùng net, R0/C0 vẫn tách; không nhấn -> R1/C1 tách',
+    (() => {
+      const st = keypadState();
+      const pressed = { id: 'KP0', row: 1, col: 1 };
+      const n = buildBenchNets(st, [], pressed);
+      const nFree = buildBenchNets(st, []);
+      return n.termRoot.get('KP0.R1') === n.termRoot.get('KP0.C1')
+        && n.termRoot.get('KP0.R0') !== n.termRoot.get('KP0.C0')
+        && nFree.termRoot.get('KP0.R1') !== nFree.termRoot.get('KP0.C1');
+    })(), '');
+  // (be-c) Keypad: resolvePeripherals từ netlist KHÔNG nhấn phím -> hàng
+  // RB0–RB3, cột RD0–RD3. (Netlist CÓ nhấn phím thì R1/C1 cùng net chứa
+  // cả RB1 lẫn RD1 nên picPinInNet lấy nhầm — xem syncToCpu bench.js.)
+  check('(be-c) keypad resolvePeripherals (netlist không nhấn): 1 keypad, hàng RB0–RB3, cột RD0–RD3',
+    (() => {
+      const m = resolvePeripherals(benchToNetlist(keypadState(), []));
+      return m.keypads.length === 1
+        && m.keypads[0].rows.map((p) => p && p.id).join(',') === 'RB0,RB1,RB2,RB3'
+        && m.keypads[0].cols.map((p) => p && p.id).join(',') === 'RD0,RD1,RD2,RD3';
+    })(), '');
+  // (be-d) Keypad: CPU quét phát hiện phím đang nhấn (end-to-end).
+  // TRISB RB0–RB3 output, TRISD RD0–RD3 input; lái RB1 xuống 0, nhấn phím
+  // '5' (hàng 1, cột 1) -> RD1 đọc 0, các cột khác 1; lái hàng khác thì
+  // RD1 đọc 1; nhả phím thì RD1 đọc 1; phím 'A' (hàng 0, cột 3) tương tự.
+  check('(be-d) keypad quét: nhấn 5 + lái RB1 xuống 0 -> RD1=0, cột khác=1; lái RB0 -> RD1=1; nhả -> RD1=1; phím A + RB0 -> RD3=0',
+    (() => {
+      const mapping = resolvePeripherals(benchToNetlist(keypadState(), []));
+      const cpu = createCPU();
+      cpu.setWiring(mapping);
+      cpu.writeFile(0x03, 0x20); cpu.writeFile(0x06, 0xF0); cpu.writeFile(0x08, 0xFF);
+      cpu.writeFile(0x03, 0x00);
+      cpu.writeFile(0x06, 0xFD); // RB1=0, các hàng khác=1
+      if (!(cpu.pinLevel(3, 0) === 1 && cpu.pinLevel(3, 1) === 1 && cpu.pinLevel(3, 2) === 1 && cpu.pinLevel(3, 3) === 1)) return false;
+      applyKeypadToCpu(cpu, mapping, 'KP0', { row: 1, col: 1 });
+      if (!(cpu.pinLevel(3, 1) === 0 && cpu.pinLevel(3, 0) === 1 && cpu.pinLevel(3, 2) === 1 && cpu.pinLevel(3, 3) === 1)) return false;
+      cpu.writeFile(0x06, 0xFE); // RB0=0, RB1=1
+      if (cpu.pinLevel(3, 1) !== 1) return false;
+      cpu.writeFile(0x06, 0xFD); // RB1=0 lại
+      if (cpu.pinLevel(3, 1) !== 0) return false;
+      applyKeypadToCpu(cpu, mapping, 'KP0', null);
+      if (cpu.pinLevel(3, 1) !== 1) return false;
+      applyKeypadToCpu(cpu, mapping, 'KP0', { row: 0, col: 3 });
+      cpu.writeFile(0x06, 0xFE); // RB0=0
+      return cpu.pinLevel(3, 3) === 0 && cpu.pinLevel(3, 1) === 1;
+    })(), '');
+  // (be-e) Motor: chân, đặt được, id/nhãn, điện trở mặc định 100Ω.
+  check('(be-e) motor chân + a10, - a11; đặt được, id M0, nhãn "Động cơ DC 0", R mặc định 100Ω, MOTOR_MAX_RPM=6000',
+    JSON.stringify(legsFor({ type: 'motor', anchor: 'a10', rot: 0 }, 830)) === JSON.stringify([{ term: '+', hole: 'a10' }, { term: '-', hole: 'a11' }])
+    && canPlace(defaultBenchState(830), 'motor', 'a10').ok
+    && nextComponentId(defaultBenchState(830), 'motor') === 'M0'
+    && compLabel({ id: 'M0', type: 'motor' }) === 'Động cơ DC 0'
+    && defaultProps('motor').value === 100 && MOTOR_MAX_RPM === 6000, '');
+  // (be-f) Motor qua PSU 5V: V=5, I=50mA (R=100Ω), RPM=6000; R=50Ω thì
+  // I=100mA, RPM vẫn 6000; chưa nối dây thì null.
+  check('(be-f) motor qua PSU 5V: V=5, I=50mA, RPM=6000; R=50Ω -> I=100mA, RPM vẫn 6000; chưa nối -> null',
+    (() => {
+      const st = defaultBenchState(830);
+      st.components.push({ id: 'M0', type: 'motor', anchor: 'a10', rot: 0, props: { value: 100 } });
+      st.wires.push({ id: 'T-M1', a: 'a10', b: 'T+10', color: '#DC2626' });
+      st.wires.push({ id: 'T-M2', a: 'a11', b: 'T-10', color: '#0F172A' });
+      const cpu = createCPU();
+      const r = motorReadings(st, cpu);
+      if (!(r.length === 1 && approx(r[0].volts, 5, 0.01) && approx(r[0].amps, 0.05, 0.001) && approx(r[0].rpm, 6000, 1))) return false;
+      st.components.find((c) => c.id === 'M0').props.value = 50;
+      const r2 = motorReadings(st, cpu);
+      if (!(approx(r2[0].amps, 0.1, 0.001) && approx(r2[0].rpm, 6000, 1))) return false;
+      const st2 = defaultBenchState(830);
+      st2.components.push({ id: 'M0', type: 'motor', anchor: 'a10', rot: 0, props: { value: 100 } });
+      const r3 = motorReadings(st2, cpu);
+      return r3.length === 1 && r3[0].volts === null && r3[0].amps === null && r3[0].rpm === null;
+    })(), '');
+  // (be-g) Motor nối chân PIC RB0: RB0=1 -> 6000 RPM, RB0=0 -> 0 RPM.
+  check('(be-g) motor RB0=1: V=5, I=50mA, RPM=6000; RB0=0: V=0, I=0, RPM=0',
+    (() => {
+      const st = defaultBenchState(830);
+      st.components.push({ id: 'M0', type: 'motor', anchor: 'a10', rot: 0, props: { value: 100 } });
+      st.wires.push({ id: 'T-M1', a: 'a10', b: 'h29', color: '#DC2626' });
+      st.wires.push({ id: 'T-M2', a: 'a11', b: 'B-11', color: '#0F172A' });
+      const cpu = createCPU();
+      const setRB0 = (high) => {
+        cpu.writeFile(0x03, 0x20); cpu.writeFile(0x06, 0x00);
+        cpu.writeFile(0x03, 0x00); cpu.writeFile(0x06, high ? 0x01 : 0x00);
+      };
+      setRB0(true);
+      const rHi = motorReadings(st, cpu);
+      if (!(approx(rHi[0].volts, 5, 0.01) && approx(rHi[0].amps, 0.05, 0.001) && approx(rHi[0].rpm, 6000, 1))) return false;
+      setRB0(false);
+      const rLo = motorReadings(st, cpu);
+      return approx(rLo[0].volts, 0, 0.01) && approx(rLo[0].amps, 0, 0.001) && approx(rLo[0].rpm, 0, 1);
+    })(), '');
+  // (be-h) Motor PWM 50% (CCP1 -> RC2, PR2=255, CCPR1L=127): tốc độ trung
+  // bình ~3000 (2000–4000), có lúc 0 và lúc 6000. Chu kỳ PWM 256 dài hơn
+  // bước lấy mẫu 20 nên không aliasing (PR2=3, chu kỳ 4, lấy mẫu mỗi 20
+  // thì luôn trúng cùng 1 pha — đã dính 1 lần).
+  check('(be-h) motor PWM 50% (CCP1, PR2=255, CCPR1L=127): RPM trung bình 2000–4000, min=0, max=6000',
+    (() => {
+      const st = defaultBenchState(830);
+      st.components.push({ id: 'M0', type: 'motor', anchor: 'a10', rot: 0, props: { value: 100 } });
+      st.wires.push({ id: 'T-M1', a: 'a10', b: 'b38', color: '#DC2626' }); // RC2 (CCP1, pin 17)
+      st.wires.push({ id: 'T-M2', a: 'a11', b: 'B-11', color: '#0F172A' });
+      const cpu = createCPU();
+      cpu.loadProgram(assemble(`
+        BANKSEL PR2
+        MOVLW 255
+        MOVWF PR2
+        BANKSEL CCPR1L
+        MOVLW 127
+        MOVWF CCPR1L
+        MOVLW b'00001100'
+        MOVWF CCP1CON
+        BANKSEL T2CON
+        MOVLW b'00000100'
+        MOVWF T2CON
+      `).program);
+      cpu.run(100);
+      let sum = 0, n = 0, min = 1e9, max = -1e9;
+      for (let i = 0; i < 200; i++) {
+        for (let k = 0; k < 20; k++) cpu.step();
+        const r = motorReadings(st, cpu);
+        if (r.length && r[0].rpm !== null) {
+          sum += r[0].rpm; n++;
+          min = Math.min(min, r[0].rpm); max = Math.max(max, r[0].rpm);
+        }
+      }
+      const avg = n ? sum / n : 0;
+      return n > 10 && avg > 2000 && avg < 4000 && min === 0 && max === 6000;
+    })(), '');
+  // (be-i) Serial: cọc TX/RX/GND đúng tọa độ mặt trước, ngoài bàn
+  // (legsFor=[]), đặt được, id SER0, nhãn "Màn hình Serial 0", vị trí
+  // mặc định (-130,-150) đối xứng scope (+130,-150).
+  check('(be-i) serial cọc TX/RX/GND đúng tọa độ; legsFor=[]; id SER0; nhãn "Màn hình Serial 0"; mặc định (-130,-150)',
+    (() => {
+      const st = defaultBenchState(830);
+      st.components.push({ id: 'SER0', type: 'serial', tx: -130, tz: -150, fixed: false, props: {} });
+      const tx = serialPostPos(st, 'SER0.TX');
+      const rx = serialPostPos(st, 'SER0.RX');
+      const gnd = serialPostPos(st, 'SER0.GND');
+      const pTx = parseSerialPost('SER0.TX');
+      return tx && tx.x === -158 && tx.y === 10 && tx.z === -124
+        && rx && rx.x === -130 && rx.y === 10 && rx.z === -124
+        && gnd && gnd.x === -102 && gnd.y === 10 && gnd.z === -124
+        && pTx && pTx.serialId === 'SER0' && pTx.term === 'TX'
+        && parseSerialPost('SER0.RX').term === 'RX' && parseSerialPost('SER0.GND').term === 'GND'
+        && parseSerialPost('OSC0.CH1') === null && parseSerialPost('SER0.CH1') === null
+        && serialPostPos(st, 'SER9.TX') === null
+        && legsFor({ type: 'serial', tx: -130, tz: -150 }, 830).length === 0
+        && canPlace(defaultBenchState(830), 'serial').ok
+        && nextComponentId(defaultBenchState(830), 'serial') === 'SER0'
+        && compLabel({ id: 'SER0', type: 'serial' }) === 'Màn hình Serial 0'
+        && SERIAL_DEFAULT_TX === -130 && SERIAL_DEFAULT_TZ === -150
+        && SERIAL_POST_DX === 28 && SERIAL_POST_Y === 10 && SERIAL_POST_DZ === 26;
+    })(), '');
+  // (be-j) Serial: dây tới cọc Serial không nối strip (không ảnh hưởng
+  // mạch, như scope); Serial không vào netlist CPU; validate/retarget
+  // đầu dây sang cọc Serial (SER0.TX ok, SER9.TX từ chối).
+  check('(be-j) serial: dây tới cọc không nối strip; serial không vào netlist CPU; validate/retarget SER0.TX ok, SER9.TX từ chối',
+    (() => {
+      const st = defaultBenchState(830);
+      st.components.push({ id: 'SER0', type: 'serial', tx: -130, tz: -150, fixed: false, props: {} });
+      st.components.push({ id: 'LED0', type: 'led', anchor: 'c10', rot: 0, props: { color: '#DC2626' } });
+      st.components.push({ id: 'LED1', type: 'led', anchor: 'c14', rot: 0, props: { color: '#DC2626' } });
+      st.wires.push({ id: 'T-S1', a: 'a10', b: 'SER0.TX', color: '#4ADE80' });
+      const n = buildBenchNets(st);
+      if (n.termRoot.get('LED0.A') === n.termRoot.get('LED1.A')) return false;
+      if (benchToNetlist(st, []).components.some((c) => c.id === 'SER0')) return false;
+      st.wires.push({ id: 'T-V1', a: 'f29', b: 'B-50', color: '#DC2626' });
+      const v1 = validateWireEnd(st, 'T-V1', 'b', 'SER0.TX');
+      const v2 = validateWireEnd(st, 'T-V1', 'b', 'SER9.TX');
+      if (!v1.ok || v2.ok) return false;
+      const r = retargetWireEnd(st, 'T-V1', 'b', 'SER0.TX');
+      return r.ok && st.wires.find((w) => w.id === 'T-V1').b === 'SER0.TX';
+    })(), '');
+  // (be-k) Serial: chương trình C UART thật gửi "Hi" qua TXREG (onTx nối
+  // vào buffer như app.js); gửi 'A' về qua receiveChar -> RCREG=65,
+  // RCIF=1 (đọc qua readSFR); đọc RCREG -> RCIF xóa. Dùng TRISC=0x80
+  // (RC7 input) vì trình biên dịch chưa hiểu tên bit trần TRISC6/TRISC7.
+  check('(be-k) serial end-to-end: code C UART gửi "Hi" (onTx + txLog); receiveChar A -> RCREG=65, RCIF=1; đọc RCREG -> RCIF xóa',
+    (() => {
+      const uartC = `#include <xc.h>
+#define _XTAL_FREQ 4000000
+
+void main() {
+  TRISC = 0x80;
+  SPBRG = 25;
+  TXSTA = 0x24;
+  RCSTA = 0x90;
+  while (!PIR1bits.TXIF);
+  TXREG = 'H';
+  while (!PIR1bits.TXIF);
+  TXREG = 'i';
+  while (1);
+}
+`;
+      const compiled = compileC(uartC);
+      if (!compiled.ok) return false;
+      const cpu = createCPU();
+      cpu.clockHz = 4000000;
+      let buf = '';
+      cpu.onTx = (code) => { buf += String.fromCharCode(code); };
+      const runner = new ProgramRunner(cpu);
+      const loaded = runner.loadAsm(compiled.asm);
+      if (!loaded.ok) return false;
+      runner.run();
+      for (let i = 0; i < 200000 && buf.length < 2; i++) cpu.step();
+      if (buf !== 'Hi') return false;
+      if (!(cpu.txLog.length === 2 && cpu.txLog[0] === 72 && cpu.txLog[1] === 105)) return false;
+      cpu.receiveChar(65); // 'A'
+      if (!(cpu.sfr.RCREG === 65 && ((cpu.readSFR('PIR1') >> 5) & 1) === 1)) return false;
+      const readBack = cpu.readFile(0x1A); // RCREG
+      return readBack === 65 && ((cpu.readSFR('PIR1') >> 5) & 1) === 0;
+    })(), '');
+  // (be-l) bench.js có đủ 3 linh kiện mới trong palette + hàm vẽ màn hình
+  // Serial + bridge keypad/motor/serial (kiểm tra bằng chuỗi, như (ag-g2)).
+  check('(be-l) bench.js: palette có keypad/motor/serial; drawSerialScreen + serialTexs + pickSerialPost + pressBenchKeypad + getMotorState/getSerialText/sendSerial/getKeypadState',
+    (() => {
+      const src = readFileSync(new URL('./public/bench.js', import.meta.url), 'utf8');
+      return src.includes("type: 'keypad'") && src.includes("type: 'motor'") && src.includes("type: 'serial'")
+        && src.includes('Bàn phím 4x4') && src.includes('Động cơ DC') && src.includes('Màn hình Serial')
+        && src.includes('function drawSerialScreen(') && src.includes('serialTexs')
+        && src.includes('pickSerialPost') && src.includes('serialPostPos(state, e)')
+        && src.includes('pressBenchKeypad') && src.includes('keypadKeyMeshes')
+        && src.includes('motorFans') && src.includes('getMotorState')
+        && src.includes('getSerialText') && src.includes('sendSerial') && src.includes('getKeypadState')
+        && src.includes("type: 'keypad'") && src.includes('SERIAL_DEFAULT_TX');
+    })(), '');
+  // (be-m) app.js có bridge keypad/motor/serial + hook onTx nối buffer.
+  check('(be-m) app.js: getKeypadState/pressKeypad/getMotorState/getSerialText/sendSerial/clearSerial + cpu.onTx nối serialBuffers',
+    (() => {
+      const src = readFileSync(new URL('./public/app.js', import.meta.url), 'utf8');
+      return src.includes('getKeypadState') && src.includes('pressKeypad')
+        && src.includes('getMotorState') && src.includes('motorReadings')
+        && src.includes('getSerialText') && src.includes('sendSerial') && src.includes('clearSerial')
+        && src.includes('cpu.onTx') && src.includes('serialBuffers');
+    })(), '');
 }
 
 console.log(`\nKết quả: ${pass} pass, ${fail} fail`);
