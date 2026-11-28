@@ -2459,8 +2459,9 @@ void main() {
     // Dây ôm sát mặt board: vòng cung thấp (điểm giữa chỉ +10mm, điểm kề
     // đầu dây +5mm) thay cho vòng cao cũ (+42/+18). Đầu dây ở mặt board
     // (y = BOARD_TOP = 8), thân chip cao 4.5mm (đỉnh ~12.5) nên dây cao
-    // ~10mm vẫn vượt qua chip mà không chạm; ống dây bán kính 0.75 giữ
-    // nguyên, ống bắt vô hình 3.2 giữ nguyên để kéo đầu dây vẫn làm việc.
+    // ~10mm vẫn vượt qua chip mà không chạm; ống dây bán kính 0.5
+    // (giảm từ 0.75 cho mảnh hơn), ống bắt vô hình 3.2 giữ nguyên để
+    // kéo đầu dây vẫn làm việc.
     const mid = new THREE.Vector3((a.x + b.x) / 2, Math.max(a.y, b.y) + 10, (a.z + b.z) / 2);
     const curve = new THREE.CatmullRomCurve3([
       new THREE.Vector3(a.x, a.y, a.z), up(a, 5), mid, up(b, 5), new THREE.Vector3(b.x, b.y, b.z),
@@ -2472,7 +2473,7 @@ void main() {
       emissiveIntensity: isSel ? 0.55 : 0,
       roughness: 0.5,
     });
-    const tube = new THREE.Mesh(new THREE.TubeGeometry(curve, 32, isSel ? 1.2 : 0.75, 8), mat);
+    const tube = new THREE.Mesh(new THREE.TubeGeometry(curve, 32, isSel ? 0.8 : 0.5, 8), mat);
     tube.castShadow = true;
     tube.userData = { wireId: wire.id, tubeMat: mat };
     // Ống vô hình dày hơn để bấm chọn dây cho dễ
